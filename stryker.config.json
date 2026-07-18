@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "pnpm",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.mutation.config.ts"
+  },
+  "reporters": [
+    "json",
+    "clear-text",
+    "progress"
+  ],
+  "htmlReporter": {
+    "fileName": "reports/mutation/index.html"
+  },
+  "coverageAnalysis": "perTest",
+  "concurrency": 4,
+  "timeoutMS": 20000,
+  "mutate": [
+    "src/trend.ts",
+    "src/vlq.ts",
+    "src/attribution.ts",
+    "src/manifests.ts",
+    "src/route-config.ts",
+    "src/cli-args.ts",
+    "src/guards.ts",
+    "src/signatures.ts",
+    "src/module-registry.ts",
+    "src/report.ts",
+    "src/issue-report.ts",
+    "src/html-report.ts",
+    "src/heap-diff.ts",
+    "src/target.ts",
+    "src/environment.ts",
+    "src/confidence.ts"
+  ],
+  "thresholds": {
+    "high": 90,
+    "low": 75,
+    "break": null
+  },
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": true,
+  "tsconfigFile": "tsconfig.stryker-disabled.json",
+  "ignorePatterns": [
+    "dist",
+    ".next-leak",
+    "reports",
+    "src/__fixtures__/e2e-app",
+    "**/.DS_Store",
+    ".git",
+    "openspec"
+  ],
+  "plugins": [
+    "@stryker-mutator/vitest-runner"
+  ],
+  "jsonReporter": {
+    "fileName": "reports/mutation/report.json"
+  }
+}
