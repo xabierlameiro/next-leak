@@ -1,0 +1,152 @@
+import { readFile } from "node:fs/promises";
+import { describe, expect, it } from "vitest";
+import {
+  appPathsManifestSchema,
+  discoverPagesRoutes,
+  discoverRoutes,
+  routesManifestSchema,
+} from "./manifests.js";
+
+// Real manifests from a Next.js 16.0.1 standalone build (the phase-0 repro).
+async function fixture(name: string): Promise<unknown> {
+  const url = new URL(`./__fixtures__/${name}`, import.meta.url);
+  return JSON.parse(await readFile(url, "utf8"));
+}
+
+describe("manifest schemas", () => {
+  it("parses a real app-paths-manifest.json", async () => {
+    const parsed = appPathsManifestSchema.parse(await fixture("app-paths-manifest.json"));
+    expect(parsed["/page"]).toBe("app/page.js");
+  });
+
+  it("parses a real routes-manifest.json", async () => {
+    const parsed = routesManifestSchema.parse(await fixture("routes-manifest.json"));
+    expect(parsed.version).toBe(3);
+    expect(parsed.basePath).toBe("");
+    expect(parsed.staticRoutes.length).toBeGreaterThan(0);
+  });
+
+  it("accepts dynamic route entries", () => {
+    const parsed = routesManifestSchema.parse({
+      version: 3,
+      basePath: "",
+      staticRoutes: [],
+      dynamicRoutes: [
+        {
+          page: "/products/[id]",
+          regex: "^/products/([^/]+?)(?:/)?$",
+          routeKeys: { nxtPid: "nxtPid" },
+          namedRegex: "^/products/(?<nxtPid>[^/]+?)(?:/)?$",
+        },
+      ],
+    });
+    expect(parsed.dynamicRoutes[0]?.page).toBe("/products/[id]");
+  });
+
+  it("rejects a manifest with the wrong shape", () => {
+    expect(() => routesManifestSchema.parse({ version: "three" })).toThrow();
+  });
+});
+
+describe("discoverRoutes", () => {
+  it("discovers pages and route handlers from the real manifest, excluding internals", async () => {
+    const appPaths = appPathsManifestSchema.parse(await fixture("app-paths-manifest.json"));
+    const routes = discoverRoutes(appPaths);
+    expect(routes).toEqual([
+      { path: "/", kind: "page", dynamic: false },
+      { path: "/api/heap", kind: "route-handler", dynamic: false },
+      { path: "/favicon.ico", kind: "route-handler", dynamic: false },
+      { path: "/leaky", kind: "page", dynamic: false },
+      { path: "/plain", kind: "page", dynamic: false },
+    ]);
+  });
+
+  it("marks param routes as dynamic and strips groups and parallel-route slots", () => {
+    const routes = discoverRoutes({
+      "/products/[id]/page": "app/products/[id]/page.js",
+      "/[lang]/(marketing)/pricing/page": "app/[lang]/(marketing)/pricing/page.js",
+      "/(dashboard)/@modal/settings/page": "app/(dashboard)/@modal/settings/page.js",
+    });
+    expect(routes).toEqual([
+      { path: "/[lang]/pricing", kind: "page", dynamic: true },
+      { path: "/products/[id]", kind: "page", dynamic: true },
+      { path: "/settings", kind: "page", dynamic: false },
+    ]);
+  });
+
+  it("deduplicates slot pages that collapse onto the same request path", () => {
+    // Real case: app/page.tsx + app/@modal/page.tsx both resolve to "/".
+    const routes = discoverRoutes({
+      "/page": "app/page.js",
+      "/@modal/page": "app/@modal/page.js",
+    });
+    expect(routes).toEqual([{ path: "/", kind: "page", dynamic: false }]);
+  });
+
+  it("ignores manifest keys that are not pages or route handlers", () => {
+    expect(discoverRoutes({ "/something/else": "x.js" })).toEqual([]);
+  });
+});
+
+describe("intercepting routes", () => {
+  it("marks intercepting routes as unaddressable instead of measuring them", () => {
+    // Real shapes seen in production apps (modal patterns).
+    const routes = discoverRoutes({
+      "/@modal/(.)delegados/[slug]/page": "app/@modal/(.)delegados/[slug]/page.js",
+      "/(..)bar/page": "app/(..)bar/page.js",
+      "/(...)baz/page": "app/(...)baz/page.js",
+      "/normal/page": "app/normal/page.js",
+    });
+    const byPath = new Map(routes.map((route) => [route.path, route]));
+    expect(byPath.get("/(.)delegados/[slug]")?.unaddressableReason).toContain("intercepting");
+    expect(byPath.get("/(..)bar")?.unaddressableReason).toContain("intercepting");
+    expect(byPath.get("/(...)baz")?.unaddressableReason).toContain("intercepting");
+    expect(byPath.get("/normal")?.unaddressableReason).toBeUndefined();
+  });
+});
+
+// vercel/next.js#95094 leaks through Pages Router middleware. Requiring the
+// App Router manifest made next-leak fail on that app with a raw ENOENT,
+// which is both wrong and unreadable.
+describe("discoverPagesRoutes", () => {
+  it("discovers pages and API routes, classifying each kind", () => {
+    const routes = discoverPagesRoutes({
+      "/": "pages/index.html",
+      "/api/heap": "pages/api/heap.js",
+      "/about": "pages/about.js",
+    });
+
+    expect(routes).toEqual([
+      { path: "/", kind: "page", dynamic: false },
+      { path: "/about", kind: "page", dynamic: false },
+      { path: "/api/heap", kind: "route-handler", dynamic: false },
+    ]);
+  });
+
+  it("drops the wrappers and built-in error pages every build ships", () => {
+    const routes = discoverPagesRoutes({
+      "/_app": "pages/_app.js",
+      "/_document": "pages/_document.js",
+      "/_error": "pages/_error.js",
+      "/404": "pages/404.html",
+      "/500": "pages/500.html",
+      "/real": "pages/real.js",
+    });
+
+    expect(routes.map((route) => route.path)).toEqual(["/real"]);
+  });
+
+  it("marks parameterised paths as dynamic", () => {
+    const routes = discoverPagesRoutes({
+      "/products/[id]": "pages/products/[id].js",
+      "/api/[...all]": "pages/api/[...all].js",
+    });
+
+    expect(routes.every((route) => route.dynamic)).toBe(true);
+    expect(routes.find((route) => route.path === "/api/[...all]")?.kind).toBe("route-handler");
+  });
+
+  it("treats a bare /api page as a route handler", () => {
+    expect(discoverPagesRoutes({ "/api": "pages/api.js" })[0]?.kind).toBe("route-handler");
+  });
+});
