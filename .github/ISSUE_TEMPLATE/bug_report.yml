@@ -1,0 +1,29 @@
+name: Bug report
+description: Something measured wrong, crashed, or behaved unexpectedly
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you run, what did you expect, what did you get?
+    validations:
+      required: true
+  - type: textarea
+    id: runjson
+    attributes:
+      label: run.json
+      description: >-
+        Paste the run.json from .next-leak/<timestamp>/ (or attach it). It
+        carries the audit trail — load outcomes, settle results, confidence
+        warnings — and is the fastest path to a fix. Do NOT attach raw
+        .heapsnapshot files: they can contain values from your app's memory.
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "next-leak 0.1.0 · next 16.2.10 · node 24.15 · macOS arm64"
+    validations:
+      required: true
