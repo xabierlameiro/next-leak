@@ -14,8 +14,15 @@ const run = (command, args, options = {}) =>
 
 console.log("· building and packing");
 run("npm", ["run", "build"]);
+// Lifecycle scripts (prepare, prepack…) write to the same stdout as the JSON
+// payload, so anything they print lands in front of it. Start parsing at the
+// array itself instead of trusting the stream to be clean.
 const packOutput = execFileSync("npm", ["pack", "--json"], { cwd: rootDir }).toString();
-const tarball = path.join(rootDir, JSON.parse(packOutput)[0].filename);
+const jsonStart = packOutput.indexOf("[");
+if (jsonStart === -1) {
+  throw new Error(`npm pack --json produced no JSON payload:\n${packOutput}`);
+}
+const tarball = path.join(rootDir, JSON.parse(packOutput.slice(jsonStart))[0].filename);
 
 const installDir = mkdtempSync(path.join(tmpdir(), "next-leak-pack-"));
 console.log(`· installing tarball into ${installDir}`);

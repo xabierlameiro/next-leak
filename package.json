@@ -1,6 +1,6 @@
 {
   "name": "next-leak",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Find out whether your Next.js app actually leaks memory \u2014 how much, on which route, and whose fault it is.",
   "keywords": [
     "nextjs",
@@ -33,7 +33,7 @@
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",
     "pack:smoke": "node scripts/pack-smoke.mjs",
     "test:mutation": "stryker run",
-    "prepare": "husky",
+    "prepare": "husky >/dev/null 2>&1 || true",
     "release": "release-it"
   },
   "pnpm": {
@@ -63,5 +63,13 @@
     "autocannon": "^8.0.0",
     "semver": "^7.8.5",
     "zod": "^4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xabierlameiro/next-leak.git"
+  },
+  "homepage": "https://github.com/xabierlameiro/next-leak#readme",
+  "bugs": {
+    "url": "https://github.com/xabierlameiro/next-leak/issues"
   }
 }
