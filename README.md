@@ -194,8 +194,6 @@ pnpm test:mutation   # Stryker — slow; run before releases, weekly in CI
 CI runs typecheck, tests, build, `pnpm audit --prod` and the pack smoke on
 Node 22 and 24; mutation testing runs weekly and uploads its report.
 
-Spec-driven with [OpenSpec](https://github.com/Fission-AI/OpenSpec): current behavior in `openspec/specs/`, history in `openspec/changes/archive/`.
-
 ## License
 
 MIT
