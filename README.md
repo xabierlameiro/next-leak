@@ -1,6 +1,42 @@
 # next-leak
 
+[![npm](https://img.shields.io/npm/v/next-leak.svg)](https://www.npmjs.com/package/next-leak)
+[![CI](https://github.com/xabierlameiro/next-leak/actions/workflows/ci.yml/badge.svg)](https://github.com/xabierlameiro/next-leak/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/next-leak.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/next-leak.svg)](./LICENSE)
+
 > Find out whether your Next.js app actually leaks memory — how much, on which route, and whose fault it is.
+
+```
+$ npx next-leak . --quick
+
+  ✖ /api/heap  leak  (+4.70 MB/1000 req)
+    heap 28.7 → 40.3 → 59.0 → 75.8 → 75.9 → 101.2 → 101.2 → 139.0 → 139.0 MB
+      ↳ grown [object] Array 112.5 MB — TimeoutsManager#object[.resources]
+        <- system / Context#object[.timeoutsManager] <- destroy#closure[.context]
+        <- ResourceManager#object[.properties] <- IntervalsManager#object[.map]
+
+  ✔ /            stable  (+0.02 MB/1000 req)  heap 40.9 → 35.3 → 35.3 → 35.4 MB
+  ✔ /convenio    stable  (+0.02 MB/1000 req)  heap 36.3 → 37.0 → 37.1 → 37.1 MB
+```
+
+That first line is a real run against the reproduction for
+[vercel/next.js#95094](https://github.com/vercel/next.js/issues/95094), an open
+Next.js issue: the sandbox's `TimeoutsManager` never releases timeout ids from
+middleware. next-leak found the growth, the retaining object and the chain that
+holds it — without being told what to look for.
+
+**Verified against real, open Next.js issues**, not synthetic fixtures:
+
+| Issue | What it is | Result |
+|---|---|---|
+| [#95094](https://github.com/vercel/next.js/issues/95094) | Middleware `setTimeout` ids retained by the sandbox | **Reproduced** · mechanism named · 112 MB retained |
+| [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | **Reproduced** · 26.7 → 71.9 MB |
+| [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | **Reproduced** · 32.8 → 369.9 MB |
+| [#94919](https://github.com/vercel/next.js/issues/94919) | RSC tree retained on client aborts | Not reproduced on standalone — [and it says why](#scope-and-limits-read-before-filing-issues) |
+
+Across ~25 healthy routes on production applications (PPR, MDX, Auth.js,
+Sentry, i18n), it reported **zero false positives**.
 
 Your server's memory climbs and the container gets OOM-killed. Almost every report of this ends the same way: *"please provide heap snapshots taken after forced GC"* — which almost nobody produces correctly. `next-leak` runs that controlled measurement for you and answers with evidence a maintainer would accept.
 
@@ -120,6 +156,22 @@ than a false accusation, and the warnings are on the report either way.
 ```
 
 Snapshots are the ground truth: load them in Chrome DevTools (Memory → Load → Comparison) and check every claim yourself. Runs accumulate — each keeps its snapshots (tens of MB per route); delete old timestamp folders when done.
+
+## Why not just use…
+
+| | What it gives you | Where it stops |
+|---|---|---|
+| **Chrome DevTools** | The ground truth: two snapshots and a comparison view | You reproduce the load, force the GC, pick the moments and read the retainers yourself. Doing it *correctly* is the hard part |
+| **[memlab](https://github.com/facebook/memlab)** | A superb heap-analysis engine — next-leak **uses it** to parse snapshots | It is built around browser scenarios you script. It does not drive HTTP load against your routes, and it knows nothing about Next.js route manifests or your bundle's source maps |
+| **[clinic.js](https://github.com/clinicjs/node-clinic)** | Broad Node performance profiling | [Its own README](https://github.com/clinicjs/node-clinic#readme) states it is no longer actively maintained |
+| **`--inspect` + manual snapshots** | Full control | Same as DevTools, plus you must keep the process, the load and the snapshots in sync by hand |
+
+What next-leak adds is not analysis — it is **the controlled experiment around
+it**: a fresh process per route, warm-up before the baseline, forced GC and an
+adaptive idle before every sample, an audit of whether the load it claims to
+have sent actually landed, and a verdict from the curve's shape rather than
+absolute sizes. Then it maps the retaining objects back to *your* source files
+through the build's source maps.
 
 ## Scope and limits (read before filing issues)
 
