@@ -1,7 +1,7 @@
 {
   "name": "next-leak",
   "version": "0.1.0",
-  "description": "Find out whether your Next.js app actually leaks memory \u2014 how much, on which route, and whose fault it is.",
+  "description": "Find out whether your Next.js app actually leaks memory — how much, on which route, and whose fault it is.",
   "keywords": [
     "nextjs",
     "memory-leak",
@@ -13,7 +13,7 @@
   "author": "Xabier Lameiro <xabier.lameiro@gmail.com>",
   "type": "module",
   "bin": {
-    "next-leak": "./dist/cli.js"
+    "next-leak": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
