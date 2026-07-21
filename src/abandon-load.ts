@@ -57,66 +57,68 @@ export async function runAbandonPhase(
   };
   let remaining = options.amount;
 
+  const sendOne = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      const socket = net.connect({ host: target.hostname, port });
+      let settled = false;
+      let responseStarted = false;
+      let timer: NodeJS.Timeout | undefined;
+      const finish = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        resolve();
+      };
+      const giveUp = (): void => {
+        if (!settled) {
+          result.abandoned += 1;
+          if (responseStarted) {
+            result.abandonedMidStream += 1;
+          }
+        }
+        finish();
+      };
+
+      // The clock starts when the request is on the wire, not when the socket
+      // is created: under concurrency the connect itself can take longer than
+      // the abandon window, and a request never sent teaches the server
+      // nothing.
+      socket.once("connect", () => {
+        result.sent += 1;
+        socket.write(request);
+        timer = setTimeout(giveUp, options.abandonAfterMs);
+        timer.unref();
+      });
+      // Receiving bytes is not the end of the experiment, it is the start of
+      // the interesting part: a client that reads a chunk and then vanishes
+      // leaves the server mid-stream, which is where stream-shaped leaks live
+      // (vercel/next.js#94919 retains the RSC tee branch exactly there).
+      // Closing on the first byte made that case inexpressible.
+      socket.on("data", () => {
+        responseStarted = true;
+      });
+      socket.once("end", () => {
+        // The server finished the response before the timer fired.
+        if (!settled) {
+          result.completed += 1;
+        }
+        finish();
+      });
+      socket.once("error", () => {
+        if (!settled) {
+          result.errors += 1;
+        }
+        finish();
+      });
+    });
+
   const worker = async (): Promise<void> => {
     while (remaining > 0) {
       remaining -= 1;
-      await new Promise<void>((resolve) => {
-        const socket = net.connect({ host: target.hostname, port });
-        let settled = false;
-        let responseStarted = false;
-        let timer: NodeJS.Timeout | undefined;
-        const finish = (): void => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          clearTimeout(timer);
-          socket.destroy();
-          resolve();
-        };
-
-        // The clock starts when the request is on the wire, not when the
-        // socket is created: under concurrency the connect itself can take
-        // longer than the abandon window, and a request never sent teaches
-        // the server nothing.
-        socket.once("connect", () => {
-          result.sent += 1;
-          socket.write(request);
-          timer = setTimeout(() => {
-            if (!settled) {
-              result.abandoned += 1;
-              if (responseStarted) {
-                result.abandonedMidStream += 1;
-              }
-            }
-            finish();
-          }, options.abandonAfterMs);
-          timer.unref();
-        });
-        // Receiving bytes is not the end of the experiment, it is the start of
-        // the interesting part: a client that reads a chunk and then vanishes
-        // leaves the server mid-stream, which is where stream-shaped leaks
-        // live (vercel/next.js#94919 retains the RSC tee branch exactly
-        // there). Closing on the first byte made that case inexpressible.
-        socket.on("data", () => {
-          responseStarted = true;
-        });
-        socket.once("end", () => {
-          // The server finished the response before the timer fired.
-          if (!settled) {
-            result.completed += 1;
-          }
-          clearTimeout(timer);
-          finish();
-        });
-        socket.once("error", () => {
-          if (!settled) {
-            result.errors += 1;
-          }
-          clearTimeout(timer);
-          finish();
-        });
-      });
+      await sendOne();
     }
   };
 
