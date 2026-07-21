@@ -84,7 +84,7 @@ const FRAMEWORK_CHAIN_MARKERS: ReadonlyArray<readonly [marker: string, component
 ];
 
 /** Best-effort owner for chains the module registry cannot resolve. */
-export function classifyByChain(retainerChain: string): FindingAttribution | null {
+function classifyByChain(retainerChain: string): FindingAttribution | null {
   for (const [marker, component] of FRAMEWORK_CHAIN_MARKERS) {
     if (retainerChain.includes(marker)) {
       return { owner: "framework", source: null, packageName: `next (${component})` };

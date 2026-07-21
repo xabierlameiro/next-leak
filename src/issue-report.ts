@@ -1,9 +1,7 @@
 import path from "node:path";
-import type { RouteReport, RunReport } from "./runner.js";
+import type { MeasuredRoute, RunReport } from "./runner.js";
 
 const MB = 1024 * 1024;
-
-export type MeasuredRoute = Extract<RouteReport, { status: "measured" }>;
 
 function evidenceRows(route: MeasuredRoute): string {
   const findings = [...(route.diff?.grownNodes ?? []), ...(route.diff?.newNodes ?? [])];

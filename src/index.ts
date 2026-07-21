@@ -26,7 +26,7 @@ export { captureEnvironment } from "./environment.js";
 export type { MeasurementEnvironment } from "./environment.js";
 export { renderHtmlReport } from "./html-report.js";
 export { renderIssueMarkdown } from "./issue-report.js";
-export type { MeasuredRoute } from "./issue-report.js";
+export type { MeasuredRoute } from "./runner.js";
 export { routeSlug } from "./runner.js";
 export type { RunParameters } from "./runner.js";
 export { loadRouteConfig, resolveRoutePath, RouteConfigError, ROUTE_CONFIG_FILE } from "./route-config.js";

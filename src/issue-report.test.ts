@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { renderIssueMarkdown, type MeasuredRoute } from "./issue-report.js";
+import { renderIssueMarkdown } from "./issue-report.js";
+import type { MeasuredRoute } from "./runner.js";
 import { makeRunReport } from "./run-report.fixture.js";
 
 function leakyRoute(): MeasuredRoute {
