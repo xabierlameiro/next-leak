@@ -4,9 +4,18 @@
   "description": "Find out whether your Next.js app actually leaks memory — how much, on which route, and whose fault it is.",
   "keywords": [
     "nextjs",
+    "next.js",
     "memory-leak",
+    "memory",
+    "oom",
+    "oomkilled",
+    "heap",
     "heap-snapshot",
+    "profiling",
+    "performance",
+    "nodejs",
     "diagnostics",
+    "debugging",
     "cli"
   ],
   "license": "MIT",
