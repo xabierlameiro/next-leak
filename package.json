@@ -1,6 +1,6 @@
 {
   "name": "next-leak",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Find out whether your Next.js app actually leaks memory — how much, on which route, and whose fault it is.",
   "keywords": [
     "nextjs",
@@ -53,6 +53,7 @@
     "@types/node": "^26.1.1",
     "@types/semver": "^7.7.1",
     "@vitest/coverage-v8": "^4.1.10",
+    "autocannon": "^8.0.0",
     "husky": "^9.1.7",
     "release-it": "^20.2.1",
     "tsup": "^8.5.1",
@@ -60,7 +61,6 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "autocannon": "^8.0.0",
     "semver": "^7.8.5",
     "zod": "^4.4.3"
   },
