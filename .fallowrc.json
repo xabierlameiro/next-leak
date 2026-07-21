@@ -1,5 +1,18 @@
 {
   "$schema": "https://docs.fallow.tools/schema/fallow.json",
-  "entry": ["src/stubs/browser-stub.cjs", "vitest.mutation.config.ts"],
-  "ignoreDependencies": ["@memlab/core", "@memlab/heap-analysis", "autocannon"]
+  "entry": [
+    "src/stubs/browser-stub.cjs",
+    "vitest.mutation.config.ts"
+  ],
+  "ignoreDependencies": [
+    "@memlab/core",
+    "@memlab/heap-analysis",
+    "autocannon"
+  ],
+  "health": {
+    "ignore": [
+      "src/stubs/**",
+      "src/cli.ts"
+    ]
+  }
 }

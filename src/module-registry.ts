@@ -91,21 +91,16 @@ function lastModuleIdIn(gap: string): number | null {
  * boundary, and the module id is the last integer literal in the unmapped
  * gap right before it. Non-Turbopack chunks contribute nothing.
  */
-export function extractChunkModules(code: string, rawMap: unknown): Map<number, string> {
-  const result = new Map<number, string>();
-  if (!code.includes("module.exports=[") && !code.includes("module.exports = [")) {
-    return result;
-  }
-  const map = normalizeSourceMap(rawMap);
-  if (map === null) {
-    return result;
-  }
-
-  const codeLines = code.split("\n");
-
-  // Boundary case the transition walk misses: the array's FIRST id, when a
-  // mapping entry lands before the id's trailing comma. Pair it with the
-  // first mapped token inside its own factory span (before the next id).
+/**
+ * Boundary case the transition walk misses: the array's FIRST id, when a
+ * mapping entry lands before the id's trailing comma. Pair it with the
+ * first mapped token inside its own factory span (before the next id).
+ */
+function collectFirstArrayIds(
+  codeLines: string[],
+  map: NormalizedSourceMap,
+  result: Map<number, string>
+): void {
   for (const [lineIndex, lineText] of codeLines.entries()) {
     const first = /module\.exports ?= ?\[(\d+),/.exec(lineText);
     if (first?.[1] === undefined) {
@@ -122,7 +117,17 @@ export function extractChunkModules(code: string, rawMap: unknown): Map<number, 
       result.set(Number(first[1]), source);
     }
   }
+}
 
+/**
+ * Walks source transitions in each mapped line: the module id preceding the
+ * point where the mapped source changes names the module that starts there.
+ */
+function collectTransitionIds(
+  codeLines: string[],
+  map: NormalizedSourceMap,
+  result: Map<number, string>
+): void {
   for (const [lineIndex, mapping] of map.lines.entries()) {
     const lineText = codeLines[lineIndex];
     if (lineText === undefined) {
@@ -142,6 +147,20 @@ export function extractChunkModules(code: string, rawMap: unknown): Map<number, 
       previousColumn = entry.column;
     }
   }
+}
+
+export function extractChunkModules(code: string, rawMap: unknown): Map<number, string> {
+  const result = new Map<number, string>();
+  if (!code.includes("module.exports=[") && !code.includes("module.exports = [")) {
+    return result;
+  }
+  const map = normalizeSourceMap(rawMap);
+  if (map === null) {
+    return result;
+  }
+  const codeLines = code.split("\n");
+  collectFirstArrayIds(codeLines, map, result);
+  collectTransitionIds(codeLines, map, result);
   return result;
 }
 

@@ -339,6 +339,31 @@ async function writeEvidenceBundle(report: RunReport, workDir: string): Promise<
   await writeFile(report.bundle.htmlReport, renderHtmlReport(report));
 }
 
+/** Skip, measure or record the failure for one route — never throws. */
+async function routeReportFor(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  index: number,
+  total: number
+): Promise<RouteReport> {
+  const { routeConfig, progress } = context;
+  const label = `${route.path} (${index + 1}/${total})`;
+  const requestPath = resolveRoutePath(route.path, routeConfig);
+  const reason = skipReason(route, requestPath);
+  if (reason !== null || requestPath === null) {
+    progress(`skipping ${label}: ${reason ?? "needs sample params"}`);
+    return { route: route.path, status: "skipped", reason: reason ?? "needs sample params" };
+  }
+  try {
+    progress(`measuring ${label}${requestPath === route.path ? "" : ` as ${requestPath}`}`);
+    return await measureRoute(context, route, requestPath, index);
+  } catch (cause) {
+    const failure = cause instanceof Error ? cause.message : String(cause);
+    progress(`failed ${label}: ${failure}`);
+    return { route: route.path, status: "failed", reason: failure };
+  }
+}
+
 type RunPlan = {
   routes: DiscoveredRoute[];
   routeConfig: RouteConfig;
@@ -447,23 +472,7 @@ export async function runMeasurement(
       reports.push({ route: route.path, status: "skipped", reason: "interrupted" });
       continue;
     }
-    const label = `${route.path} (${index + 1}/${routes.length})`;
-    const requestPath = resolveRoutePath(route.path, routeConfig);
-    const reason = skipReason(route, requestPath);
-    if (reason !== null || requestPath === null) {
-      progress(`skipping ${label}: ${reason ?? "needs sample params"}`);
-      reports.push({ route: route.path, status: "skipped", reason: reason ?? "needs sample params" });
-      continue;
-    }
-
-    try {
-      progress(`measuring ${label}${requestPath === route.path ? "" : ` as ${requestPath}`}`);
-      reports.push(await measureRoute(context, route, requestPath, index));
-    } catch (cause) {
-      const failure = cause instanceof Error ? cause.message : String(cause);
-      progress(`failed ${label}: ${failure}`);
-      reports.push({ route: route.path, status: "failed", reason: failure });
-    }
+    reports.push(await routeReportFor(context, route, index, routes.length));
     await persist(buildReport());
   }
 
