@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { helpText, parseCliArgs } from "./cli-args.js";
+import { helpText, parseCliArgs, type ParsedCli } from "./cli-args.js";
 import { checkRuntime } from "./guards.js";
 import { killActiveChildren } from "./launcher.js";
 import { formatReport } from "./report.js";
@@ -42,36 +42,11 @@ function reexecWithHeadroom(): void {
   });
 }
 
-async function main(): Promise<void> {
-  const parsed = parseCliArgs(process.argv.slice(2));
-
-  if (parsed.kind === "version") {
-    console.log(version);
-    return;
-  }
-  if (parsed.kind === "help") {
-    console.log(helpText(version));
-    process.exitCode = process.argv.length > 2 ? 0 : 1;
-    return;
-  }
-  if (parsed.kind === "error") {
-    console.error(`error: ${parsed.message}`);
-    process.exitCode = 1;
-    return;
-  }
-
-  const guardFailure = checkRuntime();
-  if (guardFailure !== null) {
-    console.error(`error: ${guardFailure}`);
-    process.exitCode = 1;
-    return;
-  }
-
-  if (!hasHeapHeadroom()) {
-    reexecWithHeadroom();
-    return;
-  }
-
+/**
+ * First Ctrl+C aborts gracefully (partial run.json survives); the second
+ * exits hard for the case where teardown itself is stuck.
+ */
+function installInterruptHandlers(): AbortController {
   const aborter = new AbortController();
   let interrupts = 0;
   for (const signalName of ["SIGINT", "SIGTERM"] as const) {
@@ -85,6 +60,45 @@ async function main(): Promise<void> {
       killActiveChildren();
     });
   }
+  return aborter;
+}
+
+/** Prints the outcome of non-run commands; true when main should stop here. */
+function handleNonRunCommand(parsed: ParsedCli): boolean {
+  if (parsed.kind === "version") {
+    console.log(version);
+    return true;
+  }
+  if (parsed.kind === "help") {
+    console.log(helpText(version));
+    process.exitCode = process.argv.length > 2 ? 0 : 1;
+    return true;
+  }
+  if (parsed.kind === "error") {
+    console.error(`error: ${parsed.message}`);
+    process.exitCode = 1;
+    return true;
+  }
+  const guardFailure = checkRuntime();
+  if (guardFailure !== null) {
+    console.error(`error: ${guardFailure}`);
+    process.exitCode = 1;
+    return true;
+  }
+  return false;
+}
+
+async function main(): Promise<void> {
+  const parsed = parseCliArgs(process.argv.slice(2));
+  if (handleNonRunCommand(parsed) || parsed.kind !== "run") {
+    return;
+  }
+  if (!hasHeapHeadroom()) {
+    reexecWithHeadroom();
+    return;
+  }
+
+  const aborter = installInterruptHandlers();
 
   const { options } = parsed;
   // The exact profile the real-app revalidation ran with (22 routes, zero

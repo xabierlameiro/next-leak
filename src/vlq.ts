@@ -2,30 +2,33 @@ const BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
 const CHAR_TO_VALUE = new Map<string, number>([...BASE64].map((char, index) => [char, index]));
 
 /** Decodes one line of base64-VLQ segments from a sourcemap `mappings` string. */
+function decodeVlqSegment(raw: string): number[] {
+  const values: number[] = [];
+  let value = 0;
+  let shift = 0;
+  for (const char of raw) {
+    const digit = CHAR_TO_VALUE.get(char);
+    if (digit === undefined) {
+      throw new Error(`invalid VLQ character: ${char}`);
+    }
+    value += (digit & 0x1f) << shift;
+    if ((digit & 0x20) !== 0) {
+      shift += 5;
+    } else {
+      values.push((value & 1) === 1 ? -(value >>> 1) : value >>> 1);
+      value = 0;
+      shift = 0;
+    }
+  }
+  return values;
+}
+
 export function decodeVlqLine(line: string): number[][] {
   const segments: number[][] = [];
   for (const raw of line.split(",")) {
-    if (raw === "") {
-      continue;
+    if (raw !== "") {
+      segments.push(decodeVlqSegment(raw));
     }
-    const values: number[] = [];
-    let value = 0;
-    let shift = 0;
-    for (const char of raw) {
-      const digit = CHAR_TO_VALUE.get(char);
-      if (digit === undefined) {
-        throw new Error(`invalid VLQ character: ${char}`);
-      }
-      value += (digit & 0x1f) << shift;
-      if ((digit & 0x20) !== 0) {
-        shift += 5;
-      } else {
-        values.push((value & 1) === 1 ? -(value >>> 1) : value >>> 1);
-        value = 0;
-        shift = 0;
-      }
-    }
-    segments.push(values);
   }
   return segments;
 }

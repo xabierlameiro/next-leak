@@ -159,6 +159,32 @@ function readFlagValue(spec: FlagSpec, argv: string[], index: number): { value: 
   return { value };
 }
 
+type FlagStep = { consumed: number } | { done: ParsedCli };
+
+/** Processes one flag token; returns extra tokens consumed or an early exit. */
+function parseFlagAt(argv: string[], index: number, options: CliRunOptions): FlagStep {
+  const argument = argv[index] ?? "";
+  const spec = findSpec(argument);
+  if (spec === undefined) {
+    return { done: { kind: "error", message: `unknown option "${argument}" — see --help` } };
+  }
+  if (spec.flag === "--help") {
+    return { done: { kind: "help" } };
+  }
+  if (spec.flag === "--version") {
+    return { done: { kind: "version" } };
+  }
+  const read = readFlagValue(spec, argv, index);
+  if ("error" in read) {
+    return { done: { kind: "error", message: read.error } };
+  }
+  const outcome = applyFlag(spec, read.value, options);
+  if (outcome.kind === "error") {
+    return { done: { kind: "error", message: outcome.message } };
+  }
+  return { consumed: spec.value === "none" ? 0 : 1 };
+}
+
 export function parseCliArgs(argv: string[]): ParsedCli {
   const options: CliRunOptions = {
     appDir: "",
@@ -181,30 +207,11 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       options.appDir = argument;
       continue;
     }
-
-    const spec = findSpec(argument);
-    if (spec === undefined) {
-      return { kind: "error", message: `unknown option "${argument}" — see --help` };
+    const step = parseFlagAt(argv, index, options);
+    if ("done" in step) {
+      return step.done;
     }
-    if (spec.flag === "--help") {
-      return { kind: "help" };
-    }
-    if (spec.flag === "--version") {
-      return { kind: "version" };
-    }
-
-    const read = readFlagValue(spec, argv, index);
-    if ("error" in read) {
-      return { kind: "error", message: read.error };
-    }
-    if (spec.value !== "none") {
-      index += 1;
-    }
-
-    const outcome = applyFlag(spec, read.value, options);
-    if (outcome.kind === "error") {
-      return { kind: "error", message: outcome.message };
-    }
+    index += step.consumed;
   }
 
   if (options.appDir === "") {

@@ -94,28 +94,29 @@ function memorySourceLines(route: MeasuredRouteView, verdict: string): string[] 
   return lines;
 }
 
+function diffFindingLines(route: MeasuredRouteView): string[] {
+  if (route.diff === null) {
+    return [];
+  }
+  const findings = [...route.diff.grownNodes, ...route.diff.newNodes];
+  return findings.slice(0, 3).map((finding, index) => {
+    const size = formatMb(finding.retainedBytes);
+    const attribution = route.attribution?.findings[index];
+    const owner = attribution === undefined ? null : ownerLabel(attribution);
+    const detail = owner ?? (finding.retainerChain === "" ? "" : finding.retainerChain);
+    return `      ↳ ${finding.kind} [${finding.nodeType}] ${finding.name} ${size}${
+      detail === "" ? "" : ` — ${detail}`
+    }`;
+  });
+}
+
 function findingLines(route: MeasuredRouteView): string[] {
   const lines: string[] = [];
-  if (route.attribution !== null) {
-    const culprit = ownerLabel(route.attribution.route);
-    if (culprit !== null) {
-      lines.push(`      culprit: ${culprit}`);
-    }
+  const culprit = route.attribution === null ? null : ownerLabel(route.attribution.route);
+  if (culprit !== null) {
+    lines.push(`      culprit: ${culprit}`);
   }
-  if (route.diff !== null) {
-    const findings = [...route.diff.grownNodes, ...route.diff.newNodes];
-    for (const [index, finding] of findings.slice(0, 3).entries()) {
-      const size = formatMb(finding.retainedBytes);
-      const attribution = route.attribution?.findings[index];
-      const owner = attribution === undefined ? null : ownerLabel(attribution);
-      const detail = owner ?? (finding.retainerChain === "" ? "" : finding.retainerChain);
-      lines.push(
-        `      ↳ ${finding.kind} [${finding.nodeType}] ${finding.name} ${size}${
-          detail === "" ? "" : ` — ${detail}`
-        }`
-      );
-    }
-  }
+  lines.push(...diffFindingLines(route));
   for (const signature of route.signatures) {
     const flag = signature.historical ? " (historical)" : "";
     lines.push(`      ⚠ known cause${flag}: ${signature.title} — ${signature.issue}`);
