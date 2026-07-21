@@ -23,10 +23,10 @@ const sectionedMapSchema = z.looseObject({
   ),
 });
 
-export type NormalizedSourceMap = { sources: string[]; lines: LineMapping[] };
+type NormalizedSourceMap = { sources: string[]; lines: LineMapping[] };
 
 /** Accepts flat or sectioned sourcemaps; null when it is neither. */
-export function normalizeSourceMap(raw: unknown): NormalizedSourceMap | null {
+function normalizeSourceMap(raw: unknown): NormalizedSourceMap | null {
   const flat = flatMapSchema.safeParse(raw);
   if (flat.success) {
     return { sources: flat.data.sources, lines: decodeMappings(flat.data.mappings) };
