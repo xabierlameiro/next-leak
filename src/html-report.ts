@@ -7,10 +7,10 @@ const VERDICT_COLOR = { leak: "#c0392b", stable: "#27ae60", inconclusive: "#e67e
 
 function escapeHtml(value: string): string {
   return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 /** Inline-SVG line chart of post-GC heap samples. No scripts, no assets. */
@@ -45,6 +45,16 @@ function heapCurveSvg(samples: number[], color: string): string {
   );
 }
 
+/** Owner column for a finding row, already HTML-escaped. */
+function ownerCell(attribution: { owner: string; source?: string | null; packageName?: string | null } | undefined): string {
+  if (attribution === undefined || attribution.owner === "unattributed") {
+    return "—";
+  }
+  const source = attribution.source ? `: ${escapeHtml(attribution.source)}` : "";
+  const packageName = attribution.packageName ? ` (${escapeHtml(attribution.packageName)})` : "";
+  return `${attribution.owner}${source}${packageName}`;
+}
+
 function measuredSection(route: RouteReport): string {
   if (route.status !== "measured") {
     return "";
@@ -68,12 +78,7 @@ function measuredSection(route: RouteReport): string {
     .slice(0, 6)
     .map((finding, index) => {
       const attribution = route.attribution?.findings[index];
-      const owner =
-        attribution === undefined || attribution.owner === "unattributed"
-          ? "—"
-          : `${attribution.owner}${attribution.source ? `: ${escapeHtml(attribution.source)}` : ""}${
-              attribution.packageName ? ` (${escapeHtml(attribution.packageName)})` : ""
-            }`;
+      const owner = ownerCell(attribution);
       return (
         `<tr><td>${finding.kind}</td><td>${escapeHtml(finding.nodeType)}</td>` +
         `<td>${escapeHtml(finding.name)}</td><td>${(finding.retainedBytes / MB).toFixed(2)} MB</td>` +

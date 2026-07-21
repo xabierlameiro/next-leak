@@ -44,7 +44,7 @@ describe("CLI interrupt safety", () => {
     const interrupted = run.routes.filter(
       (route) => route.status === "skipped" && route.reason === "interrupted"
     );
-    expect(run.routes.length).toBe(2);
+    expect(run.routes).toHaveLength(2);
     expect(interrupted.length).toBeGreaterThanOrEqual(1);
   }, 90_000);
 });

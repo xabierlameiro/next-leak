@@ -191,7 +191,7 @@ function rssTrend(memorySamples: readonly HeapSample[]): number {
 }
 
 export function routeSlug(route: string): string {
-  const sanitized = route.replace(/[^a-zA-Z0-9-]+/g, "_").replace(/^_+|_+$/g, "");
+  const sanitized = route.replaceAll(/[^a-zA-Z0-9-]+/g, "_").replace(/^_+/, "").replace(/_+$/, "");
   if (route === "/") {
     return "root";
   }
@@ -229,7 +229,7 @@ function filterRoutes(
   progress: ProgressFn
 ): DiscoveredRoute[] {
   const matches = (routePath: string, selector: string): boolean => {
-    const normalized = selector.replace(/\/+$/, "");
+    const normalized = selector.replace(/[/]+$/, "");
     if (normalized === "") {
       return routePath === "/";
     }
@@ -355,7 +355,8 @@ async function routeReportFor(
     return { route: route.path, status: "skipped", reason: reason ?? "needs sample params" };
   }
   try {
-    progress(`measuring ${label}${requestPath === route.path ? "" : ` as ${requestPath}`}`);
+    const asPath = requestPath === route.path ? "" : ` as ${requestPath}`;
+    progress(`measuring ${label}${asPath}`);
     return await measureRoute(context, route, requestPath, index);
   } catch (cause) {
     const failure = cause instanceof Error ? cause.message : String(cause);

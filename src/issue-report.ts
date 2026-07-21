@@ -1,7 +1,26 @@
 import path from "node:path";
+import type { FindingAttribution } from "./attribution.js";
 import type { MeasuredRoute, RunReport } from "./runner.js";
 
 const MB = 1024 * 1024;
+
+/** How a finding's owner reads in the draft, or "unattributed". */
+function ownerLabel(attribution: FindingAttribution | undefined): string {
+  if (attribution === undefined || attribution.owner === "unattributed") {
+    return "unattributed";
+  }
+  const source = attribution.source ? ` — \`${attribution.source}\`` : "";
+  const packageName = attribution.packageName ? ` — ${attribution.packageName}` : "";
+  return `${attribution.owner}${source}${packageName}`;
+}
+
+/** Who the warning banner points at when the leak is not upstream's. */
+function blamedParty(owner: string, culprit: { source?: string | null; packageName?: string | null } | undefined): string {
+  if (owner === "app") {
+    return `**your own code** (\`${culprit?.source ?? "app code"}\`)`;
+  }
+  return `the dependency **${culprit?.packageName ?? "a dependency"}**`;
+}
 
 function evidenceRows(route: MeasuredRoute): string {
   const findings = [...(route.diff?.grownNodes ?? []), ...(route.diff?.newNodes ?? [])];
@@ -9,12 +28,7 @@ function evidenceRows(route: MeasuredRoute): string {
     .slice(0, 6)
     .map((finding, index) => {
       const attribution = route.attribution?.findings[index];
-      const owner =
-        attribution === undefined || attribution.owner === "unattributed"
-          ? "unattributed"
-          : `${attribution.owner}${attribution.source ? ` — \`${attribution.source}\`` : ""}${
-              attribution.packageName ? ` — ${attribution.packageName}` : ""
-            }`;
+      const owner = ownerLabel(attribution);
       return (
         `- **${finding.kind}** \`[${finding.nodeType}] ${finding.name}\` ` +
         `${(finding.retainedBytes / MB).toFixed(2)} MB retained (${owner})\n` +
@@ -38,11 +52,8 @@ export function renderIssueMarkdown(route: MeasuredRoute, run: RunReport): strin
   const preamble =
     owner === "app" || owner === "dependency"
       ? `> [!WARNING]\n` +
-        `> next-leak attributes this leak to ${
-          owner === "app"
-            ? `**your own code** (\`${culprit?.source ?? "app code"}\`)`
-            : `the dependency **${culprit?.packageName ?? "a dependency"}**`
-        }. Fix or report it there — do **not** file this against Next.js.\n\n`
+        `> next-leak attributes this leak to ${blamedParty(owner, culprit)}. ` +
+        `Fix or report it there — do **not** file this against Next.js.\n\n`
       : "";
 
   // Stated up front rather than left for a maintainer to discover. A draft

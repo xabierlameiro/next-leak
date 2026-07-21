@@ -60,7 +60,7 @@ describe("next-leak end to end", () => {
 
     // The evidence bundle: offline HTML with both curves, one issue draft.
     const html = await readFile(report.bundle.htmlReport, "utf8");
-    expect((html.match(/<svg /g) ?? []).length).toBe(2);
+    expect((html.match(/<svg /g) ?? [])).toHaveLength(2);
     expect(html).not.toMatch(/<script[\s>]/);
     expect(report.bundle.issues.map((issue) => issue.route)).toEqual(["/leaky"]);
     const issueFile = report.bundle.issues[0]?.file ?? "";

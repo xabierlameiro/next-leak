@@ -49,7 +49,9 @@ const FLAGS: FlagSpec[] = [
 
 export function helpText(version: string): string {
   const rows = FLAGS.map((spec) => {
-    const left = `${spec.alias ? `${spec.alias}, ` : ""}${spec.flag}${spec.argName ? ` ${spec.argName}` : ""}`;
+    const alias = spec.alias ? `${spec.alias}, ` : "";
+    const argName = spec.argName ? ` ${spec.argName}` : "";
+    const left = `${alias}${spec.flag}${argName}`;
     return `  ${left.padEnd(26)}${spec.help}`;
   }).join("\n");
   return `next-leak ${version}
