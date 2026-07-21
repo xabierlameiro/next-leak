@@ -49,6 +49,14 @@ describe("runAbandonPhase", () => {
     expect(result.sent).toBe(10);
     expect(result.abandoned).toBe(10);
     expect(result.completed).toBe(0);
+    // The client hangs up as soon as it has written, so on a loaded runner the
+    // server can still be parsing the last requests when the phase resolves.
+    // Waiting for the count removes that race instead of weakening the check:
+    // if the requests genuinely never arrive, this still fails.
+    const deadline = Date.now() + 10_000;
+    while (started < 10 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     expect(started).toBe(10);
   }, 30_000);
 
