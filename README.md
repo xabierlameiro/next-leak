@@ -7,6 +7,8 @@
 
 > Find out whether your Next.js app actually leaks memory — how much, on which route, and whose fault it is.
 
+<img src="https://raw.githubusercontent.com/xabierlameiro/next-leak/main/docs/demo.svg" alt="next-leak finding a real Next.js memory leak (3-minute run, sped up)" width="720">
+
 ```
 $ npx next-leak . --quick
 
@@ -34,6 +36,12 @@ holds it — without being told what to look for.
 | [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | **Reproduced** · 26.7 → 71.9 MB |
 | [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | **Reproduced** · 32.8 → 369.9 MB |
 | [#94919](https://github.com/vercel/next.js/issues/94919) | RSC tree retained on client aborts | Not reproduced on standalone — [and it says why](#scope-and-limits-read-before-filing-issues) |
+
+The full causal chain, measured on that same issue: leak found (28.7 -> 138.9 MB
+across 8 cycles), the workaround from the thread applied (`clearTimeout(id)`
+inside the callback), same app re-measured with identical parameters:
+**27.8 -> 25.6 MB, flat**. That is what a diagnostic tool should prove - not
+that installing it saves memory, but that what it points at is the real cause.
 
 Across ~25 healthy routes on production applications (PPR, MDX, Auth.js,
 Sentry, i18n), it reported **zero false positives**.
@@ -106,6 +114,20 @@ Dynamic routes need sample params in `next-leak.config.json` in your app dir:
 2xx, abandoned — so a run can be audited instead of trusted.
 
 Before measuring, the CLI prints a duration estimate — a 60-route app under defaults is **hours**; narrow with `--routes` for iteration.
+
+## What it tells apart
+
+"Memory leak" is one name for six different situations. The verdict machinery
+separates them, because each one has a different fix:
+
+| Looks like a leak | What next-leak reports | How it knows |
+|---|---|---|
+| One-time warm-up growth (JIT, lazy caches) | `stable` | The first cycle is excluded from the verdict; warm-up flattens, leaks keep climbing |
+| A route that is expensive, not leaky | `failed` under load it cannot sustain, flat once concurrency fits | Real leaks survive forced GC at any concurrency; saturation disappears when load drops |
+| Growth that pauses and resumes (stepwise) | `leak` | A healthy route gives back 20-30% of its growth; a stepwise leak gives back nothing |
+| Native/buffer memory with a flat JS heap | `leak (external)` or an explicit RSS note | Heap, `external` and RSS are sampled and judged separately |
+| A leak in your code vs a dependency vs Next itself | `culprit: src/app/x/page.tsx (your code)` — or the package, or framework internals | Retainer chains mapped through the build's source maps |
+| A run whose own evidence is weak | `low confidence` warnings, or the verdict is withdrawn | Every run audits itself: did the load land, did the heap settle, does one cycle carry the average |
 
 ## Reading the verdicts
 
