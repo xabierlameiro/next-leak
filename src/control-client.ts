@@ -11,7 +11,7 @@ const sampleSchema = z.object({
 
 const snapshotResponseSchema = z.object({ file: z.string(), sample: sampleSchema });
 
-export class ControlError extends Error {
+class ControlError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ControlError";

@@ -7,7 +7,7 @@ import { z } from "zod";
  * route params. `params` applies globally; `routes` overrides per route
  * template (keys as discovered, e.g. `/[lang]/candidate/[candidateId]`).
  */
-export const routeConfigSchema = z
+const routeConfigSchema = z
   .object({
     params: z.record(z.string(), z.string()).optional(),
     routes: z.record(z.string(), z.record(z.string(), z.string())).optional(),
