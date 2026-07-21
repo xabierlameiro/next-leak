@@ -3,6 +3,16 @@ import type { RunReport } from "./runner.js";
 const MB = 1024 * 1024;
 
 /** Canonical report fixture shared by report/html/issue renderer tests. */
+
+/** Phase bookkeeping shared by every healthy fixture route. */
+const cleanPhases = () => ({
+  rssPer1000Requests: 0,
+  timings: [{ phase: "warm-up", seconds: 1.2 }],
+  loadOutcomes: [{ phase: "cycle 1", sent: 5000, ok2xx: 5000 }],
+  settleOutcomes: [{ phase: "cycle 1", status: "settled" as const, polls: 2 }],
+  confidence: { level: "high" as const, warnings: [] },
+});
+
 export function makeRunReport(): RunReport {
   return {
     appDir: "/apps/shop",
@@ -40,11 +50,7 @@ export function makeRunReport(): RunReport {
         requestPath: "/",
         samples: [29.4 * MB, 31.5 * MB, 32.3 * MB, 32.1 * MB],
         memorySamples: [29.4, 31.5, 32.3, 32.1].map((mb) => ({ gcExposed: true, heapUsed: mb * MB, rss: 120 * MB, external: 1, arrayBuffers: 1 })),
-        rssPer1000Requests: 0,
-        timings: [{ phase: "warm-up", seconds: 1.2 }],
-        loadOutcomes: [{ phase: "cycle 1", sent: 5000, ok2xx: 5000 }],
-        settleOutcomes: [{ phase: "cycle 1", status: "settled" as const, polls: 2 }],
-        confidence: { level: "high" as const, warnings: [] },
+        ...cleanPhases(),
         trend: { verdict: "stable", growthPerCycle: 0.3 * MB, deltas: [0.8 * MB, -0.2 * MB] },
         growthPer1000Requests: 0.06 * MB,
         baselineSnapshot: "/x/baseline.heapsnapshot",
@@ -59,11 +65,7 @@ export function makeRunReport(): RunReport {
         requestPath: "/leaky",
         samples: [29.1 * MB, 30.5 * MB, 33.6 * MB, 35.9 * MB],
         memorySamples: [29.1, 30.5, 33.6, 35.9].map((mb) => ({ gcExposed: true, heapUsed: mb * MB, rss: 140 * MB, external: 1, arrayBuffers: 1 })),
-        rssPer1000Requests: 0,
-        timings: [{ phase: "warm-up", seconds: 1.2 }],
-        loadOutcomes: [{ phase: "cycle 1", sent: 5000, ok2xx: 5000 }],
-        settleOutcomes: [{ phase: "cycle 1", status: "settled" as const, polls: 2 }],
-        confidence: { level: "high" as const, warnings: [] },
+        ...cleanPhases(),
         trend: { verdict: "leak", growthPerCycle: 2.7 * MB, deltas: [3.1 * MB, 2.3 * MB] },
         growthPer1000Requests: 0.54 * MB,
         baselineSnapshot: "/x/leaky/baseline.heapsnapshot",

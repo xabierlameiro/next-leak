@@ -12,9 +12,9 @@ import {
 import type { HeapSample } from "./control-server.js";
 import { captureEnvironment, type MeasurementEnvironment } from "./environment.js";
 import { diffSnapshotFiles, type HeapDiff } from "./heap-diff.js";
-import { discoverPagesRoutes, discoverRoutes } from "./manifests.js";
+import { discoverPagesRoutes, discoverRoutes, type DiscoveredRoute } from "./manifests.js";
 import { extractModuleRegistry } from "./module-registry.js";
-import { loadRouteConfig, resolveRoutePath } from "./route-config.js";
+import { loadRouteConfig, resolveRoutePath, type RouteConfig } from "./route-config.js";
 import {
   RITUAL_DEFAULTS,
   runRitual,
@@ -23,7 +23,7 @@ import {
   type SettleOutcome,
 } from "./ritual.js";
 import { matchSignatures, readNextVersion, type MatchedSignature } from "./signatures.js";
-import { validateTarget } from "./target.js";
+import { validateTarget, type ValidatedTarget } from "./target.js";
 import type { TrendResult } from "./trend.js";
 
 export type RouteReport =
@@ -174,7 +174,7 @@ const defaultDeps: RunnerDeps = {
  * heap verdict does. Reported alongside the heap so a flat heap with growing
  * RSS is visible instead of invisible.
  */
-export function rssTrend(memorySamples: readonly HeapSample[]): number {
+function rssTrend(memorySamples: readonly HeapSample[]): number {
   if (memorySamples.length < 3) {
     return 0;
   }
@@ -205,40 +205,187 @@ export function routeSlug(route: string): string {
   return sanitized === "" ? `route-${digest}` : `${sanitized}-${digest}`;
 }
 
+type ProgressFn = (message: string) => void;
+
+/** Everything a single route measurement needs, resolved once per run. */
+type MeasurementContext = {
+  deps: RunnerDeps;
+  options: RunOptions;
+  target: ValidatedTarget;
+  workDir: string;
+  routeConfig: RouteConfig;
+  registry: Awaited<ReturnType<typeof extractModuleRegistry>>;
+  nextVersion: string | null;
+  progress: ProgressFn;
+};
+
 /**
- * Full measurement run: validate the target, discover routes, run the ritual
- * per route in a fresh process, diff snapshots for non-stable verdicts, and
- * persist `run.json` plus raw snapshots under the work directory.
+ * Segment-aware selector filtering: "/" selects only "/", "/api" selects
+ * "/api" and "/api/health" but never "/apiary".
  */
-export async function runMeasurement(
+function filterRoutes(
+  routes: DiscoveredRoute[],
+  selectors: readonly string[],
+  progress: ProgressFn
+): DiscoveredRoute[] {
+  const matches = (routePath: string, selector: string): boolean => {
+    const normalized = selector.replace(/\/+$/, "");
+    if (normalized === "") {
+      return routePath === "/";
+    }
+    return routePath === normalized || routePath.startsWith(`${normalized}/`);
+  };
+  for (const selector of selectors) {
+    if (!routes.some((route) => matches(route.path, selector))) {
+      progress(`selector "${selector}" matched no discovered route`);
+    }
+  }
+  return routes.filter((route) => selectors.some((selector) => matches(route.path, selector)));
+}
+
+/** Why a route cannot be measured, or null when it can. */
+function skipReason(route: DiscoveredRoute, requestPath: string | null): string | null {
+  if (route.unaddressableReason !== undefined) {
+    return route.unaddressableReason;
+  }
+  if (requestPath === null) {
+    return "needs sample params for dynamic segments (next-leak.config.json)";
+  }
+  return null;
+}
+
+/** Ritual, audit, diff and attribution for one route in a fresh process. */
+async function measureRoute(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  requestPath: string,
+  index: number
+): Promise<RouteReport> {
+  const { deps, options, target, workDir, routeConfig, registry, nextVersion, progress } = context;
+  const result = await deps.ritual({
+    serverPath: target.standaloneServer,
+    route: requestPath,
+    workDir: path.join(workDir, `${String(index + 1).padStart(2, "0")}-${routeSlug(route.path)}`),
+    bootstrapPath: options.bootstrapPath,
+    appPort: await deps.freePort(),
+    ...(options.warmupRequests !== undefined && { warmupRequests: options.warmupRequests }),
+    ...(options.loadRequests !== undefined && { loadRequests: options.loadRequests }),
+    ...(options.connections !== undefined && { connections: options.connections }),
+    ...(options.cycles !== undefined && { cycles: options.cycles }),
+    ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
+    ...(routeConfig.headers !== undefined && { headers: routeConfig.headers }),
+    ...(routeConfig.abandonAfterMs !== undefined && {
+      abandonAfterMs: routeConfig.abandonAfterMs,
+    }),
+  });
+
+  // Audited before anything is derived from the verdict: a measurement that
+  // did not observe what it claims must not drive a diff, an attribution, or
+  // a headline.
+  const confidence = assessConfidence({
+    trend: result.trend,
+    loadOutcomes: result.loadOutcomes,
+    settleOutcomes: result.settleOutcomes,
+    ...(routeConfig.abandonAfterMs !== undefined && {
+      abandonAfterMs: routeConfig.abandonAfterMs,
+    }),
+  });
+  const verdict = confidence.supersededVerdict ?? result.trend.verdict;
+  if (confidence.supersededVerdict !== undefined) {
+    progress(`withdrawing ${route.path} verdict: evidence does not support it`);
+  }
+
+  let diff: HeapDiff | null = null;
+  if (verdict !== "stable" || options.diffAll === true) {
+    progress(`diffing snapshots for ${route.path}`);
+    diff = await deps.diff(result.baselineSnapshot, result.afterSnapshot);
+  }
+
+  return {
+    route: route.path,
+    status: "measured",
+    requestPath,
+    samples: result.samples,
+    memorySamples: result.memorySamples,
+    timings: result.timings,
+    loadOutcomes: result.loadOutcomes,
+    settleOutcomes: result.settleOutcomes,
+    confidence,
+    trend: result.trend,
+    growthPer1000Requests: (result.trend.growthPerCycle / result.requestsPerCycle) * 1000,
+    rssPer1000Requests: (rssTrend(result.memorySamples) / result.requestsPerCycle) * 1000,
+    baselineSnapshot: result.baselineSnapshot,
+    afterSnapshot: result.afterSnapshot,
+    diff,
+    attribution: diff === null || registry.size === 0 ? null : attributeDiff(diff, registry),
+    signatures: diff === null ? [] : matchSignatures(diff, nextVersion),
+  };
+}
+
+/** Issue drafts and the self-contained HTML report, written next to run.json. */
+async function writeEvidenceBundle(report: RunReport, workDir: string): Promise<void> {
+  const { renderHtmlReport } = await import("./html-report.js");
+  const { renderIssueMarkdown } = await import("./issue-report.js");
+
+  for (const route of report.routes) {
+    // Only a verdict the evidence plainly supports earns a draft: these are
+    // written to be pasted into someone else's issue tracker.
+    if (route.status === "measured" && warrantsIssueDraft(route)) {
+      const file = path.join(workDir, `ISSUE-${routeSlug(route.route)}.md`);
+      await writeFile(file, renderIssueMarkdown(route, report));
+      report.bundle.issues.push({ route: route.route, file });
+    }
+  }
+  await writeFile(report.bundle.htmlReport, renderHtmlReport(report));
+}
+
+/** Skip, measure or record the failure for one route — never throws. */
+async function routeReportFor(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  index: number,
+  total: number
+): Promise<RouteReport> {
+  const { routeConfig, progress } = context;
+  const label = `${route.path} (${index + 1}/${total})`;
+  const requestPath = resolveRoutePath(route.path, routeConfig);
+  const reason = skipReason(route, requestPath);
+  if (reason !== null || requestPath === null) {
+    progress(`skipping ${label}: ${reason ?? "needs sample params"}`);
+    return { route: route.path, status: "skipped", reason: reason ?? "needs sample params" };
+  }
+  try {
+    progress(`measuring ${label}${requestPath === route.path ? "" : ` as ${requestPath}`}`);
+    return await measureRoute(context, route, requestPath, index);
+  } catch (cause) {
+    const failure = cause instanceof Error ? cause.message : String(cause);
+    progress(`failed ${label}: ${failure}`);
+    return { route: route.path, status: "failed", reason: failure };
+  }
+}
+
+type RunPlan = {
+  routes: DiscoveredRoute[];
+  routeConfig: RouteConfig;
+  registry: Awaited<ReturnType<typeof extractModuleRegistry>>;
+  nextVersion: string | null;
+  parameters: RunParameters;
+};
+
+/** Route discovery, config and the duration estimate, announced up front. */
+async function planRun(
   options: RunOptions,
-  deps: RunnerDeps = defaultDeps
-): Promise<RunReport> {
-  const progress = options.onProgress ?? (() => {});
-  const target = await validateTarget(options.appDir);
+  target: ValidatedTarget,
+  deps: RunnerDeps,
+  progress: ProgressFn
+): Promise<RunPlan> {
   // Both routers can leak, and an app may ship both. Pages entries come
   // second so an App Router route wins any path collision.
   const discovered = [...discoverRoutes(target.appPaths), ...discoverPagesRoutes(target.pages)];
   const byPath = new Map(discovered.map((route) => [route.path, route]));
   let routes = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
-
   if (options.routeFilter !== undefined && options.routeFilter.length > 0) {
-    const filter = options.routeFilter;
-    // Segment-aware prefixes: "/" selects only "/", "/api" selects "/api"
-    // and "/api/health" but never "/apiary".
-    const matches = (routePath: string, selector: string): boolean => {
-      const normalized = selector.replace(/\/+$/, "");
-      if (normalized === "") {
-        return routePath === "/";
-      }
-      return routePath === normalized || routePath.startsWith(`${normalized}/`);
-    };
-    for (const selector of filter) {
-      if (!routes.some((route) => matches(route.path, selector))) {
-        progress(`selector "${selector}" matched no discovered route`);
-      }
-    }
-    routes = routes.filter((route) => filter.some((selector) => matches(route.path, selector)));
+    routes = filterRoutes(routes, options.routeFilter, progress);
   }
 
   const registry = await deps.registry(path.join(target.appDir, ".next", "server"));
@@ -269,6 +416,26 @@ export async function runMeasurement(
         ? " — use --quick for the fast validated preset, or narrow with --routes"
         : "")
   );
+  return { routes, routeConfig, registry, nextVersion, parameters };
+}
+
+/**
+ * Full measurement run: validate the target, discover routes, run the ritual
+ * per route in a fresh process, diff snapshots for non-stable verdicts, and
+ * persist `run.json` plus raw snapshots under the work directory.
+ */
+export async function runMeasurement(
+  options: RunOptions,
+  deps: RunnerDeps = defaultDeps
+): Promise<RunReport> {
+  const progress = options.onProgress ?? (() => {});
+  const target = await validateTarget(options.appDir);
+  const { routes, routeConfig, registry, nextVersion, parameters } = await planRun(
+    options,
+    target,
+    deps,
+    progress
+  );
 
   const startedAt = new Date();
   const workDir = path.join(
@@ -277,6 +444,9 @@ export async function runMeasurement(
   );
   await mkdir(workDir, { recursive: true });
 
+  const context: MeasurementContext = {
+    deps, options, target, workDir, routeConfig, registry, nextVersion, progress,
+  };
   const reports: RouteReport[] = [];
 
   /**
@@ -302,108 +472,12 @@ export async function runMeasurement(
       reports.push({ route: route.path, status: "skipped", reason: "interrupted" });
       continue;
     }
-    const label = `${route.path} (${index + 1}/${routes.length})`;
-    if (route.unaddressableReason !== undefined) {
-      progress(`skipping ${label}: ${route.unaddressableReason}`);
-      reports.push({ route: route.path, status: "skipped", reason: route.unaddressableReason });
-      continue;
-    }
-    const requestPath = resolveRoutePath(route.path, routeConfig);
-    if (requestPath === null) {
-      progress(`skipping ${label}: needs sample params`);
-      reports.push({
-        route: route.path,
-        status: "skipped",
-        reason: "needs sample params for dynamic segments (next-leak.config.json)",
-      });
-      continue;
-    }
-
-    try {
-      progress(`measuring ${label}${requestPath === route.path ? "" : ` as ${requestPath}`}`);
-      const result = await deps.ritual({
-        serverPath: target.standaloneServer,
-        route: requestPath,
-        workDir: path.join(workDir, `${String(index + 1).padStart(2, "0")}-${routeSlug(route.path)}`),
-        bootstrapPath: options.bootstrapPath,
-        appPort: await deps.freePort(),
-        ...(options.warmupRequests !== undefined && { warmupRequests: options.warmupRequests }),
-        ...(options.loadRequests !== undefined && { loadRequests: options.loadRequests }),
-        ...(options.connections !== undefined && { connections: options.connections }),
-        ...(options.cycles !== undefined && { cycles: options.cycles }),
-        ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
-        ...(routeConfig.headers !== undefined && { headers: routeConfig.headers }),
-        ...(routeConfig.abandonAfterMs !== undefined && {
-          abandonAfterMs: routeConfig.abandonAfterMs,
-        }),
-      });
-
-      // Audited before anything is derived from the verdict: a measurement
-      // that did not observe what it claims must not drive a diff, an
-      // attribution, or a headline.
-      const confidence = assessConfidence({
-        trend: result.trend,
-        loadOutcomes: result.loadOutcomes,
-        settleOutcomes: result.settleOutcomes,
-        ...(routeConfig.abandonAfterMs !== undefined && {
-          abandonAfterMs: routeConfig.abandonAfterMs,
-        }),
-      });
-      const verdict = confidence.supersededVerdict ?? result.trend.verdict;
-      if (confidence.supersededVerdict !== undefined) {
-        progress(`withdrawing ${route.path} verdict: evidence does not support it`);
-      }
-
-      let diff: HeapDiff | null = null;
-      if (verdict !== "stable" || options.diffAll === true) {
-        progress(`diffing snapshots for ${route.path}`);
-        diff = await deps.diff(result.baselineSnapshot, result.afterSnapshot);
-      }
-
-      reports.push({
-        route: route.path,
-        status: "measured",
-        requestPath,
-        samples: result.samples,
-        memorySamples: result.memorySamples,
-        timings: result.timings,
-        loadOutcomes: result.loadOutcomes,
-        settleOutcomes: result.settleOutcomes,
-        confidence,
-        trend: result.trend,
-        growthPer1000Requests:
-          (result.trend.growthPerCycle / result.requestsPerCycle) * 1000,
-        rssPer1000Requests:
-          (rssTrend(result.memorySamples) / result.requestsPerCycle) * 1000,
-        baselineSnapshot: result.baselineSnapshot,
-        afterSnapshot: result.afterSnapshot,
-        diff,
-        attribution: diff === null || registry.size === 0 ? null : attributeDiff(diff, registry),
-        signatures: diff === null ? [] : matchSignatures(diff, nextVersion),
-      });
-    } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause);
-      progress(`failed ${label}: ${reason}`);
-      reports.push({ route: route.path, status: "failed", reason });
-    }
+    reports.push(await routeReportFor(context, route, index, routes.length));
     await persist(buildReport());
   }
 
-  const { renderHtmlReport } = await import("./html-report.js");
-  const { renderIssueMarkdown } = await import("./issue-report.js");
-
   const report = buildReport();
-
-  for (const route of reports) {
-    // Only a verdict the evidence plainly supports earns a draft: these are
-    // written to be pasted into someone else's issue tracker.
-    if (route.status === "measured" && warrantsIssueDraft(route)) {
-      const file = path.join(workDir, `ISSUE-${routeSlug(route.route)}.md`);
-      await writeFile(file, renderIssueMarkdown(route, report));
-      report.bundle.issues.push({ route: route.route, file });
-    }
-  }
-  await writeFile(report.bundle.htmlReport, renderHtmlReport(report));
+  await writeEvidenceBundle(report, workDir);
   await persist(report);
   return report;
 }
