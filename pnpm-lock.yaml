@@ -11,9 +11,6 @@ importers:
 
   .:
     dependencies:
-      autocannon:
-        specifier: ^8.0.0
-        version: 8.0.0
       semver:
         specifier: ^7.8.5
         version: 7.8.5
@@ -54,6 +51,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.1.10
         version: 4.1.10(vitest@4.1.10)
+      autocannon:
+        specifier: ^8.0.0
+        version: 8.0.0
       husky:
         specifier: ^9.1.7
         version: 9.1.7
