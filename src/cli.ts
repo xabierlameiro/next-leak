@@ -127,11 +127,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((cause: unknown) => {
+try {
+  await main();
+} catch (cause: unknown) {
   if (cause instanceof TargetError || cause instanceof RouteConfigError) {
     console.error(`error: ${cause.message}`);
   } else {
     console.error(cause);
   }
   process.exitCode = 1;
-});
+}

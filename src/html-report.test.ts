@@ -7,7 +7,7 @@ describe("renderHtmlReport", () => {
 
   it("renders one curve per measured route with verdict badges", () => {
     expect(html).toContain("<polyline");
-    expect((html.match(/<svg /g) ?? []).length).toBe(2);
+    expect((html.match(/<svg /g) ?? [])).toHaveLength(2);
     expect(html).toContain(">leak</span>");
     expect(html).toContain(">stable</span>");
     expect(html).toContain("29.4 → 31.5 → 32.3 → 32.1 MB");
@@ -43,7 +43,7 @@ describe("renderHtmlReport fidelity", () => {
   it("plots one point per sample and scales the axis to the data", () => {
     const html = renderHtmlReport(makeRunReport());
     const firstSvg = html.slice(html.indexOf("<svg "), html.indexOf("</svg>"));
-    expect((firstSvg.match(/<circle /g) ?? []).length).toBe(4);
+    expect((firstSvg.match(/<circle /g) ?? [])).toHaveLength(4);
     expect(firstSvg).toContain("32.3 MB"); // max of the healthy route
     expect(firstSvg).toContain("29.4 MB"); // min of the healthy route
   });
@@ -160,7 +160,7 @@ describe("renderHtmlReport axis placement", () => {
     if (base === undefined) throw new Error("fixture broken");
     leaky.diff.grownNodes = Array.from({ length: 9 }, (_, index) => ({ ...base, name: `N${index}` }));
     const html = renderHtmlReport(report);
-    expect((html.match(/<tr><td>grown<\/td>/g) ?? []).length).toBe(6);
+    expect((html.match(/<tr><td>grown<\/td>/g) ?? [])).toHaveLength(6);
     expect(html).not.toContain("N7");
   });
 });

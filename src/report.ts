@@ -24,7 +24,7 @@ const RSS_MIN_TOTAL_GROWTH = 64 * MB;
 function hasSustainedRssGrowth(memorySamples: readonly HeapSample[]): boolean {
   const rss = memorySamples.map((sample) => sample.rss);
   const first = rss[1];
-  const last = rss[rss.length - 1];
+  const last = rss.at(-1);
   if (first === undefined || last === undefined || rss.length < 4) {
     return false;
   }
