@@ -46,7 +46,18 @@ that installing it saves memory, but that what it points at is the real cause.
 Across ~25 healthy routes on production applications (PPR, MDX, Auth.js,
 Sentry, i18n), it reported **zero false positives**.
 
-Your server's memory climbs and the container gets OOM-killed. Almost every report of this ends the same way: *"please provide heap snapshots taken after forced GC"* — which almost nobody produces correctly. `next-leak` runs that controlled measurement for you and answers with evidence a maintainer would accept.
+Your self-hosted Next.js server's memory climbs until Node gives up:
+
+```
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+```
+
+Under Docker or Kubernetes you may not even get that: the process is `OOMKilled`,
+the container exits with **code 137**, and the restart wipes the evidence before
+you can look at it. Almost every report of this ends the same way — *"please
+provide heap snapshots taken after forced GC"* — which almost nobody produces
+correctly. `next-leak` runs that controlled measurement for you and answers with
+evidence a maintainer would accept.
 
 Three possible answers, all valuable:
 
