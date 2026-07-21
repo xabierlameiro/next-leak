@@ -23,6 +23,6 @@ jobs:
       - run: pnpm vitest run --coverage.enabled --coverage.provider=v8
           --coverage.include='src/**/*.ts' --coverage.exclude='src/**/*.test.ts'
           --coverage.reporter=lcov
-      - uses: SonarSource/sonarqube-scan-action@v5
+      - uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
