@@ -339,17 +339,21 @@ async function writeEvidenceBundle(report: RunReport, workDir: string): Promise<
   await writeFile(report.bundle.htmlReport, renderHtmlReport(report));
 }
 
-/**
- * Full measurement run: validate the target, discover routes, run the ritual
- * per route in a fresh process, diff snapshots for non-stable verdicts, and
- * persist `run.json` plus raw snapshots under the work directory.
- */
-export async function runMeasurement(
+type RunPlan = {
+  routes: DiscoveredRoute[];
+  routeConfig: RouteConfig;
+  registry: Awaited<ReturnType<typeof extractModuleRegistry>>;
+  nextVersion: string | null;
+  parameters: RunParameters;
+};
+
+/** Route discovery, config and the duration estimate, announced up front. */
+async function planRun(
   options: RunOptions,
-  deps: RunnerDeps = defaultDeps
-): Promise<RunReport> {
-  const progress = options.onProgress ?? (() => {});
-  const target = await validateTarget(options.appDir);
+  target: ValidatedTarget,
+  deps: RunnerDeps,
+  progress: ProgressFn
+): Promise<RunPlan> {
   // Both routers can leak, and an app may ship both. Pages entries come
   // second so an App Router route wins any path collision.
   const discovered = [...discoverRoutes(target.appPaths), ...discoverPagesRoutes(target.pages)];
@@ -386,6 +390,26 @@ export async function runMeasurement(
       (estimatedSeconds > 15 * 60 && options.loadRequests === undefined && options.idleMs === undefined
         ? " — use --quick for the fast validated preset, or narrow with --routes"
         : "")
+  );
+  return { routes, routeConfig, registry, nextVersion, parameters };
+}
+
+/**
+ * Full measurement run: validate the target, discover routes, run the ritual
+ * per route in a fresh process, diff snapshots for non-stable verdicts, and
+ * persist `run.json` plus raw snapshots under the work directory.
+ */
+export async function runMeasurement(
+  options: RunOptions,
+  deps: RunnerDeps = defaultDeps
+): Promise<RunReport> {
+  const progress = options.onProgress ?? (() => {});
+  const target = await validateTarget(options.appDir);
+  const { routes, routeConfig, registry, nextVersion, parameters } = await planRun(
+    options,
+    target,
+    deps,
+    progress
   );
 
   const startedAt = new Date();

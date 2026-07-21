@@ -4,6 +4,8 @@ import { classifyTrend } from "./trend.js";
 import { effectiveVerdict } from "./confidence.js";
 import type { RouteReport, RunReport } from "./runner.js";
 
+type MeasuredRouteView = Extract<RouteReport, { status: "measured" }>;
+
 const MB = 1024 * 1024;
 
 const formatMb = (bytes: number): string => `${(bytes / MB).toFixed(1)} MB`;
@@ -49,22 +51,8 @@ function ownerLabel(attribution: FindingAttribution): string | null {
   }
 }
 
-function routeLines(route: RouteReport): string[] {
-  if (route.status === "skipped") {
-    return [`  – ${route.route}  skipped: ${route.reason}`];
-  }
-  if (route.status === "failed") {
-    return [`  ✖ ${route.route}  failed: ${route.reason}`];
-  }
-
-  const verdict = effectiveVerdict(route);
-  const curve = route.samples.map(formatMb).join(" → ");
-  const lines = [
-    `  ${VERDICT_ICON[verdict]} ${route.route}  ${verdict}  (${formatGrowth(
-      route.growthPer1000Requests
-    )})  heap ${curve}`,
-  ];
-
+function confidenceLines(route: MeasuredRouteView): string[] {
+  const lines: string[] = [];
   // What the instrument thinks of its own reading. Silence here would be the
   // worst outcome: confident numbers from a measurement that did not hold.
   if (route.confidence.supersededVerdict !== undefined) {
@@ -76,7 +64,11 @@ function routeLines(route: RouteReport): string[] {
   for (const warning of route.confidence.warnings) {
     lines.push(`      ⚠ low confidence: ${warning.detail}`);
   }
+  return lines;
+}
 
+function memorySourceLines(route: MeasuredRouteView, verdict: string): string[] {
+  const lines: string[] = [];
   // When the verdict came from external memory the heap curve above looks
   // innocent; say which memory is actually growing.
   if (route.trend.source === "external" && verdict !== "stable") {
@@ -88,7 +80,6 @@ function routeLines(route: RouteReport): string[] {
         `not the JS heap: external ${externalCurve}`
     );
   }
-
   // A flat heap with climbing RSS is a different diagnosis (allocator,
   // external buffers, fragmentation) — but only when RSS actually trends
   // upward. A first attempt used the per-1000-request rate alone and fired
@@ -100,14 +91,17 @@ function routeLines(route: RouteReport): string[] {
         `not a JS-heap leak (allocator, external buffers or fragmentation): RSS ${rssCurve}`
     );
   }
+  return lines;
+}
 
+function findingLines(route: MeasuredRouteView): string[] {
+  const lines: string[] = [];
   if (route.attribution !== null) {
     const culprit = ownerLabel(route.attribution.route);
     if (culprit !== null) {
       lines.push(`      culprit: ${culprit}`);
     }
   }
-
   if (route.diff !== null) {
     const findings = [...route.diff.grownNodes, ...route.diff.newNodes];
     for (const [index, finding] of findings.slice(0, 3).entries()) {
@@ -122,12 +116,31 @@ function routeLines(route: RouteReport): string[] {
       );
     }
   }
-
   for (const signature of route.signatures) {
     const flag = signature.historical ? " (historical)" : "";
     lines.push(`      ⚠ known cause${flag}: ${signature.title} — ${signature.issue}`);
   }
   return lines;
+}
+
+function routeLines(route: RouteReport): string[] {
+  if (route.status === "skipped") {
+    return [`  – ${route.route}  skipped: ${route.reason}`];
+  }
+  if (route.status === "failed") {
+    return [`  ✖ ${route.route}  failed: ${route.reason}`];
+  }
+
+  const verdict = effectiveVerdict(route);
+  const curve = route.samples.map(formatMb).join(" → ");
+  return [
+    `  ${VERDICT_ICON[verdict]} ${route.route}  ${verdict}  (${formatGrowth(
+      route.growthPer1000Requests
+    )})  heap ${curve}`,
+    ...confidenceLines(route),
+    ...memorySourceLines(route, verdict),
+    ...findingLines(route),
+  ];
 }
 
 /** Renders the terminal report. Pure: no I/O, no colors, stable output. */
