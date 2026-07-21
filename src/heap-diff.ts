@@ -107,7 +107,7 @@ export function summarizeBaseline(
 }
 
 function truncateLabel(value: string, max = 60): string {
-  return value.replace(/\n/g, " ").slice(0, max);
+  return value.replaceAll("\n", " ").slice(0, max);
 }
 
 function walkChain(
