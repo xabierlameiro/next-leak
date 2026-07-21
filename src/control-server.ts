@@ -30,7 +30,7 @@ export type HeapSample = {
   arrayBuffers: number;
 };
 
-export function sampleMemory(gcExposed: boolean): HeapSample {
+function sampleMemory(gcExposed: boolean): HeapSample {
   const usage = process.memoryUsage();
   return {
     gcExposed,

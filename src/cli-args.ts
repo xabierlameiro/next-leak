@@ -86,6 +86,105 @@ function findSpec(argument: string): FlagSpec | undefined {
   return FLAGS.find((spec) => spec.flag === argument || spec.alias === argument);
 }
 
+type FlagOutcome = { kind: "ok" } | { kind: "error"; message: string };
+
+const flagError = (message: string): FlagOutcome => ({ kind: "error", message });
+const FLAG_OK: FlagOutcome = { kind: "ok" };
+
+function applyRoutesFlag(value: string, options: CliRunOptions): FlagOutcome {
+  const routes = value.split(",").map((route) => route.trim()).filter((route) => route !== "");
+  if (routes.length === 0) {
+    // Silently measuring everything after an empty selector was a trap.
+    return flagError(`option "--routes" needs at least one route`);
+  }
+  options.routes = routes;
+  return FLAG_OK;
+}
+
+function applyNumericFlag(flag: string, value: string, options: CliRunOptions): FlagOutcome {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return flagError(`option "${flag}" needs a positive integer, got "${value}"`);
+  }
+  const maximum = LIMITS[flag];
+  if (maximum !== undefined && parsed > maximum) {
+    return flagError(
+      `option "${flag}" is capped at ${maximum} (got ${parsed}) — a run that large would never finish`
+    );
+  }
+  if (flag === "--cycles" && parsed < 3) {
+    return flagError("the trend verdict needs at least 3 cycles (--cycles 3 or more)");
+  }
+  if (flag === "--cycles") options.cycles = parsed;
+  if (flag === "--requests") options.requests = parsed;
+  if (flag === "--connections") options.connections = parsed;
+  if (flag === "--idle") options.idleSeconds = parsed;
+  return FLAG_OK;
+}
+
+function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagOutcome {
+  switch (spec.flag) {
+    case "--routes":
+      return applyRoutesFlag(value, options);
+    case "--cycles":
+    case "--requests":
+    case "--connections":
+    case "--idle":
+      return applyNumericFlag(spec.flag, value, options);
+    case "--quick":
+      options.quick = true;
+      return FLAG_OK;
+    case "--diff-all":
+      options.diffAll = true;
+      return FLAG_OK;
+    case "--output":
+      options.output = value;
+      return FLAG_OK;
+    default:
+      return FLAG_OK;
+  }
+}
+
+/** Reads the value token following a flag, validating it looks like a value. */
+function readFlagValue(spec: FlagSpec, argv: string[], index: number): { value: string } | { error: string } {
+  if (spec.value === "none") {
+    return { value: "" };
+  }
+  const value = argv[index + 1] ?? "";
+  // A negative number is a bad value, not a missing one — say so plainly.
+  const looksNegativeNumber = /^-\d+(\.\d+)?$/.test(value);
+  if (value === "" || (value.startsWith("-") && !looksNegativeNumber)) {
+    return { error: `option "${spec.flag}" needs a value ${spec.argName ?? ""}` };
+  }
+  return { value };
+}
+
+type FlagStep = { consumed: number } | { done: ParsedCli };
+
+/** Processes one flag token; returns extra tokens consumed or an early exit. */
+function parseFlagAt(argv: string[], index: number, options: CliRunOptions): FlagStep {
+  const argument = argv[index] ?? "";
+  const spec = findSpec(argument);
+  if (spec === undefined) {
+    return { done: { kind: "error", message: `unknown option "${argument}" — see --help` } };
+  }
+  if (spec.flag === "--help") {
+    return { done: { kind: "help" } };
+  }
+  if (spec.flag === "--version") {
+    return { done: { kind: "version" } };
+  }
+  const read = readFlagValue(spec, argv, index);
+  if ("error" in read) {
+    return { done: { kind: "error", message: read.error } };
+  }
+  const outcome = applyFlag(spec, read.value, options);
+  if (outcome.kind === "error") {
+    return { done: { kind: "error", message: outcome.message } };
+  }
+  return { consumed: spec.value === "none" ? 0 : 1 };
+}
+
 export function parseCliArgs(argv: string[]): ParsedCli {
   const options: CliRunOptions = {
     appDir: "",
@@ -108,73 +207,11 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       options.appDir = argument;
       continue;
     }
-
-    const spec = findSpec(argument);
-    if (spec === undefined) {
-      return { kind: "error", message: `unknown option "${argument}" — see --help` };
+    const step = parseFlagAt(argv, index, options);
+    if ("done" in step) {
+      return step.done;
     }
-    if (spec.flag === "--help") {
-      return { kind: "help" };
-    }
-    if (spec.flag === "--version") {
-      return { kind: "version" };
-    }
-
-    let value = "";
-    if (spec.value !== "none") {
-      value = argv[index + 1] ?? "";
-      index += 1;
-      // A negative number is a bad value, not a missing one — say so plainly.
-      const looksNegativeNumber = /^-\d+(\.\d+)?$/.test(value);
-      if (value === "" || (value.startsWith("-") && !looksNegativeNumber)) {
-        return { kind: "error", message: `option "${spec.flag}" needs a value ${spec.argName ?? ""}` };
-      }
-    }
-
-    switch (spec.flag) {
-      case "--routes": {
-        const routes = value.split(",").map((route) => route.trim()).filter((route) => route !== "");
-        if (routes.length === 0) {
-          // Silently measuring everything after an empty selector was a trap.
-          return { kind: "error", message: `option "--routes" needs at least one route` };
-        }
-        options.routes = routes;
-        break;
-      }
-      case "--cycles":
-      case "--requests":
-      case "--connections":
-      case "--idle": {
-        const parsed = Number(value);
-        if (!Number.isInteger(parsed) || parsed <= 0) {
-          return { kind: "error", message: `option "${spec.flag}" needs a positive integer, got "${value}"` };
-        }
-        const maximum = LIMITS[spec.flag];
-        if (maximum !== undefined && parsed > maximum) {
-          return {
-            kind: "error",
-            message: `option "${spec.flag}" is capped at ${maximum} (got ${parsed}) — a run that large would never finish`,
-          };
-        }
-        if (spec.flag === "--cycles" && parsed < 3) {
-          return { kind: "error", message: "the trend verdict needs at least 3 cycles (--cycles 3 or more)" };
-        }
-        if (spec.flag === "--cycles") options.cycles = parsed;
-        if (spec.flag === "--requests") options.requests = parsed;
-        if (spec.flag === "--connections") options.connections = parsed;
-        if (spec.flag === "--idle") options.idleSeconds = parsed;
-        break;
-      }
-      case "--quick":
-        options.quick = true;
-        break;
-      case "--diff-all":
-        options.diffAll = true;
-        break;
-      case "--output":
-        options.output = value;
-        break;
-    }
+    index += step.consumed;
   }
 
   if (options.appDir === "") {
