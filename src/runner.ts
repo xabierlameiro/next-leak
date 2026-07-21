@@ -5,7 +5,6 @@ import path from "node:path";
 import { attributeDiff, type AttributedDiff } from "./attribution.js";
 import {
   assessConfidence,
-  effectiveVerdict,
   warrantsIssueDraft,
   type ConfidenceReport,
 } from "./confidence.js";
@@ -191,7 +190,7 @@ function rssTrend(memorySamples: readonly HeapSample[]): number {
 }
 
 export function routeSlug(route: string): string {
-  const sanitized = route.replaceAll(/[^a-zA-Z0-9-]+/g, "_").replace(/^_+/, "").replace(/_+$/, "");
+  const sanitized = route.replaceAll(/[^a-zA-Z0-9-]+/g, "_").replace(/^_/, "").replace(/_$/, "");
   if (route === "/") {
     return "root";
   }
@@ -219,6 +218,15 @@ type MeasurementContext = {
   progress: ProgressFn;
 };
 
+/** Trailing slashes stripped without a regex, so no backtracking is possible. */
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 /**
  * Segment-aware selector filtering: "/" selects only "/", "/api" selects
  * "/api" and "/api/health" but never "/apiary".
@@ -229,7 +237,7 @@ function filterRoutes(
   progress: ProgressFn
 ): DiscoveredRoute[] {
   const matches = (routePath: string, selector: string): boolean => {
-    const normalized = selector.replace(/[/]+$/, "");
+    const normalized = trimTrailingSlashes(selector);
     if (normalized === "") {
       return routePath === "/";
     }

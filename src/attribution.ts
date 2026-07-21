@@ -32,7 +32,7 @@ export function classifySource(rawSource: string): FindingAttribution {
   }
   const nodeModulesSplit = source.split("/node_modules/");
   if (nodeModulesSplit.length > 1) {
-    const tail = nodeModulesSplit[nodeModulesSplit.length - 1] ?? "";
+    const tail = nodeModulesSplit.at(-1) ?? "";
     const segments = tail.split("/");
     const packageName = (
       segments[0]?.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0]

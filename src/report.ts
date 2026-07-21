@@ -150,11 +150,12 @@ export function formatReport(report: RunReport): string {
   for (const route of report.routes) {
     lines.push(...routeLines(route));
   }
-  lines.push("", `snapshots and run.json: ${report.workDir}`);
-  lines.push(`report: ${report.bundle.htmlReport}`);
-  for (const issue of report.bundle.issues) {
-    lines.push(`issue draft (${issue.route}): ${issue.file}`);
-  }
+  lines.push(
+    "",
+    `snapshots and run.json: ${report.workDir}`,
+    `report: ${report.bundle.htmlReport}`,
+    ...report.bundle.issues.map((issue) => `issue draft (${issue.route}): ${issue.file}`)
+  );
 
   const inconclusive = report.routes.filter(
     (route) => route.status === "measured" && effectiveVerdict(route) === "inconclusive"
