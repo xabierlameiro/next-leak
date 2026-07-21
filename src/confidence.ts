@@ -114,70 +114,68 @@ const mb = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 const pct = (part: number, whole: number): string =>
   `${((part / whole) * 100).toFixed(1)}%`;
 
-/**
- * Audits a route measurement against its own evidence.
- *
- * A leak detector is an instrument, and a miscalibrated instrument does not
- * fail loudly — it reports confident, wrong numbers. Two implementations of
- * early disconnects shipped in this repo that abandoned nothing, and both
- * produced a verdict indistinguishable from the correct one; only the audit
- * trail caught them. This turns that trail into a check that runs every time.
- */
-export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
+function settleWarnings(outcomes: readonly SettleOutcome[]): MeasurementWarning[] {
   const warnings: MeasurementWarning[] = [];
-  const minGrowth = input.minGrowthPerCycle ?? DEFAULT_MIN_GROWTH;
-  const isLeak = input.trend.verdict === "leak";
-
-  const moving = input.settleOutcomes.filter((outcome) => outcome.status === "moving");
+  const moving = outcomes.filter((outcome) => outcome.status === "moving");
   if (moving.length > 0) {
-    const phases = moving.map((outcome) => outcome.phase).join(", ");
     warnings.push({
       code: "unsettled",
       detail:
-        `the heap never held steady before sampling on ${phases} — ` +
+        `the heap never held steady before sampling on ` +
+        `${moving.map((outcome) => outcome.phase).join(", ")} — ` +
         `raise --idle-ms so post-load transients finish draining`,
     });
   }
-
-  const unverified = input.settleOutcomes.filter((outcome) => outcome.status === "unknown");
+  const unverified = outcomes.filter((outcome) => outcome.status === "unknown");
   if (unverified.length > 0) {
-    const phases = unverified.map((outcome) => outcome.phase).join(", ");
     warnings.push({
       code: "settle-unverified",
       detail:
         `the idle budget was too short to check whether the heap had settled on ` +
-        `${phases} — the samples may include post-load transients`,
+        `${unverified.map((outcome) => outcome.phase).join(", ")} — the samples ` +
+        `may include post-load transients`,
     });
   }
+  return warnings;
+}
 
-  for (const outcome of input.loadOutcomes) {
-    if (input.abandonAfterMs !== undefined) {
-      const abandoned = outcome.abandoned ?? 0;
-      if (outcome.sent > 0 && abandoned < outcome.sent * ABANDON_EFFECTIVE_FLOOR) {
-        warnings.push({
-          code: "abandon-ineffective",
-          detail:
-            `${outcome.phase} disconnected early on only ${abandoned} of ` +
-            `${outcome.sent} requests (${pct(abandoned, outcome.sent)}) — ` +
-            `the early-disconnect path was largely not exercised`,
-        });
-        continue;
-      }
-      // Abandoning every request still proves nothing about stream teardown if
-      // the server never got a byte out first. Measuring #94919 hit exactly
-      // this: 1500/1500 abandoned, 1 of them mid-stream, and without saying so
-      // the run reads as a clean test of a path it never touched.
-      const midStream = outcome.abandonedMidStream ?? 0;
-      if (abandoned > 0 && midStream < abandoned * MID_STREAM_FLOOR) {
-        warnings.push({
-          code: "abandon-before-response",
-          detail:
-            `${outcome.phase} cut ${abandoned} requests before the server sent ` +
-            `anything (${midStream} mid-stream) — this tested pre-response ` +
-            `disconnects, not mid-stream teardown; raise abandonAfterMs above ` +
-            `the route's time-to-first-byte`,
-        });
-      }
+function abandonmentWarnings(outcome: LoadOutcome): MeasurementWarning[] {
+  const abandoned = outcome.abandoned ?? 0;
+  if (outcome.sent > 0 && abandoned < outcome.sent * ABANDON_EFFECTIVE_FLOOR) {
+    return [{
+      code: "abandon-ineffective",
+      detail:
+        `${outcome.phase} disconnected early on only ${abandoned} of ` +
+        `${outcome.sent} requests (${pct(abandoned, outcome.sent)}) — ` +
+        `the early-disconnect path was largely not exercised`,
+    }];
+  }
+  // Abandoning every request still proves nothing about stream teardown if
+  // the server never got a byte out first. Measuring #94919 hit exactly
+  // this: 1500/1500 abandoned, 1 of them mid-stream, and without saying so
+  // the run reads as a clean test of a path it never touched.
+  const midStream = outcome.abandonedMidStream ?? 0;
+  if (abandoned > 0 && midStream < abandoned * MID_STREAM_FLOOR) {
+    return [{
+      code: "abandon-before-response",
+      detail:
+        `${outcome.phase} cut ${abandoned} requests before the server sent ` +
+        `anything (${midStream} mid-stream) — this tested pre-response ` +
+        `disconnects, not mid-stream teardown; raise abandonAfterMs above ` +
+        `the route's time-to-first-byte`,
+    }];
+  }
+  return [];
+}
+
+function loadWarnings(
+  outcomes: readonly LoadOutcome[],
+  abandonAfterMs: number | undefined
+): MeasurementWarning[] {
+  const warnings: MeasurementWarning[] = [];
+  for (const outcome of outcomes) {
+    if (abandonAfterMs !== undefined) {
+      warnings.push(...abandonmentWarnings(outcome));
       continue;
     }
     const landed = outcome.ok2xx ?? 0;
@@ -190,51 +188,87 @@ export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
       });
     }
   }
+  return warnings;
+}
 
-  const deltas = input.trend.deltas;
-  if ((isLeak || input.trend.verdict === "inconclusive") && deltas.length >= 2) {
-    const positive = deltas.filter((delta) => delta > 0);
-    if (positive.length === deltas.length) {
-      const smallest = Math.min(...positive);
-      const largest = Math.max(...positive);
-      if (largest > smallest * SPIKE_RATIO) {
-        warnings.push({
-          code: "spiky-growth",
-          detail:
-            `one cycle grew ${mb(largest)} and another ${mb(smallest)} — ` +
-            `the mean of ${mb(input.trend.growthPerCycle)}/cycle summarizes ` +
-            `an uneven series; measure more cycles before quoting it`,
-        });
-      }
-    }
+function growthShapeWarnings(trend: TrendResult): MeasurementWarning[] {
+  const judged = trend.verdict === "leak" || trend.verdict === "inconclusive";
+  if (!judged || trend.deltas.length < 2) {
+    return [];
   }
-
-  if (isLeak && input.trend.growthPerCycle < minGrowth * NOISE_FLOOR_MULTIPLE) {
-    warnings.push({
-      code: "near-threshold",
-      detail:
-        `growth of ${mb(input.trend.growthPerCycle)}/cycle barely clears the ` +
-        `${mb(minGrowth)} threshold — raise --load-requests so the signal ` +
-        `outgrows the noise`,
-    });
+  const positive = trend.deltas.filter((delta) => delta > 0);
+  if (positive.length !== trend.deltas.length) {
+    return [];
   }
+  const smallest = Math.min(...positive);
+  const largest = Math.max(...positive);
+  if (largest <= smallest * SPIKE_RATIO) {
+    return [];
+  }
+  return [{
+    code: "spiky-growth",
+    detail:
+      `one cycle grew ${mb(largest)} and another ${mb(smallest)} — ` +
+      `the mean of ${mb(trend.growthPerCycle)}/cycle summarizes ` +
+      `an uneven series; measure more cycles before quoting it`,
+  }];
+}
 
-  // Invalidity, not noise: the measurement did not observe what it claims to.
-  // Only a leak verdict is withdrawn — a stable one keeps its warnings, since
-  // silently missing a leak costs the user less than a false accusation.
-  // Only an observed moving heap invalidates: "unverified" means the run never
-  // looked, which is a reason to say so, not to overturn the reading.
+function noiseFloorWarnings(trend: TrendResult, minGrowth: number): MeasurementWarning[] {
+  if (trend.verdict !== "leak" || trend.growthPerCycle >= minGrowth * NOISE_FLOOR_MULTIPLE) {
+    return [];
+  }
+  return [{
+    code: "near-threshold",
+    detail:
+      `growth of ${mb(trend.growthPerCycle)}/cycle barely clears the ` +
+      `${mb(minGrowth)} threshold — raise --load-requests so the signal ` +
+      `outgrows the noise`,
+  }];
+}
+
+/**
+ * Invalidity, not noise: the measurement did not observe what it claims to.
+ * Only a leak verdict is withdrawn — a stable one keeps its warnings, since
+ * silently missing a leak costs the user less than a false accusation. And
+ * only an *observed* moving heap invalidates: "unverified" means the run
+ * never looked, which is a reason to say so, not to overturn the reading.
+ */
+function isVerdictInvalid(input: ConfidenceInput): boolean {
+  if (input.trend.verdict !== "leak") {
+    return false;
+  }
   const neverSettled =
-    input.settleOutcomes.length > 0 && moving.length === input.settleOutcomes.length;
+    input.settleOutcomes.length > 0 &&
+    input.settleOutcomes.every((outcome) => outcome.status === "moving");
   const abandonedNothing =
     input.abandonAfterMs !== undefined &&
     input.loadOutcomes.length > 0 &&
     input.loadOutcomes.every((outcome) => (outcome.abandoned ?? 0) === 0);
-  const invalid = isLeak && (neverSettled || abandonedNothing);
+  return neverSettled || abandonedNothing;
+}
+
+/**
+ * Audits a route measurement against its own evidence.
+ *
+ * A leak detector is an instrument, and a miscalibrated instrument does not
+ * fail loudly — it reports confident, wrong numbers. Two implementations of
+ * early disconnects shipped in this repo that abandoned nothing, and both
+ * produced a verdict indistinguishable from the correct one; only the audit
+ * trail caught them. This turns that trail into a check that runs every time.
+ */
+export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
+  const minGrowth = input.minGrowthPerCycle ?? DEFAULT_MIN_GROWTH;
+  const warnings = [
+    ...settleWarnings(input.settleOutcomes),
+    ...loadWarnings(input.loadOutcomes, input.abandonAfterMs),
+    ...growthShapeWarnings(input.trend),
+    ...noiseFloorWarnings(input.trend, minGrowth),
+  ];
 
   return {
     level: warnings.length === 0 ? "high" : "low",
     warnings,
-    ...(invalid && { supersededVerdict: "inconclusive" as TrendVerdict }),
+    ...(isVerdictInvalid(input) && { supersededVerdict: "inconclusive" as TrendVerdict }),
   };
 }
