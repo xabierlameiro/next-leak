@@ -33,8 +33,7 @@
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",
     "pack:smoke": "node scripts/pack-smoke.mjs",
     "test:mutation": "stryker run",
-    "prepare": "husky >/dev/null 2>&1 || true",
-    "release": "release-it"
+    "prepare": "husky >/dev/null 2>&1 || true"
   },
   "pnpm": {
     "overrides": {
@@ -46,7 +45,6 @@
     "@commitlint/config-conventional": "^21.2.0",
     "@memlab/core": "^2.0.4",
     "@memlab/heap-analysis": "^2.0.4",
-    "@release-it/conventional-changelog": "^11.0.1",
     "@stryker-mutator/core": "^9.6.1",
     "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/autocannon": "^7.12.7",
@@ -55,7 +53,6 @@
     "@vitest/coverage-v8": "^4.1.10",
     "autocannon": "^8.0.0",
     "husky": "^9.1.7",
-    "release-it": "^20.2.1",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
