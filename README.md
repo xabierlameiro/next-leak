@@ -7,7 +7,7 @@
 
 > Find out whether your Next.js app actually leaks memory — how much, on which route, and whose fault it is.
 
-<img src="https://raw.githubusercontent.com/xabierlameiro/next-leak/main/docs/demo.svg" alt="next-leak finding a real Next.js memory leak (43-second run, real time)" width="720">
+<img src="https://raw.githubusercontent.com/xabierlameiro/next-leak/main/docs/demo.svg" alt="next-leak finding a real Next.js memory leak (43-second run, idle time compressed)" width="720">
 
 ```
 $ npx next-leak . --quick
