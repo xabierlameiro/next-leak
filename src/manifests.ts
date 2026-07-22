@@ -40,6 +40,31 @@ const INTERNAL_PATHS = new Set(["/_global-error", "/_not-found"]);
 const INTERCEPTING_SEGMENT = /^(\(\.{1,3}\))+/;
 
 /**
+ * Metadata conventions Next.js accepts *only* as a static file, so the route
+ * handler it generates just serves bytes and no user code runs on the path.
+ * `sitemap`, `robots`, `icon` and `opengraph-image` are deliberately absent:
+ * each also has a `.ts`/`.tsx` generating form that a manifest key cannot be
+ * told apart from the static one, and that form can leak like any other route.
+ */
+const STATIC_ASSET_PATHS = new Set(["/favicon.ico"]);
+
+/** Why this path cannot be measured as a route, or undefined when it can. */
+function unaddressableReason(routePath: string): string | undefined {
+  // Intercepting routes only exist during client navigation; requesting
+  // them directly 404s. Surfacing them as "failed" (which is what measuring
+  // them produced) blamed the user for a Next.js routing feature.
+  if (routePath.split("/").some((segment) => INTERCEPTING_SEGMENT.test(segment))) {
+    return "intercepting route — only reachable via client navigation";
+  }
+  // On a virgin create-next-app this was half the run's wall clock, spent on
+  // the one route nobody suspects of leaking.
+  if (STATIC_ASSET_PATHS.has(routePath)) {
+    return "static asset served by a generated handler — no user code to leak";
+  }
+  return undefined;
+}
+
+/**
  * Turns an app-paths-manifest key into a request path: strips the trailing
  * `/page` or `/route`, route groups `(group)`, and parallel-route slots
  * `@slot`. Returns null for keys that are not requestable routes.
@@ -107,20 +132,12 @@ export function discoverRoutes(appPaths: AppPathsManifest): DiscoveredRoute[] {
     if (parsed === null || INTERNAL_PATHS.has(parsed.path) || routes.has(parsed.path)) {
       continue;
     }
-    // Intercepting routes only exist during client navigation; requesting
-    // them directly 404s. Surfacing them as "failed" (which is what measuring
-    // them produced) blamed the user for a Next.js routing feature.
-    const intercepting = parsed.path
-      .split("/")
-      .some((segment) => INTERCEPTING_SEGMENT.test(segment));
-
+    const reason = unaddressableReason(parsed.path);
     routes.set(parsed.path, {
       path: parsed.path,
       kind: parsed.kind,
       dynamic: parsed.path.includes("["),
-      ...(intercepting && {
-        unaddressableReason: "intercepting route — only reachable via client navigation",
-      }),
+      ...(reason !== undefined && { unaddressableReason: reason }),
     });
   }
   return [...routes.values()].sort((a, b) => a.path.localeCompare(b.path));

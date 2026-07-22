@@ -112,13 +112,47 @@ export type RunOptions = {
 /** Conservative local throughput (measured 250–700 rps in validation runs). */
 const ESTIMATED_RPS = 250;
 const PER_ROUTE_OVERHEAD_SECONDS = 10;
+/**
+ * Two `SETTLE_POLL_MS` polls: the shortest window in which `waitUntilSettled`
+ * can hold two heap readings side by side, so the fastest a cycle's idle phase
+ * can possibly end. Keep in step with `ritual.ts`.
+ */
+const MIN_SETTLE_SECONDS = 4;
 
-export function estimateRunSeconds(routeCount: number, parameters: RunParameters): number {
-  const perRoute =
+export type RunEstimate = {
+  /**
+   * Costs no run avoids: process launch, GC, snapshots and the minimum
+   * settle. Request-serving time is left out on purpose — throughput is the
+   * one term that swings 10x between a hello-world route and a real one, so a
+   * floor that guessed at it would not be a floor.
+   */
+  fastSeconds: number;
+  /** Full idle window every cycle, at the lowest throughput ever measured. */
+  slowSeconds: number;
+};
+
+export function estimateRun(routeCount: number, parameters: RunParameters): RunEstimate {
+  const settleSeconds = Math.min(MIN_SETTLE_SECONDS, parameters.idleMs / 1000);
+  const slowPerRoute =
     parameters.warmupRequests / ESTIMATED_RPS +
     parameters.cycles * (parameters.loadRequests / ESTIMATED_RPS + parameters.idleMs / 1000) +
     PER_ROUTE_OVERHEAD_SECONDS;
-  return Math.round(routeCount * perRoute);
+  const fastPerRoute = PER_ROUTE_OVERHEAD_SECONDS + parameters.cycles * settleSeconds;
+  return {
+    fastSeconds: Math.round(routeCount * fastPerRoute),
+    slowSeconds: Math.round(routeCount * slowPerRoute),
+  };
+}
+
+/**
+ * A point estimate cannot be right across app weights: the adaptive idle ends
+ * as soon as the heap holds still, which on a small app is almost at once. A
+ * range says that out loud instead of quoting the worst case as the price.
+ */
+export function formatEstimate(estimate: RunEstimate): string {
+  const fast = formatDuration(estimate.fastSeconds);
+  const slow = formatDuration(estimate.slowSeconds);
+  return fast === slow ? `≈ ${slow}` : `≈ ${fast}–${slow}`;
 }
 
 export function formatDuration(seconds: number): string {
@@ -412,16 +446,23 @@ async function planRun(
     cycles: options.cycles ?? RITUAL_DEFAULTS.cycles,
     idleMs: options.idleMs ?? RITUAL_DEFAULTS.idleMs,
   };
-  const estimatedSeconds = estimateRunSeconds(
-    routes.filter((route) => resolveRoutePath(route.path, routeConfig) !== null).length,
-    parameters
-  );
+  // Only routes the runner will actually launch a process for: skipped ones
+  // (dynamic without sample params, intercepting, static assets) were
+  // inflating the one number whose whole job is to be believable.
+  const measurable = routes.filter(
+    (route) => skipReason(route, resolveRoutePath(route.path, routeConfig)) === null
+  ).length;
+  const estimate = estimateRun(measurable, parameters);
   progress(
-    `${routes.length} routes discovered · estimated ≈ ${formatDuration(estimatedSeconds)}` +
+    `${routes.length} routes discovered` +
+      (measurable === routes.length ? "" : ` · ${measurable} measurable`) +
+      ` · estimated ${formatEstimate(estimate)}` +
       // Long default runs are where first-time users give up; point at the two
       // ways out. Suppressed once load parameters were tuned by hand (or by
       // --quick, which arrives here as explicit loadRequests/idleMs).
-      (estimatedSeconds > 15 * 60 && options.loadRequests === undefined && options.idleMs === undefined
+      (estimate.slowSeconds > 15 * 60 &&
+      options.loadRequests === undefined &&
+      options.idleMs === undefined
         ? " — use --quick for the fast validated preset, or narrow with --routes"
         : "")
   );
