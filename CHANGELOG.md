@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/xabierlameiro/next-leak/compare/v0.1.2...v0.1.3) (2026-07-22)
+
+
+### Bug Fixes
+
+* announce a duration range and stop measuring static asset routes ([#11](https://github.com/xabierlameiro/next-leak/issues/11)) ([133b8ca](https://github.com/xabierlameiro/next-leak/commit/133b8ca92c18158d2650a927590f79c5c6dc784a))
+* clear remaining sonar findings and dev dependency advisories ([d87c834](https://github.com/xabierlameiro/next-leak/commit/d87c834251993f647ccd9a9ff28774ae51dba86d))
+
 ## [0.1.2](https://github.com/xabierlameiro/next-leak/compare/v0.1.1...v0.1.2) (2026-07-21)
 
 
