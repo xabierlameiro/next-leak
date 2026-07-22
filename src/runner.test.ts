@@ -4,8 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RitualResult } from "./ritual.js";
 import {
-  estimateRunSeconds,
+  estimateRun,
   formatDuration,
+  formatEstimate,
   routeSlug,
   runMeasurement,
   type RunnerDeps,
@@ -87,7 +88,7 @@ function makeDeps(events: string[]): RunnerDeps {
   };
 }
 
-describe("estimateRunSeconds", () => {
+describe("estimateRun", () => {
   const parameters = {
     warmupRequests: 200,
     loadRequests: 5000,
@@ -97,16 +98,35 @@ describe("estimateRunSeconds", () => {
   };
 
   it("puts a 60-route default run in the hours range (the first-user wall)", () => {
-    const seconds = estimateRunSeconds(60, parameters);
-    expect(seconds).toBeGreaterThan(2 * 3600);
-    expect(formatDuration(seconds)).toMatch(/h$/);
+    const { slowSeconds } = estimateRun(60, parameters);
+    expect(slowSeconds).toBeGreaterThan(2 * 3600);
+    expect(formatDuration(slowSeconds)).toMatch(/h$/);
   });
 
   it("keeps small scoped runs in minutes", () => {
-    const seconds = estimateRunSeconds(3, { ...parameters, loadRequests: 300, idleMs: 5000 });
-    expect(seconds).toBeLessThan(15 * 60);
+    const { slowSeconds } = estimateRun(3, { ...parameters, loadRequests: 300, idleMs: 5000 });
+    expect(slowSeconds).toBeLessThan(15 * 60);
     expect(formatDuration(90)).toBe("2m");
     expect(formatDuration(45)).toBe("45s");
+  });
+
+  // The 2026-07-22 gate: a virgin create-next-app was announced at "≈ 5m" and
+  // finished in 42s. The floor bills the adaptive settle (2 polls per cycle),
+  // not the full idle window, so it lands beside the real run.
+  it("floors a two-route default run at its fixed costs, not the idle window", () => {
+    const estimate = estimateRun(2, parameters);
+    expect(estimate.fastSeconds).toBe(2 * (10 + 3 * 4));
+    expect(formatEstimate(estimate)).toBe("≈ 44s–5m");
+  });
+
+  it("never floors above the idle window the user asked for", () => {
+    const estimate = estimateRun(2, { ...parameters, idleMs: 300 });
+    expect(estimate.fastSeconds).toBe(22);
+    expect(estimate.fastSeconds).toBeLessThanOrEqual(estimate.slowSeconds);
+  });
+
+  it("prints a single value when both bounds round alike", () => {
+    expect(formatEstimate({ fastSeconds: 44, slowSeconds: 44 })).toBe("≈ 44s");
   });
 });
 
@@ -268,7 +288,38 @@ describe("runMeasurement", () => {
       { appDir, bootstrapPath: "/fake/bootstrap.js", outputDir, onProgress: (m) => progress.push(m) },
       makeDeps([])
     );
-    expect(progress.some((message) => /1 routes discovered · estimated ≈/.test(message))).toBe(true);
+    expect(progress.some((message) => /1 routes discovered · estimated ≈ 22s–3m/.test(message))).toBe(
+      true
+    );
+  });
+
+  it("estimates from measurable routes only and reports both counts", async () => {
+    const appDir = await makeAppDir({
+      "/page": "app/page.js",
+      "/favicon.ico/route": "app/favicon.ico/route.js",
+      "/(.)photo/page": "app/(.)photo/page.js",
+    });
+    const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-out-"));
+    const progress: string[] = [];
+    const events: string[] = [];
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", outputDir, onProgress: (m) => progress.push(m) },
+      makeDeps(events)
+    );
+
+    expect(
+      progress.some((message) => /3 routes discovered · 1 measurable · estimated ≈/.test(message))
+    ).toBe(true);
+    // The estimate must match what one measurable route costs, not three.
+    expect(progress.some((message) => message.includes("≈ 22s–3m"))).toBe(true);
+    expect(events.filter((event) => event.startsWith("ritual:"))).toEqual(["ritual:/"]);
+
+    const favicon = report.routes.find((route) => route.route === "/favicon.ico");
+    expect(favicon).toEqual({
+      route: "/favicon.ico",
+      status: "skipped",
+      reason: "static asset served by a generated handler — no user code to leak",
+    });
   });
 
   it("marks remaining routes interrupted when the signal aborts", async () => {
