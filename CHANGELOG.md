@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/xabierlameiro/next-leak/compare/v0.1.3...v0.2.0) (2026-07-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* verdicts are not comparable across versions. Runs measured before this change used a fixed 256 KiB per-cycle gate and a 3-cycle default; a route reported `stable` by an earlier version may report `leak` here, and the reverse. Re-measure rather than comparing old reports to new ones.
+
+### Features
+
+* scale the leak threshold with load and make the measurement regime explicit ([#21](https://github.com/xabierlameiro/next-leak/issues/21)) ([ecb8182](https://github.com/xabierlameiro/next-leak/commit/ecb818286b897c9e373a8dddf019f0778c3eafd2))
+
+
+### Bug Fixes
+
+* keep release tags on the v0.1.3 convention the repo already published ([#25](https://github.com/xabierlameiro/next-leak/issues/25)) ([3ab70c7](https://github.com/xabierlameiro/next-leak/commit/3ab70c770ec8fbfb573bb8ae722ab3e93c988273))
+
 ## [0.1.3](https://github.com/xabierlameiro/next-leak/compare/v0.1.2...v0.1.3) (2026-07-22)
 
 

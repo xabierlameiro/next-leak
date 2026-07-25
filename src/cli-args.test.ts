@@ -24,7 +24,7 @@ describe("parseCliArgs", () => {
   it("parses every flag", () => {
     const parsed = parseCliArgs([
       "app", "--routes", "/api,/dashboard", "--cycles", "6", "--requests", "1000",
-      "--connections", "20", "--idle", "8", "--max-old-space", "4096", "--quick",
+      "--connections", "20", "--idle", "8", "--max-old-space", "2048", "--quick",
       "--diff-all", "--output", "/tmp/out",
     ]);
     if (parsed.kind !== "run") {
@@ -37,20 +37,11 @@ describe("parseCliArgs", () => {
       requests: 1000,
       connections: 20,
       idleSeconds: 8,
-      maxOldSpaceMb: 4096,
+      maxOldSpaceMb: 2048,
       quick: true,
       diffAll: true,
       output: "/tmp/out",
     });
-  });
-
-  it("rejects a heap limit no machine could honour", () => {
-    const parsed = parseCliArgs(["app", "--max-old-space", "999999"]);
-    expect(parsed.kind).toBe("error");
-    if (parsed.kind === "error") {
-      expect(parsed.message).toContain("--max-old-space");
-    }
-    expect(parseCliArgs(["app", "--max-old-space", "0"]).kind).toBe("error");
   });
 
   it("rejects unknown flags naming them (typos never fall back to defaults)", () => {
@@ -158,6 +149,15 @@ describe("parseCliArgs message and boundary precision", () => {
   it("accepts exactly 3 cycles and rejects 2 with the verdict rationale", () => {
     expect(parseCliArgs(["app", "--cycles", "3"]).kind).toBe("run");
     expect(errorMessage(["app", "--cycles", "2"])).toContain("at least 3 cycles");
+  });
+
+  // The measured app used to be pinned at 512 MB with no way out: an app whose
+  // legitimate working set is larger simply could not be measured.
+  it("bounds --max-old-space at both ends", () => {
+    expect(parseCliArgs(["app", "--max-old-space", "128"]).kind).toBe("run");
+    expect(parseCliArgs(["app", "--max-old-space", "8192"]).kind).toBe("run");
+    expect(errorMessage(["app", "--max-old-space", "64"])).toContain("at least 128 MB");
+    expect(errorMessage(["app", "--max-old-space", "65537"])).toContain("capped at 65536");
   });
 
   it("honours --help and --version wherever they appear", () => {

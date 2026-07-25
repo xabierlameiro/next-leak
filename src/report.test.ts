@@ -41,11 +41,21 @@ describe("formatReport", () => {
     healthy.trend = { ...healthy.trend, verdict: "inconclusive" };
     const output = formatReport(report);
     expect(output).toContain("inconclusive means sustained sub-threshold growth");
-    expect(output).toContain("next-leak /apps/shop --routes / --cycles 6");
+    expect(output).toContain("next-leak /apps/shop --routes / --cycles 8");
   });
 
   it("prints no hint when nothing is inconclusive", () => {
     expect(formatReport(makeRunReport())).not.toContain("hint:");
+  });
+
+  // A reader cannot tell a real `stable` from a run that was simply not
+  // sensitive enough unless the gate is on the page next to the verdict.
+  it("states the regime every verdict was judged under", () => {
+    const output = formatReport(makeRunReport());
+    expect(output).toContain("judged over 4 cycles × 5000 requests");
+    expect(output).toContain("growth gate 256 KiB/cycle");
+    expect(output).toContain("+0.05 MB/1000 req");
+    expect(output).toContain("heap cap 512 MB");
   });
 
   it("reports peak pressure beside a stable verdict without contradicting it", () => {
@@ -161,6 +171,8 @@ describe("formatReport numeric edge cases", () => {
 
   it("never suggests fewer than six cycles", () => {
     const report = makeRunReport();
+    // The 3-cycle minimum is the only run whose doubling reaches the floor.
+    report.parameters = { ...report.parameters, cycles: 3 };
     const healthy = report.routes[0];
     if (healthy?.status !== "measured") throw new Error("fixture broken");
     healthy.trend = { ...healthy.trend, verdict: "inconclusive" };

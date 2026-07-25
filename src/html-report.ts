@@ -169,6 +169,9 @@ code{background:#f4f4f4;padding:0 4px;border-radius:3px}
   )} · ${escapeHtml(environment.platform)}/${escapeHtml(environment.arch)} · next ${escapeHtml(
     environment.nextVersion ?? "unknown"
   )} · next-leak ${escapeHtml(environment.nextLeakVersion)}</p>
+<p class="meta">${run.parameters.cycles} cycles × ${run.parameters.loadRequests} requests · heap cap ${
+    run.parameters.maxOldSpaceMb
+  } MB · growth gate ${(run.parameters.minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle</p>
 ${measured.map((route) => measuredSection(route, run.parameters)).join("\n")}
 ${
   skipped.length === 0

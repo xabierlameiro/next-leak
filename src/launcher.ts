@@ -6,6 +6,16 @@ import { z } from "zod";
 
 const controlFileSchema = z.object({ port: z.number(), pid: z.number() });
 
+/**
+ * Old-space cap for measured processes, when the caller does not pick one.
+ *
+ * Small on purpose: a leak that would take a production container an hour to
+ * kill reaches a 512 MB ceiling in minutes. It is a default, not a constant —
+ * an app whose legitimate working set is larger cannot be measured under it,
+ * so `--max-old-space` exists and the chosen value is recorded in `run.json`.
+ */
+export const DEFAULT_MAX_OLD_SPACE_MB = 512;
+
 export type LaunchOptions = {
   /** Absolute path to the standalone `server.js` (or any PORT/HOSTNAME-honoring server). */
   serverPath: string;
@@ -42,9 +52,6 @@ export class LaunchError extends Error {
     this.name = "LaunchError";
   }
 }
-
-/** Fallback only: the ritual always passes an explicit limit (RITUAL_DEFAULTS). */
-const DEFAULT_MAX_OLD_SPACE_MB = 512;
 
 const activeChildren = new Set<ChildProcess>();
 

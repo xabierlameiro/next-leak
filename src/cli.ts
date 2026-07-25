@@ -102,8 +102,10 @@ async function main(): Promise<void> {
 
   const { options } = parsed;
   // The exact profile the real-app revalidation ran with (22 routes, zero
-  // false positives): rigorous enough to trust, fast enough to finish over
-  // coffee. Explicit flags override it, so `--quick --cycles 6` works.
+  // false positives): fast enough to finish over coffee. It matches the
+  // default cycle count — what it trades away is traffic per cycle, so the
+  // gate sits on its noise floor and the run is less sensitive to slow leaks.
+  // Explicit flags override it, so `--quick --cycles 6` works.
   const quickPreset = options.quick
     ? { loadRequests: 2000, cycles: 4, idleMs: 8000 }
     : {};

@@ -170,8 +170,14 @@ export function formatReport(report: RunReport): string {
   for (const route of report.routes) {
     lines.push(...routeLines(route, report.parameters));
   }
+  // A verdict whose gate is not printed cannot be reproduced: the same route
+  // judged against a different threshold is a different measurement.
+  const { minGrowthPerCycle, loadRequests, cycles, maxOldSpaceMb } = report.parameters;
   lines.push(
     "",
+    `judged over ${cycles} cycles × ${loadRequests} requests, growth gate ` +
+      `${(minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle ` +
+      `(${formatGrowth((minGrowthPerCycle / loadRequests) * 1000)}), heap cap ${maxOldSpaceMb} MB`,
     `snapshots and run.json: ${report.workDir}`,
     `report: ${report.bundle.htmlReport}`,
     ...report.bundle.issues.map((issue) => `issue draft (${issue.route}): ${issue.file}`)
