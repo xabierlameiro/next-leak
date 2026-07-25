@@ -35,7 +35,7 @@ holds it — without being told what to look for.
 | [#95094](https://github.com/vercel/next.js/issues/95094) | Middleware `setTimeout` ids retained by the sandbox | **Reproduced** · mechanism named · 112 MB retained |
 | [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | **Reproduced** · 26.7 → 71.9 MB |
 | [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | **Reproduced** · 32.8 → 369.9 MB |
-| [#94919](https://github.com/vercel/next.js/issues/94919) | RSC tree retained on client aborts | Not reproduced on standalone — [and it says why](#scope-and-limits-read-before-filing-issues) |
+| [#94919](https://github.com/vercel/next.js/issues/94919) | RSC tree retained on client aborts | **Reproduced** · 39 → 139 MB · [with a caveat](#scope-and-limits-read-before-filing-issues) |
 
 The full causal chain, measured on that same issue: leak found (28.7 -> 138.9 MB
 across 8 cycles), the workaround from the thread applied (`clearTimeout(id)`
@@ -269,6 +269,13 @@ through the build's source maps.
   `--max-old-space`, or every route dies as an OOM that is not the app's
   fault. When a run's heap gets close to the cap, the report says so.
 - Borderline routes can flip between `stable`/`leak` across runs — more cycles resolves this.
+- The [#94919](https://github.com/vercel/next.js/issues/94919) reproduction ships
+  a **custom Express server and deliberately no standalone output**, which this
+  tool cannot measure as published. The figure above comes from the same app
+  built with `output: "standalone"` — the leak is there too, but that is Next's
+  server under test, not the reporter's middleware chain. Instrumenting their
+  own server by hand (same `--import` bootstrap, no CLI) showed the same shape:
+  post-GC heap 43 → 56 MB and arrayBuffers 0.2 → 10.7 MB over four cycles.
 - The **peak-pressure** thresholds are calibrated against one reproduction measured in three regimes plus the bundled fixture, not against the ~40-route validation set the verdicts were tuned on. A peak note never changes a verdict, so the cost of a false one is noise, not a false accusation — but treat the exact thresholds as young.
 - The measured app runs with its real environment: routes that call external services will call them under load. Scope with `--routes` and moderate `--requests` accordingly.
 
