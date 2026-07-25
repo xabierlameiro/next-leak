@@ -27,14 +27,15 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "engines": {
     "node": ">=22"
   },
   "packageManager": "pnpm@10.20.0",
   "scripts": {
-    "build": "tsup && tsc -p tsconfig.build.json",
+    "build": "tsup && tsc -p tsconfig.build.json && node scripts/generate-notices.mjs && node scripts/check-bundle.mjs",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",

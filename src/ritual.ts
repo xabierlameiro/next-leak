@@ -4,7 +4,7 @@ import type { HeapSample } from "./control-server.js";
 import { launchInstrumented } from "./launcher.js";
 import { runAbandonPhase, type AbandonPhaseResult } from "./abandon-load.js";
 import { runLoadPhase } from "./load.js";
-import { classifyMemoryTrend, type TrendResult } from "./trend.js";
+import { classifyMemoryTrend, minGrowthFor, type TrendResult } from "./trend.js";
 
 export type RitualOptions = {
   /** Absolute path to the standalone server.js. */
@@ -21,6 +21,8 @@ export type RitualOptions = {
   connections?: number;
   cycles?: number;
   idleMs?: number;
+  /** Old-space cap for the measured process (MB). Default: 512. */
+  maxOldSpaceMb?: number;
   /** Headers sent with every request during warm-up and load. */
   headers?: Record<string, string>;
   /** Emulate clients that disconnect before the response arrives. */
@@ -80,6 +82,12 @@ export type RitualResult = {
   afterSnapshot: string;
   trend: TrendResult;
   requestsPerCycle: number;
+  /**
+   * The gate (bytes per cycle) this verdict was judged against. Travels with
+   * the result so the confidence audit grades against the same number the
+   * verdict used, and so the report can print what it measured against.
+   */
+  minGrowthPerCycle: number;
 };
 
 /** Injectable seams for unit tests; production uses the real implementations. */
@@ -135,12 +143,23 @@ const defaultDeps: RitualDeps = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
-/** Single source of truth for ritual defaults — reports must echo them. */
+/**
+ * Single source of truth for ritual defaults — reports must echo them.
+ *
+ * `cycles` is 4 rather than the minimum 3 because of how much the verdict
+ * actually sees: the sample array is `[baseline, ...cycles]` and
+ * `classifyTrend` drops the warm-up delta, leaving `cycles - 1` numbers. At 3
+ * cycles that is **two** deltas, and `anyFlatOrDown` needs only one of the two
+ * to be non-positive to call a route stable — one noisy cycle flips the
+ * verdict. Four cycles give three deltas, which is what the real-app
+ * validation ran with. The 3-cycle minimum stays available for users who want
+ * a faster, weaker read.
+ */
 export const RITUAL_DEFAULTS = {
   warmupRequests: 200,
   loadRequests: 5000,
   connections: 100,
-  cycles: 3,
+  cycles: 4,
   idleMs: 30_000,
 } as const;
 
@@ -169,24 +188,23 @@ export async function runRitual(
   await mkdir(options.workDir, { recursive: true });
   // A free port can be taken between probing it and the child binding it, so
   // one lost race must not fail the route.
+  // One payload for both attempts: spelling it out twice let the retry drift
+  // from the real launch, which is how a measured process would silently run
+  // under different flags than the one the report describes.
+  const launchOptions = {
+    serverPath: options.serverPath,
+    workDir: options.workDir,
+    bootstrapPath: options.bootstrapPath,
+    ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
+  };
   let app;
   try {
-    app = await deps.launch({
-      serverPath: options.serverPath,
-      workDir: options.workDir,
-      appPort: options.appPort,
-      bootstrapPath: options.bootstrapPath,
-    });
+    app = await deps.launch({ ...launchOptions, appPort: options.appPort });
   } catch (cause) {
     if (!String(cause).includes("EADDRINUSE")) {
       throw cause;
     }
-    app = await deps.launch({
-      serverPath: options.serverPath,
-      workDir: options.workDir,
-      appPort: options.appPort + 1,
-      bootstrapPath: options.bootstrapPath,
-    });
+    app = await deps.launch({ ...launchOptions, appPort: options.appPort + 1 });
   }
 
   const timings: PhaseTiming[] = [];
@@ -277,6 +295,9 @@ export async function runRitual(
     const samples = memorySamples.map((sample) => sample.heapUsed);
     // External memory counts too: a flat heap with growing buffers still OOMs.
     const externalSamples = memorySamples.map((sample) => sample.external);
+    // The gate scales with the traffic each cycle served, so the verdict does
+    // not change meaning when --requests does.
+    const minGrowthPerCycle = minGrowthFor(loadRequests);
     return {
       route: options.route,
       timings,
@@ -286,8 +307,9 @@ export async function runRitual(
       memorySamples,
       baselineSnapshot: baseline.file,
       afterSnapshot,
-      trend: classifyMemoryTrend(samples, externalSamples),
+      trend: classifyMemoryTrend(samples, externalSamples, { minGrowthPerCycle }),
       requestsPerCycle: loadRequests,
+      minGrowthPerCycle,
     };
   } finally {
     await app.close();

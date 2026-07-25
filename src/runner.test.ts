@@ -53,6 +53,7 @@ function ritualResult(route: string, samples: number[]): RitualResult {
       deltas: [],
     },
     requestsPerCycle: 5000,
+    minGrowthPerCycle: 256 * 1024,
   };
 }
 
@@ -93,8 +94,10 @@ describe("estimateRun", () => {
     warmupRequests: 200,
     loadRequests: 5000,
     connections: 100,
-    cycles: 3,
+    cycles: 4,
     idleMs: 30_000,
+    maxOldSpaceMb: 512,
+    minGrowthPerCycle: 256 * 1024,
   };
 
   it("puts a 60-route default run in the hours range (the first-user wall)", () => {
@@ -115,8 +118,8 @@ describe("estimateRun", () => {
   // not the full idle window, so it lands beside the real run.
   it("floors a two-route default run at its fixed costs, not the idle window", () => {
     const estimate = estimateRun(2, parameters);
-    expect(estimate.fastSeconds).toBe(2 * (10 + 3 * 4));
-    expect(formatEstimate(estimate)).toBe("≈ 44s–5m");
+    expect(estimate.fastSeconds).toBe(2 * (10 + 4 * 4));
+    expect(formatEstimate(estimate)).toBe("≈ 52s–7m");
   });
 
   it("never floors above the idle window the user asked for", () => {
@@ -280,6 +283,28 @@ describe("runMeasurement", () => {
     expect(report.routes.map((route) => route.route)).toEqual(["/", "/api/health"]);
   });
 
+  it("records the gate that matches the traffic it was told to send", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-out-"));
+
+    const report = await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        outputDir,
+        loadRequests: 20_000,
+        maxOldSpaceMb: 2048,
+      },
+      makeDeps([])
+    );
+
+    // 4x the default traffic per cycle, so 4x the growth a cycle must show to
+    // mean the same thing. Before this, the gate stayed at 256 KiB and the
+    // verdict quietly got four times more sensitive.
+    expect(report.parameters.minGrowthPerCycle).toBe(4 * 256 * 1024);
+    expect(report.parameters.maxOldSpaceMb).toBe(2048);
+  });
+
   it("prints route count and duration estimate before measuring", async () => {
     const appDir = await makeAppDir({ "/page": "app/page.js" });
     const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-out-"));
@@ -288,7 +313,7 @@ describe("runMeasurement", () => {
       { appDir, bootstrapPath: "/fake/bootstrap.js", outputDir, onProgress: (m) => progress.push(m) },
       makeDeps([])
     );
-    expect(progress.some((message) => /1 routes discovered · estimated ≈ 22s–3m/.test(message))).toBe(
+    expect(progress.some((message) => /1 routes discovered · estimated ≈ 26s–4m/.test(message))).toBe(
       true
     );
   });
@@ -311,7 +336,7 @@ describe("runMeasurement", () => {
       progress.some((message) => /3 routes discovered · 1 measurable · estimated ≈/.test(message))
     ).toBe(true);
     // The estimate must match what one measurable route costs, not three.
-    expect(progress.some((message) => message.includes("≈ 22s–3m"))).toBe(true);
+    expect(progress.some((message) => message.includes("≈ 26s–4m"))).toBe(true);
     expect(events.filter((event) => event.startsWith("ritual:"))).toEqual(["ritual:/"]);
 
     const favicon = report.routes.find((route) => route.route === "/favicon.ico");
@@ -374,9 +399,15 @@ describe("runMeasurement", () => {
     expect(report.environment.nodeVersion).toBe(process.version);
     expect(report.environment.nextVersion).toBe("16.0.1");
     expect(report.parameters.loadRequests).toBe(5000);
+    // The measurement regime belongs on the record: a verdict whose gate and
+    // heap cap are not written down cannot be reproduced or argued with.
+    expect(report.parameters.minGrowthPerCycle).toBe(256 * 1024);
+    expect(report.parameters.maxOldSpaceMb).toBe(512);
 
     const html = await readFile(report.bundle.htmlReport, "utf8");
     expect(html).toContain("next-leak report");
+    expect(html).toContain("heap cap 512 MB");
+    expect(html).toContain("growth gate 256 KiB/cycle");
     // /leaky's fake ritual verdict is leak → exactly one issue draft.
     expect(report.bundle.issues).toHaveLength(1);
     const issue = report.bundle.issues[0];

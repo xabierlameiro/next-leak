@@ -33,6 +33,18 @@ narrow, and most of it is verifiable from the outside:
   processes. That is the product's function, not a payload. The embedded
   URLs scanners find are `127.0.0.1` control endpoints and github.com
   links in generated issue drafts.
+- **The stub is tested, not asserted.** `scripts/check-bundle.mjs` runs on
+  every build and again against the *installed* tarball in `pack:smoke`: it
+  fails if the stub is missing from the bundle (the alias stopped matching),
+  if a bare `require("puppeteer")` survived, if strings unique to real
+  browser tooling appear, or if the bundle grows past a size ceiling. A
+  memlab upgrade that reintroduces Chrome breaks the build instead of
+  shipping.
+- **Licences travel with the bundle**: [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)
+  reproduces the licence of every package inlined into `dist/` — 88 of them,
+  since the transitive trees come along too. It is generated from the build's
+  own metafile, and the build fails if a bundled package's terms cannot be
+  determined.
 - **Verify instead of trusting**: `dist/` is reproducible from source with
   `pnpm build`, and `pnpm pack:smoke` installs the real tarball in
   isolation and measures a fixture app — the gate every release must pass.
