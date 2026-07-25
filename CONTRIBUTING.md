@@ -9,6 +9,12 @@ Thanks for your interest in next-leak.
   silently change verdicts.
 - Every PR must pass CI (typecheck + tests on Node 22/24, macOS + Linux).
 - Conventional Commits, header ≤ 100 chars. commitlint enforces this locally.
+- **The pull request title must be a Conventional Commit too.** This repository
+  squash-merges, so the PR title — not your branch's commit messages — is what
+  lands on `main`, and it is what release-please reads to decide the next
+  version. A title it cannot parse means no version bump, no changelog entry
+  and no publish, however well-formed the commits behind it were. CI checks the
+  title against the same `commitlint.config.mjs` used for commits.
 - New behavior needs tests. Verdict-related changes also need a mutation run
   (`npm run test:mutation`) — line coverage alone has lied to us before.
 
