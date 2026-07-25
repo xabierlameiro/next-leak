@@ -1,5 +1,6 @@
 import { effectiveVerdict } from "./confidence.js";
-import type { RouteReport, RunReport } from "./runner.js";
+import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
+import type { RouteReport, RunParameters, RunReport } from "./runner.js";
 
 const MB = 1024 * 1024;
 
@@ -55,7 +56,49 @@ function ownerCell(attribution: { owner: string; source?: string | null; package
   return `${attribution.owner}${source}${packageName}`;
 }
 
-function measuredSection(route: RouteReport): string {
+/**
+ * Peak block, rendered next to the verdict rather than inside it. Absent
+ * `peaks` (a run.json written before this existed) degrades to silence.
+ */
+function peakBlock(
+  route: Extract<RouteReport, { status: "measured" }>,
+  parameters: RunParameters
+): string {
+  const retained = route.memorySamples.at(-1)?.heapUsed;
+  if (retained === undefined || route.peaks === undefined) {
+    return "";
+  }
+  const pressure = assessPeakPressure({
+    peaks: route.peaks,
+    retainedHeapBytes: retained,
+    maxOldSpaceMb: parameters.maxOldSpaceMb,
+  });
+  const peakRows = route.peaks
+    .filter((peak) => peak.polls > 0)
+    .map(
+      (peak) =>
+        `<tr><td>${escapeHtml(peak.phase)}</td>` +
+        `<td>${(peak.heapUsed / MB).toFixed(1)} MB</td>` +
+        `<td>${(peak.external / MB).toFixed(1)} MB</td>` +
+        `<td>${(peak.arrayBuffers / MB).toFixed(1)} MB</td>` +
+        `<td>${(peak.rss / MB).toFixed(1)} MB</td></tr>`
+    )
+    .join("");
+  if (peakRows === "") {
+    return "";
+  }
+  const note =
+    pressure === null
+      ? ""
+      : `<p class="warn">Peak pressure: ${escapeHtml(describePeakPressure(pressure))}</p>`;
+  return (
+    note +
+    `<table><tr><th>peak during</th><th>heap</th><th>external</th>` +
+    `<th>arrayBuffers</th><th>rss</th></tr>${peakRows}</table>`
+  );
+}
+
+function measuredSection(route: RouteReport, parameters: RunParameters): string {
   if (route.status !== "measured") {
     return "";
   }
@@ -93,6 +136,7 @@ function measuredSection(route: RouteReport): string {
     `<p class="curve">heap ${curve} MB · ${(route.growthPer1000Requests / MB).toFixed(2)} MB/1000 req</p>` +
     withdrawn +
     warnings +
+    peakBlock(route, parameters) +
     (findingRows === ""
       ? ""
       : `<table><tr><th>kind</th><th>type</th><th>node</th><th>retained</th><th>owner</th></tr>${findingRows}</table>`) +
@@ -128,7 +172,7 @@ code{background:#f4f4f4;padding:0 4px;border-radius:3px}
 <p class="meta">${run.parameters.cycles} cycles × ${run.parameters.loadRequests} requests · heap cap ${
     run.parameters.maxOldSpaceMb
   } MB · growth gate ${(run.parameters.minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle</p>
-${measured.map(measuredSection).join("\n")}
+${measured.map((route) => measuredSection(route, run.parameters)).join("\n")}
 ${
   skipped.length === 0
     ? ""

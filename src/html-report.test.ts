@@ -165,6 +165,45 @@ describe("renderHtmlReport axis placement", () => {
   });
 });
 
+describe("renderHtmlReport peaks", () => {
+  it("tabulates the peak of every class per cycle", () => {
+    const html = renderHtmlReport(makeRunReport());
+    expect(html).toContain("<th>peak during</th>");
+    expect(html).toContain("<td>180.0 MB</td>"); // rss peak of the fixture
+  });
+
+  it("adds the warning only when the peak is far from what is retained", () => {
+    expect(renderHtmlReport(makeRunReport())).not.toContain("Peak pressure");
+
+    const report = makeRunReport();
+    report.parameters = { ...report.parameters, maxOldSpaceMb: 6144 };
+    const healthy = report.routes[0];
+    if (healthy?.status !== "measured") throw new Error("fixture broken");
+    healthy.peaks = [
+      {
+        phase: "cycle 1",
+        heapUsed: 3100 * 1024 * 1024,
+        external: 3600 * 1024 * 1024,
+        arrayBuffers: 3500 * 1024 * 1024,
+        rss: 3800 * 1024 * 1024,
+        polls: 60,
+      },
+    ];
+    expect(renderHtmlReport(report)).toContain("Peak pressure");
+  });
+
+  it("degrades to silence for a run recorded before peaks existed", () => {
+    const report = makeRunReport();
+    const healthy = report.routes[0];
+    if (healthy?.status !== "measured") throw new Error("fixture broken");
+    // Exactly what an older run.json deserialises to.
+    (healthy as { peaks?: unknown }).peaks = undefined;
+    const html = renderHtmlReport(report);
+    expect(html).not.toContain("Peak pressure");
+    expect(html).toContain("<polyline");
+  });
+});
+
 describe("renderHtmlReport confidence", () => {
   const withConfidence = (confidence: unknown) => {
     const run = makeRunReport();

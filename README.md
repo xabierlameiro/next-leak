@@ -162,6 +162,33 @@ separates them, because each one has a different fix:
 - **`inconclusive`** — sustained sub-threshold growth: measure longer. The CLI prints the exact re-run command (`--routes <those> --cycles 6`).
 - **`failed`** — the route errored under load (auth redirects, POST-only endpoints). >1% non-2xx aborts measurement instead of measuring garbage. That's by design.
 
+## Peak pressure: `stable` is not the same as safe
+
+Every verdict above is about what a route **retains** after idle and a forced
+GC. That is the right question for a leak and the wrong one for an
+`OOMKilled`: a process can climb to gigabytes under load, hand it all back
+when the load stops, and still be killed at its peak. So each load cycle is
+also sampled *without* collecting, and the highest value is reported next to
+the verdict:
+
+```
+✔ /[slug]  stable  (-164.08 MB/1000 req)  heap 261.9 MB → 265.7 MB → 35.4 MB → 36.0 MB
+    ▲ peak pressure: peaked at 3145.7 MB rss under load while retaining 36.0 MB —
+      a container sized on what it retains dies on what it reaches
+```
+
+That is a real measurement of the reproduction in
+[vercel/next.js#92287](https://github.com/vercel/next.js/issues/92287): no
+retention, and 3 GB reached. The note fires when the peak heap comes within
+75% of `--max-old-space`, or when peak RSS is at least 8× the retained heap
+and above 512 MB. It never changes the verdict — retention and peak are
+different questions, and only one of them is a leak. A peak is the highest
+value *sampled* (every 250 ms), so it is a lower bound.
+
+If the measured process dies at the limit instead of merely approaching it,
+the route fails saying exactly that, with the limit in force and how to raise
+it.
+
 ## The tool grades its own measurement
 
 A leak detector is an instrument, and a miscalibrated instrument doesn't fail
@@ -233,6 +260,7 @@ through the build's source maps.
   `--max-old-space`, or every route dies as an OOM that is not the app's
   fault. When a run's heap gets close to the cap, the report says so.
 - Borderline routes can flip between `stable`/`leak` across runs — more cycles resolves this.
+- The **peak-pressure** thresholds are calibrated against one reproduction measured in three regimes plus the bundled fixture, not against the ~40-route validation set the verdicts were tuned on. A peak note never changes a verdict, so the cost of a false one is noise, not a false accusation — but treat the exact thresholds as young.
 - The measured app runs with its real environment: routes that call external services will call them under load. Scope with `--routes` and moderate `--requests` accordingly.
 
 ## Development

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { forceGc, startControlServer, type ControlServer } from "./control-server.js";
 
 let server: ControlServer | undefined;
@@ -25,6 +25,33 @@ describe("startControlServer", () => {
     expect(body["heapUsed"]).toBeTypeOf("number");
     expect(body["rss"]).toBeTypeOf("number");
     expect(body["gcExposed"]).toBeTypeOf("boolean");
+  });
+
+  it("samples on /mem without collecting", async () => {
+    // The peak poller runs this while the app is under load: collecting there
+    // would flatten the peak it exists to measure.
+    const g = globalThis as typeof globalThis & { gc?: () => void };
+    const original = g.gc;
+    const collect = vi.fn();
+    g.gc = collect;
+    try {
+      server = await startControlServer({ snapshotDir: "/unused" });
+      const response = await fetch(`http://127.0.0.1:${server.port}/mem`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body["heapUsed"]).toBeTypeOf("number");
+      expect(body["arrayBuffers"]).toBeTypeOf("number");
+      expect(collect).not.toHaveBeenCalled();
+
+      await fetch(`http://127.0.0.1:${server.port}/gc`);
+      expect(collect).toHaveBeenCalled();
+    } finally {
+      if (original === undefined) {
+        delete g.gc;
+      } else {
+        g.gc = original;
+      }
+    }
   });
 
   it("writes a named snapshot and responds with the file path", async () => {

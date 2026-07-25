@@ -37,6 +37,14 @@ export async function requestGc(port: number): Promise<HeapSample> {
   return sample;
 }
 
+/**
+ * Reads memory without collecting. Used to poll a process under load, where a
+ * forced GC would change the number being read.
+ */
+export async function requestMemory(port: number): Promise<HeapSample> {
+  return sampleSchema.parse(await request(port, "/mem"));
+}
+
 /** Forces GC, writes a named heap snapshot, and returns its path and sample. */
 export async function requestSnapshot(
   port: number,

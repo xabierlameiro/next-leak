@@ -37,6 +37,16 @@ function ritualResult(route: string, samples: number[]): RitualResult {
     timings: [{ phase: "warm-up", seconds: 1 }],
     loadOutcomes: [{ phase: "cycle 1", sent: 5000, ok2xx: 5000 }],
     settleOutcomes: [{ phase: "cycle 1", status: "settled" as const, polls: 2 }],
+    peaks: [
+      {
+        phase: "cycle 1",
+        heapUsed: 60 * 1024 * 1024,
+        external: 1024 * 1024,
+        arrayBuffers: 1024 * 1024,
+        rss: 180 * 1024 * 1024,
+        polls: 40,
+      },
+    ],
     samples,
     memorySamples: samples.map((heapUsed) => ({
       gcExposed: true,

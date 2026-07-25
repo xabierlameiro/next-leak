@@ -19,6 +19,7 @@ import {
   RITUAL_DEFAULTS,
   runRitual,
   type LoadOutcome,
+  type PeakSample,
   type PhaseTiming,
   type SettleOutcome,
 } from "./ritual.js";
@@ -42,6 +43,11 @@ export type RouteReport =
        * different fix than a heap leak.
        */
       memorySamples: HeapSample[];
+      /**
+       * Highest memory reached *during* each load cycle. Every other number
+       * here is post-GC; this is the one a container limit is judged against.
+       */
+      peaks: PeakSample[];
       /** RSS growth per 1000 requests, computed like the heap figure. */
       rssPer1000Requests: number;
       /** Wall-clock per phase — explains where a long run spent its time. */
@@ -370,6 +376,7 @@ async function measureRoute(
     requestPath,
     samples: result.samples,
     memorySamples: result.memorySamples,
+    peaks: result.peaks,
     timings: result.timings,
     loadOutcomes: result.loadOutcomes,
     settleOutcomes: result.settleOutcomes,
