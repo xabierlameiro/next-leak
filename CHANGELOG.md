@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/xabierlameiro/next-leak/compare/v0.2.0...v0.3.0) (2026-07-25)
+
+
+### Features
+
+* report peak memory under load and let the run set the heap limit ([#26](https://github.com/xabierlameiro/next-leak/issues/26)) ([cc1e59f](https://github.com/xabierlameiro/next-leak/commit/cc1e59f8f65c1ca1ca72d65affc001effd71a307))
+
 ## [0.2.0](https://github.com/xabierlameiro/next-leak/compare/v0.1.3...v0.2.0) (2026-07-25)
 
 
