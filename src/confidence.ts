@@ -249,6 +249,10 @@ const HEAP_CEILING_RATIO = 0.7;
 function heapCeilingWarnings(input: ConfidenceInput): MeasurementWarning[] {
   const samples = input.memorySamples;
   const capMb = input.maxOldSpaceMb;
+  // The length check is deliberately redundant: `Math.max()` of an empty
+  // spread is -Infinity, which would clear every threshold on its own. That is
+  // accidental correctness, and the mutation suite reports this clause as an
+  // equivalent mutant precisely because of it — keep it anyway.
   if (samples === undefined || capMb === undefined || samples.length === 0) {
     return [];
   }
