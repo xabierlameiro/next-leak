@@ -1,0 +1,57 @@
+name: PR title
+
+# Under squash-merge the pull request title *becomes* the commit message on
+# main — the branch's own commit messages survive only as bullets in the body,
+# where release-please does not look. commitlint already guards the messages
+# written locally, but those are exactly the ones squash-merge discards, so the
+# one message that reaches main was the only one nothing checked. That is how
+# the change in #20 landed unreleasable: a prose title, no version, no
+# changelog entry.
+on:
+  pull_request:
+    # `edited` matters most: it re-runs the check the moment a title is fixed.
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.20.0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Fed through commitlint rather than a title-linting action so the rules
+      # live in one place: commitlint.config.mjs governs local commits and
+      # merged titles alike, and cannot drift between them.
+      #
+      # The title arrives via the environment, never interpolated into the
+      # script. A `${{ }}` expansion inside `run:` would let a pull request
+      # title execute shell on the runner.
+      - name: Lint the pull request title as a Conventional Commit
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "Title: $PR_TITLE"
+          if ! printf '%s\n' "$PR_TITLE" | pnpm exec commitlint; then
+            echo
+            echo "::error::The pull request title is not a Conventional Commit."
+            echo "This repository squash-merges, so this title becomes the commit"
+            echo "message on main and is what release-please reads to decide the"
+            echo "next version. A title it cannot parse means no release."
+            echo
+            echo "Examples: 'fix: stop measuring static asset routes'"
+            echo "          'feat!: scale the leak threshold with load'"
+            exit 1
+          fi
