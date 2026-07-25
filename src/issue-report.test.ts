@@ -32,7 +32,7 @@ describe("renderIssueMarkdown", () => {
     expect(markdown).toContain("Next.js: 16.0.1");
     expect(markdown).toContain("npx next-leak <app-dir>");
     expect(markdown).toContain("warm-up 200 requests");
-    expect(markdown).toContain("3 × [5000 requests at 100 connections → 30s idle");
+    expect(markdown).toContain("4 × [5000 requests at 100 connections → 30s idle");
     expect(markdown).toContain("29.1 → 30.5 → 33.6 → 35.9 MB");
     expect(markdown).toContain("0.54 MB per 1000 requests");
     expect(markdown).toContain("system / Context#object[.d]");
@@ -78,10 +78,16 @@ describe("renderIssueMarkdown fidelity", () => {
       connections: 10,
       cycles: 5,
       idleMs: 7000,
+      maxOldSpaceMb: 2048,
+      minGrowthPerCycle: 256 * 1024,
     };
     const markdown = renderIssueMarkdown(leakyRoute(), report);
     expect(markdown).toContain("warm-up 50 requests");
     expect(markdown).toContain("5 × [300 requests at 10 connections → 7s idle");
+    // The draft is pasted into someone else's tracker: the heap cap it quotes
+    // has to be the one the run used, not a literal frozen in the template.
+    expect(markdown).toContain("--max-old-space-size=2048");
+    expect(markdown).toContain("at least 256 KiB");
   });
 
   it("reports the environment verbatim", () => {

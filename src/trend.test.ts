@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { classifyMemoryTrend, classifyTrend } from "./trend.js";
+import {
+  classifyMemoryTrend,
+  classifyTrend,
+  minGrowthFor,
+  MIN_GROWTH_NOISE_FLOOR,
+} from "./trend.js";
 
 const MB = 1024 * 1024;
+const KIB = 1024;
 
 // The fixtures below are real measurements from the phase-0 manual validation
 // (2026-07-20): Next.js 16.0.1 standalone, 5000 requests per cycle, forced GC
@@ -37,6 +43,61 @@ describe("classifyTrend", () => {
     const samples = [10 * MB, 11 * MB, 11.2 * MB, 11.4 * MB];
     expect(classifyTrend(samples, { minGrowthPerCycle: 0.1 * MB }).verdict).toBe("leak");
     expect(classifyTrend(samples, { minGrowthPerCycle: MB }).verdict).toBe("stable");
+  });
+});
+
+// The gate used to be a flat 256 KiB per cycle while the headline was
+// normalized per 1000 requests. That made the verdict a function of
+// `--requests` — a flag advertised as affecting duration — while the number
+// printed next to it stayed identical. Same route, same reported rate, two
+// different verdicts.
+describe("minGrowthFor", () => {
+  it("keeps the validated 256 KiB gate at the default 5000 requests per cycle", () => {
+    expect(minGrowthFor(5000)).toBe(MIN_GROWTH_NOISE_FLOOR);
+    expect(minGrowthFor(5000)).toBe(256 * KIB);
+  });
+
+  it("scales with traffic above the default cycle size", () => {
+    expect(minGrowthFor(20_000)).toBe(4 * 256 * KIB);
+    expect(minGrowthFor(10_000)).toBe(2 * 256 * KIB);
+  });
+
+  it("never drops below the noise floor, however little traffic ran", () => {
+    // Under ~5000 requests a cycle the run is noise-limited: the instrument
+    // cannot resolve growth smaller than its own jitter, so a lower gate would
+    // report GC noise as a leak.
+    expect(minGrowthFor(2000)).toBe(MIN_GROWTH_NOISE_FLOOR);
+    expect(minGrowthFor(300)).toBe(MIN_GROWTH_NOISE_FLOOR);
+    expect(minGrowthFor(1)).toBe(MIN_GROWTH_NOISE_FLOOR);
+  });
+
+  it("gives one verdict for one leak rate, whatever --requests was", () => {
+    // A route retaining ~1 MB per 1000 requests, measured at three cycle
+    // sizes. The per-cycle deltas differ by 10x; the leak does not.
+    const series = (requestsPerCycle: number): number[] => {
+      const perCycle = (requestsPerCycle / 1000) * MB;
+      return [10 * MB, 10 * MB + perCycle, 10 * MB + 2 * perCycle, 10 * MB + 3 * perCycle];
+    };
+    for (const requests of [2000, 5000, 20_000]) {
+      const verdict = classifyTrend(series(requests), {
+        minGrowthPerCycle: minGrowthFor(requests),
+      }).verdict;
+      expect(verdict, `${requests} requests per cycle`).toBe("leak");
+    }
+  });
+
+  it("calls sub-threshold drift stable at every cycle size", () => {
+    // 10 KiB per 1000 requests: real drift, but under the gate everywhere.
+    const series = (requestsPerCycle: number): number[] => {
+      const perCycle = (requestsPerCycle / 1000) * 10 * KIB;
+      return [10 * MB, 10 * MB + perCycle, 10 * MB + 2 * perCycle, 10 * MB + 3 * perCycle];
+    };
+    for (const requests of [2000, 5000, 20_000]) {
+      const verdict = classifyTrend(series(requests), {
+        minGrowthPerCycle: minGrowthFor(requests),
+      }).verdict;
+      expect(verdict, `${requests} requests per cycle`).toBe("stable");
+    }
   });
 });
 

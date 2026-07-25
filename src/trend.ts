@@ -18,11 +18,49 @@ export type TrendResult = {
 };
 
 export type TrendOptions = {
-  /** Minimum per-cycle growth (bytes) considered leak-like. Default: 256 KiB. */
+  /**
+   * Minimum per-cycle growth (bytes) considered leak-like. Defaults to the
+   * noise floor alone — callers that know how much traffic ran should pass
+   * `minGrowthFor(requestsPerCycle)` instead.
+   */
   minGrowthPerCycle?: number;
 };
 
-const DEFAULT_MIN_GROWTH = 256 * 1024;
+/**
+ * Smallest per-cycle growth distinguishable from measurement noise.
+ *
+ * This is a property of the *instrument*, not of the leak: post-GC samples
+ * jitter by roughly this much regardless of how much traffic ran, so no amount
+ * of load makes growth below it meaningful.
+ */
+export const MIN_GROWTH_NOISE_FLOOR = 256 * 1024;
+
+/**
+ * Growth rate that counts as leak-like, per 1000 requests.
+ *
+ * This is a property of the *leak*: a route that retains memory per request
+ * grows in proportion to the traffic it served, so the gate has to scale with
+ * it. 51.2 KiB is the rate that leaves the default profile (5000 requests per
+ * cycle) on exactly the 256 KiB gate this tool was validated against.
+ */
+export const MIN_GROWTH_PER_1000_REQUESTS = 51.2 * 1024;
+
+/**
+ * The gate a per-cycle delta must clear to count as growth.
+ *
+ * `max` rather than a sum, because the two terms bound different things: the
+ * floor is what the instrument can resolve, the rate is what the leak should
+ * produce. Below ~5000 requests per cycle the floor dominates and the run is
+ * noise-limited — which is a real limit of measuring less traffic, not a
+ * threshold that can be lowered.
+ *
+ * Without this, the verdict silently depended on `--requests`: the same route
+ * leaking 100 KiB per 1000 requests printed the same headline in every mode
+ * but came out `stable` at 2000 requests per cycle and `leak` at 5000.
+ */
+export function minGrowthFor(requestsPerCycle: number): number {
+  return Math.max(MIN_GROWTH_NOISE_FLOOR, (MIN_GROWTH_PER_1000_REQUESTS * requestsPerCycle) / 1000);
+}
 
 /** A stepwise leak needs this many cycles above the threshold to count. */
 const STEPWISE_MIN_GROWING_CYCLES = 2;
@@ -85,7 +123,7 @@ function isStepwiseGrowth(
  * growing across the remaining cycles; warm-up flattens out.
  */
 export function classifyTrend(samples: readonly number[], options: TrendOptions = {}): TrendResult {
-  const minGrowth = options.minGrowthPerCycle ?? DEFAULT_MIN_GROWTH;
+  const minGrowth = options.minGrowthPerCycle ?? MIN_GROWTH_NOISE_FLOOR;
 
   if (samples.length < 4) {
     return { verdict: "inconclusive", growthPerCycle: 0, deltas: [] };
