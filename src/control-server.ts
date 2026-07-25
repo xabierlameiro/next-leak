@@ -57,6 +57,7 @@ export type ControlServer = {
  * Internal control channel booted inside the measured app's process.
  *
  * - `GET /gc` — force GC, respond with a memory sample.
+ * - `GET /mem` — respond with a memory sample WITHOUT collecting.
  * - `GET /snapshot?name=<label>` — force GC, write `<label>.heapsnapshot`
  *   into `snapshotDir`, respond `{ file, sample }` only once fully written.
  */
@@ -81,6 +82,13 @@ export async function startControlServer(options: ControlServerOptions): Promise
       if (url.pathname === "/gc") {
         const gcExposed = await forceGc();
         respond(200, sampleMemory(gcExposed));
+        return;
+      }
+      if (url.pathname === "/mem") {
+        // Deliberately without forceGc(): this is polled while the app is under
+        // load, and collecting there would collect memory the app never would
+        // have on its own — flattening the very peak the poll exists to see.
+        respond(200, sampleMemory(typeof g.gc === "function"));
         return;
       }
       if (url.pathname === "/snapshot") {

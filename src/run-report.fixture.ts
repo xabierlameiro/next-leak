@@ -11,6 +11,17 @@ const cleanPhases = () => ({
   loadOutcomes: [{ phase: "cycle 1", sent: 5000, ok2xx: 5000 }],
   settleOutcomes: [{ phase: "cycle 1", status: "settled" as const, polls: 2 }],
   confidence: { level: "high" as const, warnings: [] },
+  // Proportionate to what these routes retain: no peak note.
+  peaks: [
+    {
+      phase: "cycle 1",
+      heapUsed: 60 * MB,
+      external: 2 * MB,
+      arrayBuffers: 1 * MB,
+      rss: 180 * MB,
+      polls: 40,
+    },
+  ],
 });
 
 export function makeRunReport(): RunReport {
@@ -33,6 +44,7 @@ export function makeRunReport(): RunReport {
       connections: 100,
       cycles: 3,
       idleMs: 30_000,
+      maxOldSpaceMb: 512,
     },
     bundle: {
       htmlReport: "/apps/shop/.next-leak/2026-07-20T12-00-00-000Z/report.html",

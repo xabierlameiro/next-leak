@@ -13,6 +13,7 @@ describe("parseCliArgs", () => {
         requests: null,
         connections: null,
         idleSeconds: null,
+        maxOldSpaceMb: null,
         quick: false,
         diffAll: false,
         output: null,
@@ -23,7 +24,8 @@ describe("parseCliArgs", () => {
   it("parses every flag", () => {
     const parsed = parseCliArgs([
       "app", "--routes", "/api,/dashboard", "--cycles", "6", "--requests", "1000",
-      "--connections", "20", "--idle", "8", "--quick", "--diff-all", "--output", "/tmp/out",
+      "--connections", "20", "--idle", "8", "--max-old-space", "4096", "--quick",
+      "--diff-all", "--output", "/tmp/out",
     ]);
     if (parsed.kind !== "run") {
       throw new Error(`expected run, got ${parsed.kind}`);
@@ -35,10 +37,20 @@ describe("parseCliArgs", () => {
       requests: 1000,
       connections: 20,
       idleSeconds: 8,
+      maxOldSpaceMb: 4096,
       quick: true,
       diffAll: true,
       output: "/tmp/out",
     });
+  });
+
+  it("rejects a heap limit no machine could honour", () => {
+    const parsed = parseCliArgs(["app", "--max-old-space", "999999"]);
+    expect(parsed.kind).toBe("error");
+    if (parsed.kind === "error") {
+      expect(parsed.message).toContain("--max-old-space");
+    }
+    expect(parseCliArgs(["app", "--max-old-space", "0"]).kind).toBe("error");
   });
 
   it("rejects unknown flags naming them (typos never fall back to defaults)", () => {

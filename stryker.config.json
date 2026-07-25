@@ -32,7 +32,8 @@
     "src/heap-diff.ts",
     "src/target.ts",
     "src/environment.ts",
-    "src/confidence.ts"
+    "src/confidence.ts",
+    "src/peak-pressure.ts"
   ],
   "thresholds": {
     "high": 90,

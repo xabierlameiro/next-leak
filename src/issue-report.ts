@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { FindingAttribution } from "./attribution.js";
+import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
 import type { MeasuredRoute, RunReport } from "./runner.js";
 
 const MB = 1024 * 1024;
@@ -68,6 +69,35 @@ export function renderIssueMarkdown(route: MeasuredRoute, run: RunReport): strin
         route.confidence.warnings.map((warning) => `- ${warning.detail}`).join("\n") +
         `\n`;
 
+  // Retention is the claim; the peak is what a container is sized against.
+  // A maintainer reading a leak report is better served by both.
+  const retainedHeap = route.memorySamples.at(-1)?.heapUsed;
+  const pressure =
+    retainedHeap === undefined || route.peaks === undefined
+      ? null
+      : assessPeakPressure({
+          peaks: route.peaks,
+          retainedHeapBytes: retainedHeap,
+          maxOldSpaceMb: parameters.maxOldSpaceMb,
+        });
+  const peakSection =
+    pressure === null
+      ? ""
+      : `\n### Peak memory under load\n\n` +
+        `Sampled during the load phases, without forcing collection: ` +
+        `${describePeakPressure(pressure)}. Per cycle:\n\n` +
+        route.peaks
+          .filter((peak) => peak.polls > 0)
+          .map(
+            (peak) =>
+              `- ${peak.phase}: heap ${(peak.heapUsed / MB).toFixed(1)} MB, ` +
+              `external ${(peak.external / MB).toFixed(1)} MB, ` +
+              `arrayBuffers ${(peak.arrayBuffers / MB).toFixed(1)} MB, ` +
+              `rss ${(peak.rss / MB).toFixed(1)} MB`
+          )
+          .join("\n") +
+        `\n`;
+
   const curve = route.samples.map((sample) => (sample / MB).toFixed(1)).join(" → ");
   const deltas = route.trend.deltas.map((delta) => `+${(delta / MB).toFixed(2)}`).join(", ");
   const signatures = route.signatures
@@ -90,7 +120,7 @@ OS: ${environment.platform} ${environment.arch}${environment.cpuModel ? ` (${env
 Memory: ${(environment.totalMemoryBytes / (1024 * MB)).toFixed(0)} GB
 Next.js: ${environment.nextVersion ?? "unknown"}
 next-leak: ${environment.nextLeakVersion}
-Deployment: output "standalone", node --expose-gc --max-old-space-size=512
+Deployment: output "standalone", node --expose-gc --max-old-space-size=${parameters.maxOldSpaceMb}
 \`\`\`
 
 ### To Reproduce
@@ -114,7 +144,7 @@ The first cycle is excluded from the verdict (engine warm-up).
 ### Heap evidence
 
 ${evidenceRows(route) || "- (no findings above thresholds)"}
-${signatures === "" ? "" : `\n**Matched known causes:**\n${signatures}\n`}${caveats}
+${signatures === "" ? "" : `\n**Matched known causes:**\n${signatures}\n`}${peakSection}${caveats}
 ### Verify it yourself
 
 Raw snapshots (Chrome DevTools → Memory → Load, compare baseline vs after):

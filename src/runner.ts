@@ -18,6 +18,7 @@ import {
   RITUAL_DEFAULTS,
   runRitual,
   type LoadOutcome,
+  type PeakSample,
   type PhaseTiming,
   type SettleOutcome,
 } from "./ritual.js";
@@ -41,6 +42,11 @@ export type RouteReport =
        * different fix than a heap leak.
        */
       memorySamples: HeapSample[];
+      /**
+       * Highest memory reached *during* each load cycle. Every other number
+       * here is post-GC; this is the one a container limit is judged against.
+       */
+      peaks: PeakSample[];
       /** RSS growth per 1000 requests, computed like the heap figure. */
       rssPer1000Requests: number;
       /** Wall-clock per phase — explains where a long run spent its time. */
@@ -74,6 +80,12 @@ export type RunParameters = {
   connections: number;
   cycles: number;
   idleMs: number;
+  /**
+   * Heap limit of the measured process. Recorded because two runs are only
+   * comparable when it matches: V8 sizes its GC heuristics from this number,
+   * and so do the framework caches living inside that heap.
+   */
+  maxOldSpaceMb: number;
 };
 
 export type RunReport = {
@@ -100,6 +112,8 @@ export type RunOptions = {
   connections?: number;
   cycles?: number;
   idleMs?: number;
+  /** Heap limit of the measured process, in MB. Default: `RITUAL_DEFAULTS`. */
+  maxOldSpaceMb?: number;
   /** Also diff routes with a stable verdict. Default false: diffs are slow. */
   diffAll?: boolean;
   /** Only measure routes matching these templates or prefixes. */
@@ -315,6 +329,7 @@ async function measureRoute(
     ...(options.connections !== undefined && { connections: options.connections }),
     ...(options.cycles !== undefined && { cycles: options.cycles }),
     ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
+    ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(routeConfig.headers !== undefined && { headers: routeConfig.headers }),
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
@@ -349,6 +364,7 @@ async function measureRoute(
     requestPath,
     samples: result.samples,
     memorySamples: result.memorySamples,
+    peaks: result.peaks,
     timings: result.timings,
     loadOutcomes: result.loadOutcomes,
     settleOutcomes: result.settleOutcomes,
@@ -445,6 +461,7 @@ async function planRun(
     connections: options.connections ?? RITUAL_DEFAULTS.connections,
     cycles: options.cycles ?? RITUAL_DEFAULTS.cycles,
     idleMs: options.idleMs ?? RITUAL_DEFAULTS.idleMs,
+    maxOldSpaceMb: options.maxOldSpaceMb ?? RITUAL_DEFAULTS.maxOldSpaceMb,
   };
   // Only routes the runner will actually launch a process for: skipped ones
   // (dynamic without sample params, intercepting, static assets) were

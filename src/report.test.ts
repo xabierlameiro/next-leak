@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { formatReport } from "./report.js";
 import { makeRunReport } from "./run-report.fixture.js";
 
+const MB = 1024 * 1024;
+
 describe("formatReport", () => {
   it("renders verdicts, curves, findings, and non-measured routes", () => {
     const output = formatReport(makeRunReport());
@@ -44,6 +46,34 @@ describe("formatReport", () => {
 
   it("prints no hint when nothing is inconclusive", () => {
     expect(formatReport(makeRunReport())).not.toContain("hint:");
+  });
+
+  it("reports peak pressure beside a stable verdict without contradicting it", () => {
+    // The vercel/next.js#92287 shape: reclaimed after GC, lethal under load.
+    const report = makeRunReport();
+    report.parameters = { ...report.parameters, maxOldSpaceMb: 6144 };
+    const healthy = report.routes[0];
+    if (healthy?.status !== "measured") {
+      throw new Error("fixture broken");
+    }
+    healthy.peaks = [
+      {
+        phase: "cycle 1",
+        heapUsed: 3100 * MB,
+        external: 3600 * MB,
+        arrayBuffers: 3500 * MB,
+        rss: 3800 * MB,
+        polls: 60,
+      },
+    ];
+    const output = formatReport(report);
+    expect(output).toContain("stable");
+    expect(output).toContain("peak pressure");
+    expect(output).toContain("3800.0 MB");
+  });
+
+  it("says nothing about peaks on a proportionate route", () => {
+    expect(formatReport(makeRunReport())).not.toContain("peak pressure");
   });
 });
 

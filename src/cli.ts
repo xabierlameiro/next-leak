@@ -117,6 +117,7 @@ async function main(): Promise<void> {
     ...(options.requests !== null && { loadRequests: options.requests }),
     ...(options.connections !== null && { connections: options.connections }),
     ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),
+    ...(options.maxOldSpaceMb !== null && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(options.diffAll && { diffAll: true }),
     ...(options.output !== null && { outputDir: options.output }),
     onProgress: (message) => console.error(`· ${message}`),

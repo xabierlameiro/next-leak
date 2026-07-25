@@ -5,6 +5,7 @@ export type CliRunOptions = {
   requests: number | null;
   connections: number | null;
   idleSeconds: number | null;
+  maxOldSpaceMb: number | null;
   quick: boolean;
   diffAll: boolean;
   output: string | null;
@@ -36,6 +37,12 @@ const FLAGS: FlagSpec[] = [
   { flag: "--requests", value: "int", argName: "<n>", help: "Requests per cycle (default 5000)" },
   { flag: "--connections", value: "int", argName: "<n>", help: "Concurrent connections (default 100)" },
   { flag: "--idle", value: "int", argName: "<seconds>", help: "Idle seconds before each sample (default 30)" },
+  {
+    flag: "--max-old-space",
+    value: "int",
+    argName: "<mb>",
+    help: "Heap limit of the measured process (default 512) — match your deployment",
+  },
   {
     flag: "--quick",
     value: "none",
@@ -82,6 +89,9 @@ const LIMITS: Record<string, number | undefined> = {
   "--requests": 1_000_000,
   "--connections": 10_000,
   "--idle": 3_600,
+  // Beyond this the measured process is bigger than any machine we can trust
+  // the numbers on, and V8 itself caps the old space well below it.
+  "--max-old-space": 131_072,
 };
 
 function findSpec(argument: string): FlagSpec | undefined {
@@ -121,6 +131,7 @@ function applyNumericFlag(flag: string, value: string, options: CliRunOptions): 
   if (flag === "--requests") options.requests = parsed;
   if (flag === "--connections") options.connections = parsed;
   if (flag === "--idle") options.idleSeconds = parsed;
+  if (flag === "--max-old-space") options.maxOldSpaceMb = parsed;
   return FLAG_OK;
 }
 
@@ -132,6 +143,7 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--requests":
     case "--connections":
     case "--idle":
+    case "--max-old-space":
       return applyNumericFlag(spec.flag, value, options);
     case "--quick":
       options.quick = true;
@@ -195,6 +207,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     requests: null,
     connections: null,
     idleSeconds: null,
+    maxOldSpaceMb: null,
     quick: false,
     diffAll: false,
     output: null,

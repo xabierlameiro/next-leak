@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { requestMemory } from "./control-client.js";
 import type { LaunchedApp } from "./launcher.js";
 import type { LoadPhaseResult } from "./load.js";
 import { runRitual, type RitualDeps } from "./ritual.js";
@@ -23,7 +24,7 @@ type Harness = {
  */
 async function makeHarness(
   heapScript: number[],
-  options: { failLoadCall?: number } = {}
+  options: { failLoadCall?: number; underLoadHeap?: number; failMemory?: boolean } = {}
 ): Promise<Harness> {
   const events: string[] = [];
   // The heap value advances once per load cycle, so settle probes and the
@@ -40,6 +41,19 @@ async function makeHarness(
     if (url.pathname === "/gc") {
       events.push("gc");
       response.end(JSON.stringify(sample));
+      return;
+    }
+    if (url.pathname === "/mem") {
+      events.push("mem");
+      if (options.failMemory === true) {
+        response.statusCode = 500;
+        response.end(JSON.stringify({ error: "gone" }));
+        return;
+      }
+      // A process under load reads higher than it does after idle and GC.
+      response.end(
+        JSON.stringify({ ...sample, heapUsed: options.underLoadHeap ?? heapUsed })
+      );
       return;
     }
     const name = url.searchParams.get("name") ?? "?";
@@ -62,6 +76,7 @@ async function makeHarness(
     pid: 1,
     appPort: 65_000,
     controlPort,
+    explainExit: () => null,
     close: async () => {
       closed = true;
     },
@@ -92,6 +107,7 @@ async function makeHarness(
     sleep: async (ms) => {
       events.push(`sleep:${ms}`);
     },
+    readMemory: requestMemory,
   };
 
   return {
@@ -164,6 +180,60 @@ describe("runRitual", () => {
     await expect(
       runRitual({ ...(await baseOptions()), cycles: 2 }, harness.deps)
     ).rejects.toThrow("at least 3 cycles");
+  });
+});
+
+// A verdict is about what a process retains. What kills it in a container is
+// what it reaches. Those are different numbers and the run must report both.
+describe("peak capture", () => {
+  it("records the highest memory seen during each cycle", async () => {
+    harness = await makeHarness([29 * MB, 30 * MB, 30 * MB, 30 * MB], {
+      underLoadHeap: 900 * MB,
+    });
+    const result = await runRitual(await baseOptions(), harness.deps);
+
+    expect(result.peaks).toHaveLength(3);
+    expect(result.peaks.map((peak) => peak.phase)).toEqual([
+      "cycle 1",
+      "cycle 2",
+      "cycle 3",
+    ]);
+    expect(result.peaks.every((peak) => peak.heapUsed === 900 * MB)).toBe(true);
+    expect(result.peaks.every((peak) => peak.polls > 0)).toBe(true);
+  });
+
+  it("leaves the verdict to the post-GC samples", async () => {
+    // The shape a container kills and a retention verdict calls healthy:
+    // enormous under load, flat once the load stops.
+    harness = await makeHarness([29 * MB, 30 * MB, 30.1 * MB, 30 * MB], {
+      underLoadHeap: 3500 * MB,
+    });
+    const result = await runRitual(await baseOptions(), harness.deps);
+
+    expect(result.trend.verdict).toBe("stable");
+    expect(result.samples).toEqual([29 * MB, 30 * MB, 30.1 * MB, 30 * MB]);
+    expect(result.peaks[0]?.heapUsed).toBe(3500 * MB);
+  });
+
+  it("does not poll the warm-up phase", async () => {
+    harness = await makeHarness([29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+    await runRitual(await baseOptions(), harness.deps);
+
+    const firstMem = harness.events.indexOf("mem");
+    const baseline = harness.events.indexOf("snapshot:baseline");
+    expect(firstMem).toBeGreaterThan(baseline);
+  });
+
+  it("survives a control channel that stops answering", async () => {
+    harness = await makeHarness([29 * MB, 31 * MB, 33 * MB, 35 * MB], {
+      failMemory: true,
+    });
+    const result = await runRitual(await baseOptions(), harness.deps);
+
+    // A poll that fails is not a cycle that fails: the verdict still lands and
+    // the empty peak says plainly that nothing was read.
+    expect(result.trend.verdict).toBe("leak");
+    expect(result.peaks.every((peak) => peak.polls === 0)).toBe(true);
   });
 });
 

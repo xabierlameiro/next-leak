@@ -78,6 +78,7 @@ describe("renderIssueMarkdown fidelity", () => {
       connections: 10,
       cycles: 5,
       idleMs: 7000,
+      maxOldSpaceMb: 512,
     };
     const markdown = renderIssueMarkdown(leakyRoute(), report);
     expect(markdown).toContain("warm-up 50 requests");

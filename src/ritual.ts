@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { requestGc, requestSnapshot } from "./control-client.js";
+import { requestGc, requestMemory, requestSnapshot } from "./control-client.js";
 import type { HeapSample } from "./control-server.js";
 import { launchInstrumented } from "./launcher.js";
 import { runAbandonPhase, type AbandonPhaseResult } from "./abandon-load.js";
@@ -21,6 +21,8 @@ export type RitualOptions = {
   connections?: number;
   cycles?: number;
   idleMs?: number;
+  /** Heap limit of the measured process, in MB. */
+  maxOldSpaceMb?: number;
   /** Headers sent with every request during warm-up and load. */
   headers?: Record<string, string>;
   /** Emulate clients that disconnect before the response arrives. */
@@ -64,6 +66,25 @@ export type SettleOutcome = {
 /** Two readings are the minimum needed to call a heap steady. */
 const MIN_POLLS_TO_JUDGE = 2;
 
+/**
+ * Highest memory observed *during* a load cycle, per class.
+ *
+ * Every other number in a run is taken after idle and a forced GC, which is
+ * what a verdict about retention needs. It is also blind to the process that
+ * climbs to 3.5 GB under load and hands it all back: `stable`, and dead in a
+ * 1 GB container. A peak is a lower bound — a spike shorter than the poll
+ * interval is never seen.
+ */
+export type PeakSample = {
+  phase: string;
+  heapUsed: number;
+  external: number;
+  arrayBuffers: number;
+  rss: number;
+  /** Readings taken; 0 means the poller never got one. */
+  polls: number;
+};
+
 export type RitualResult = {
   route: string;
   /** Wall-clock per phase, so slow runs can be explained instead of guessed. */
@@ -76,6 +97,8 @@ export type RitualResult = {
   samples: number[];
   /** Full memory samples in the same order. */
   memorySamples: HeapSample[];
+  /** Highest memory seen during each load cycle, sampled without collecting. */
+  peaks: PeakSample[];
   baselineSnapshot: string;
   afterSnapshot: string;
   trend: TrendResult;
@@ -87,10 +110,65 @@ export type RitualDeps = {
   launch: typeof launchInstrumented;
   load: typeof runLoadPhase;
   sleep: (ms: number) => Promise<void>;
+  /** GC-free read, polled while the app is under load. */
+  readMemory: (port: number) => Promise<HeapSample>;
 };
 
 const SETTLE_POLL_MS = 2000;
 const SETTLE_TOLERANCE = 0.01;
+/**
+ * ~80 readings over a 20 s cycle: enough resolution for a curve that climbs
+ * over seconds, and 4 requests/second against the control server — a different
+ * port from the app, so the measured request path never sees them.
+ */
+const PEAK_POLL_MS = 250;
+
+/**
+ * Polls the measured process while a load phase runs, keeping the maximum of
+ * every memory class. Poll failures end the polling instead of failing the
+ * cycle: when the app is gone, the caller surfaces the real failure.
+ */
+function pollPeak(
+  controlPort: number,
+  phase: string,
+  deps: RitualDeps
+): { stop: () => Promise<PeakSample> } {
+  const peak: PeakSample = {
+    phase,
+    heapUsed: 0,
+    external: 0,
+    arrayBuffers: 0,
+    rss: 0,
+    polls: 0,
+  };
+  let running = true;
+  const loop = (async (): Promise<void> => {
+    while (running) {
+      await deps.sleep(PEAK_POLL_MS);
+      if (!running) {
+        return;
+      }
+      let sample: HeapSample;
+      try {
+        sample = await deps.readMemory(controlPort);
+      } catch {
+        return;
+      }
+      peak.polls += 1;
+      peak.heapUsed = Math.max(peak.heapUsed, sample.heapUsed);
+      peak.external = Math.max(peak.external, sample.external);
+      peak.arrayBuffers = Math.max(peak.arrayBuffers, sample.arrayBuffers);
+      peak.rss = Math.max(peak.rss, sample.rss);
+    }
+  })();
+  return {
+    stop: async () => {
+      running = false;
+      await loop;
+      return peak;
+    },
+  };
+}
 
 /**
  * Waits for post-load transients to drain, up to `maxIdleMs`.
@@ -133,6 +211,7 @@ const defaultDeps: RitualDeps = {
   launch: launchInstrumented,
   load: runLoadPhase,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  readMemory: requestMemory,
 };
 
 /** Single source of truth for ritual defaults — reports must echo them. */
@@ -142,6 +221,7 @@ export const RITUAL_DEFAULTS = {
   connections: 100,
   cycles: 3,
   idleMs: 30_000,
+  maxOldSpaceMb: 512,
 } as const;
 
 /**
@@ -162,6 +242,7 @@ export async function runRitual(
   const connections = options.connections ?? RITUAL_DEFAULTS.connections;
   const cycles = options.cycles ?? RITUAL_DEFAULTS.cycles;
   const idleMs = options.idleMs ?? RITUAL_DEFAULTS.idleMs;
+  const maxOldSpaceMb = options.maxOldSpaceMb ?? RITUAL_DEFAULTS.maxOldSpaceMb;
   if (cycles < 3) {
     throw new Error("the trend verdict needs at least 3 cycles");
   }
@@ -176,6 +257,7 @@ export async function runRitual(
       workDir: options.workDir,
       appPort: options.appPort,
       bootstrapPath: options.bootstrapPath,
+      maxOldSpaceMb,
     });
   } catch (cause) {
     if (!String(cause).includes("EADDRINUSE")) {
@@ -186,6 +268,7 @@ export async function runRitual(
       workDir: options.workDir,
       appPort: options.appPort + 1,
       bootstrapPath: options.bootstrapPath,
+      maxOldSpaceMb,
     });
   }
 
@@ -255,9 +338,19 @@ export async function runRitual(
     );
 
     const memorySamples: HeapSample[] = [baseline.sample];
+    const peaks: PeakSample[] = [];
     let afterSnapshot = "";
     for (let cycle = 1; cycle <= cycles; cycle += 1) {
-      await timed(`cycle ${cycle} load`, () => loadCycle(`cycle ${cycle}`, loadRequests));
+      // Warm-up is deliberately not polled: its memory is not a claim the
+      // report makes, and the baseline is taken after it.
+      await timed(`cycle ${cycle} load`, async () => {
+        const poller = pollPeak(app.controlPort, `cycle ${cycle}`, deps);
+        try {
+          await loadCycle(`cycle ${cycle}`, loadRequests);
+        } finally {
+          peaks.push(await poller.stop());
+        }
+      });
       const settle = await timed(`cycle ${cycle} settle`, () =>
         waitUntilSettled(app.controlPort, idleMs, deps)
       );
@@ -284,11 +377,21 @@ export async function runRitual(
       settleOutcomes,
       samples,
       memorySamples,
+      peaks,
       baselineSnapshot: baseline.file,
       afterSnapshot,
       trend: classifyMemoryTrend(samples, externalSamples),
       requestsPerCycle: loadRequests,
     };
+  } catch (cause) {
+    // A dead child makes every later call fail with "fetch failed", which
+    // reads like a bug in the tool. When the process is gone, its own exit is
+    // the more useful error — and heap exhaustion is a finding, not noise.
+    const death = app.explainExit();
+    if (death !== null) {
+      throw new Error(death);
+    }
+    throw cause;
   } finally {
     await app.close();
   }

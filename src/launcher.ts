@@ -25,6 +25,13 @@ export type LaunchedApp = {
   pid: number;
   appPort: number;
   controlPort: number;
+  /**
+   * Why the measured process is gone, or null while it is alive. Without it
+   * a child that died mid-run surfaces as "fetch failed", which reads like a
+   * bug in the tool and hides the finding — most often that the app blew
+   * through the heap limit the run configured.
+   */
+  explainExit: () => string | null;
   /** SIGTERM, then SIGKILL after a grace period. Resolves when the child exited. */
   close: () => Promise<void>;
 };
@@ -35,6 +42,9 @@ export class LaunchError extends Error {
     this.name = "LaunchError";
   }
 }
+
+/** Fallback only: the ritual always passes an explicit limit (RITUAL_DEFAULTS). */
+const DEFAULT_MAX_OLD_SPACE_MB = 512;
 
 const activeChildren = new Set<ChildProcess>();
 
@@ -65,6 +75,25 @@ export function explainStartupFailure(stderr: string): string {
     return "the port was taken by another process while starting.";
   }
   return `stderr:\n${stderr}`;
+}
+
+/**
+ * Same idea as `explainStartupFailure`, for a process that died *during* a
+ * run. Heap exhaustion is the one death this tool can name outright, and it
+ * is a finding rather than an accident: the app did not fit in the limit the
+ * run gave it.
+ */
+export function explainRuntimeFailure(stderr: string, maxOldSpaceMb: number): string {
+  if (/heap out of memory|Reached heap limit|Ineffective mark-compacts/i.test(stderr)) {
+    return (
+      `the measured process ran out of heap and was killed by V8 mid-run ` +
+      `(limit in force: --max-old-space-size=${maxOldSpaceMb} MB). That is the ` +
+      `measurement: this route does not fit in ${maxOldSpaceMb} MB under this load. ` +
+      `Raise it with --max-old-space <mb> to match your deployment, or lower ` +
+      `--requests/--connections to measure a lighter regime.`
+    );
+  }
+  return `the measured process exited mid-run. ${explainStartupFailure(stderr)}`;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -104,7 +133,7 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
     process.execPath,
     [
       "--expose-gc",
-      `--max-old-space-size=${options.maxOldSpaceMb ?? 512}`,
+      `--max-old-space-size=${options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB}`,
       "--import",
       pathToFileURL(options.bootstrapPath).href,
       options.serverPath,
@@ -187,6 +216,10 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
       pid: child.pid ?? -1,
       appPort: options.appPort,
       controlPort,
+      explainExit: () =>
+        exited
+          ? explainRuntimeFailure(stderrTail, options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB)
+          : null,
       close: async () => {
         if (exited) {
           return;

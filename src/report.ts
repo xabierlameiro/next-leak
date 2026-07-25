@@ -2,7 +2,8 @@ import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend } from "./trend.js";
 import { effectiveVerdict } from "./confidence.js";
-import type { RouteReport, RunReport } from "./runner.js";
+import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
+import type { RouteReport, RunParameters, RunReport } from "./runner.js";
 
 type MeasuredRouteView = Extract<RouteReport, { status: "measured" }>;
 
@@ -124,7 +125,25 @@ function findingLines(route: MeasuredRouteView): string[] {
   return lines;
 }
 
-function routeLines(route: RouteReport): string[] {
+/**
+ * The peak is reported next to the verdict, never inside it: retention and
+ * peak are different questions, and a process can be honestly `stable` and
+ * still be OOM-killed for what it reached.
+ */
+function peakPressureLines(route: MeasuredRouteView, parameters: RunParameters): string[] {
+  const retained = route.memorySamples.at(-1)?.heapUsed;
+  if (retained === undefined) {
+    return [];
+  }
+  const pressure = assessPeakPressure({
+    peaks: route.peaks,
+    retainedHeapBytes: retained,
+    maxOldSpaceMb: parameters.maxOldSpaceMb,
+  });
+  return pressure === null ? [] : [`      ▲ peak pressure: ${describePeakPressure(pressure)}`];
+}
+
+function routeLines(route: RouteReport, parameters: RunParameters): string[] {
   if (route.status === "skipped") {
     return [`  – ${route.route}  skipped: ${route.reason}`];
   }
@@ -140,6 +159,7 @@ function routeLines(route: RouteReport): string[] {
     )})  heap ${curve}`,
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),
+    ...peakPressureLines(route, parameters),
     ...findingLines(route),
   ];
 }
@@ -148,7 +168,7 @@ function routeLines(route: RouteReport): string[] {
 export function formatReport(report: RunReport): string {
   const lines = [`next-leak — ${report.appDir}`, ""];
   for (const route of report.routes) {
-    lines.push(...routeLines(route));
+    lines.push(...routeLines(route, report.parameters));
   }
   lines.push(
     "",
