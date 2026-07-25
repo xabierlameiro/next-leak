@@ -86,8 +86,11 @@ The verdict comes from the **shape of the post-GC curve**: retained heap that
 keeps growing every cycle is a leak; growth that flattens is warm-up. Where the
 heap sits is noise — 40 MB and 400 MB say nothing on their own — so only the
 shape is judged. The one absolute number involved is the gate a cycle's growth
-must clear to count, and it scales with the traffic that cycle served, so
-changing `--requests` changes how long the run takes and not what it decides.
+must clear to count, and above 5000 requests per cycle it scales with the
+traffic that cycle served — so in that range changing `--requests` changes how
+long the run takes and not what it decides. Below 5000 the gate stops shrinking
+and sits on the instrument's noise floor instead, so less traffic really does
+buy a less sensitive run: that is the trade `--quick` makes at 2000 requests.
 Every report prints the gate it used.
 
 ## Options
@@ -155,7 +158,9 @@ separates them, because each one has a different fix:
   is deliberately biased toward missing a leak rather than inventing one (a
   single flat or falling cycle is enough to call a route stable), so a leak
   that oscillates while it climbs can land here. To press harder, raise
-  `--cycles` and `--requests`: both make the run more sensitive. If the heap is
+  `--cycles` — every extra cycle is another delta the verdict gets to see.
+  Raising `--requests` only helps from below 5000: above that the gate scales
+  with the traffic, so the longer run decides the same thing. If the heap is
   flat but RSS keeps climbing, the report says so explicitly: that is an
   allocator, external-buffer or fragmentation problem, not a JS-heap leak.
 - **`leak`** — the report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. An `ISSUE-<route>.md` draft is generated; if the leak is app-owned, the draft tells you **not** to file it upstream.
