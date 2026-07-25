@@ -5,6 +5,7 @@ export type CliRunOptions = {
   requests: number | null;
   connections: number | null;
   idleSeconds: number | null;
+  maxOldSpaceMb: number | null;
   quick: boolean;
   diffAll: boolean;
   output: string | null;
@@ -32,14 +33,20 @@ const FLAGS: FlagSpec[] = [
     argName: "<list>",
     help: "Only measure these routes — comma-separated templates or prefixes (e.g. /api,/dashboard)",
   },
-  { flag: "--cycles", value: "int", argName: "<n>", help: "Load cycles per route (default 3, minimum 3)" },
+  { flag: "--cycles", value: "int", argName: "<n>", help: "Load cycles per route (default 4, minimum 3)" },
   { flag: "--requests", value: "int", argName: "<n>", help: "Requests per cycle (default 5000)" },
   { flag: "--connections", value: "int", argName: "<n>", help: "Concurrent connections (default 100)" },
   { flag: "--idle", value: "int", argName: "<seconds>", help: "Idle seconds before each sample (default 30)" },
   {
+    flag: "--max-old-space",
+    value: "int",
+    argName: "<mb>",
+    help: "Heap cap of each measured process (default 512) — raise it for apps whose working set is larger",
+  },
+  {
     flag: "--quick",
     value: "none",
-    help: "Fast preset: 2000 requests x 4 cycles, 8s idle — the profile used for real-app validation",
+    help: "Fast preset: 2000 requests x 4 cycles, 8s idle — same cycle count as the default, less traffic per cycle",
   },
   { flag: "--diff-all", value: "none", help: "Diff snapshots for stable routes too (slow)" },
   { flag: "--output", value: "string", argName: "<dir>", help: "Where to write runs (default <app-dir>/.next-leak)" },
@@ -82,7 +89,15 @@ const LIMITS: Record<string, number | undefined> = {
   "--requests": 1_000_000,
   "--connections": 10_000,
   "--idle": 3_600,
+  "--max-old-space": 65_536,
 };
+
+/**
+ * Below this the measured process cannot hold a Next.js server plus the heap
+ * snapshot machinery, and every route dies as an OOM the report would blame on
+ * the app.
+ */
+const MIN_MAX_OLD_SPACE_MB = 128;
 
 function findSpec(argument: string): FlagSpec | undefined {
   return FLAGS.find((spec) => spec.flag === argument || spec.alias === argument);
@@ -117,10 +132,17 @@ function applyNumericFlag(flag: string, value: string, options: CliRunOptions): 
   if (flag === "--cycles" && parsed < 3) {
     return flagError("the trend verdict needs at least 3 cycles (--cycles 3 or more)");
   }
+  if (flag === "--max-old-space" && parsed < MIN_MAX_OLD_SPACE_MB) {
+    return flagError(
+      `option "--max-old-space" needs at least ${MIN_MAX_OLD_SPACE_MB} MB (got ${parsed}) — ` +
+        `below that the measured app cannot start`
+    );
+  }
   if (flag === "--cycles") options.cycles = parsed;
   if (flag === "--requests") options.requests = parsed;
   if (flag === "--connections") options.connections = parsed;
   if (flag === "--idle") options.idleSeconds = parsed;
+  if (flag === "--max-old-space") options.maxOldSpaceMb = parsed;
   return FLAG_OK;
 }
 
@@ -132,6 +154,7 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--requests":
     case "--connections":
     case "--idle":
+    case "--max-old-space":
       return applyNumericFlag(spec.flag, value, options);
     case "--quick":
       options.quick = true;
@@ -195,6 +218,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     requests: null,
     connections: null,
     idleSeconds: null,
+    maxOldSpaceMb: null,
     quick: false,
     diffAll: false,
     output: null,

@@ -11,6 +11,7 @@ import {
 import type { HeapSample } from "./control-server.js";
 import { captureEnvironment, type MeasurementEnvironment } from "./environment.js";
 import { diffSnapshotFiles, type HeapDiff } from "./heap-diff.js";
+import { DEFAULT_MAX_OLD_SPACE_MB } from "./launcher.js";
 import { discoverPagesRoutes, discoverRoutes, type DiscoveredRoute } from "./manifests.js";
 import { extractModuleRegistry } from "./module-registry.js";
 import { loadRouteConfig, resolveRoutePath, type RouteConfig } from "./route-config.js";
@@ -23,7 +24,7 @@ import {
 } from "./ritual.js";
 import { matchSignatures, readNextVersion, type MatchedSignature } from "./signatures.js";
 import { validateTarget, type ValidatedTarget } from "./target.js";
-import type { TrendResult } from "./trend.js";
+import { minGrowthFor, type TrendResult } from "./trend.js";
 
 export type RouteReport =
   | { route: string; status: "skipped"; reason: string }
@@ -74,6 +75,18 @@ export type RunParameters = {
   connections: number;
   cycles: number;
   idleMs: number;
+  /**
+   * Old-space cap of each measured process (MB). Part of the measurement
+   * regime: a run near its ceiling is not the same experiment as one with
+   * headroom, so it belongs on the record.
+   */
+  maxOldSpaceMb: number;
+  /**
+   * Per-cycle growth gate the verdicts were judged against (bytes). Derived
+   * from `loadRequests`; recorded because a verdict whose threshold is not
+   * printed cannot be audited or reproduced.
+   */
+  minGrowthPerCycle: number;
 };
 
 export type RunReport = {
@@ -100,6 +113,8 @@ export type RunOptions = {
   connections?: number;
   cycles?: number;
   idleMs?: number;
+  /** Old-space cap for each measured process (MB). Default 512. */
+  maxOldSpaceMb?: number;
   /** Also diff routes with a stable verdict. Default false: diffs are slow. */
   diffAll?: boolean;
   /** Only measure routes matching these templates or prefixes. */
@@ -315,6 +330,7 @@ async function measureRoute(
     ...(options.connections !== undefined && { connections: options.connections }),
     ...(options.cycles !== undefined && { cycles: options.cycles }),
     ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
+    ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(routeConfig.headers !== undefined && { headers: routeConfig.headers }),
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
@@ -328,6 +344,11 @@ async function measureRoute(
     trend: result.trend,
     loadOutcomes: result.loadOutcomes,
     settleOutcomes: result.settleOutcomes,
+    // The audit has to grade against the gate the verdict actually used, or
+    // the noise-floor warning describes a threshold nobody applied.
+    minGrowthPerCycle: result.minGrowthPerCycle,
+    memorySamples: result.memorySamples,
+    maxOldSpaceMb: options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB,
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
     }),
@@ -439,12 +460,15 @@ async function planRun(
       (nextVersion === null ? "" : ` · next ${nextVersion}`)
   );
 
+  const loadRequests = options.loadRequests ?? RITUAL_DEFAULTS.loadRequests;
   const parameters: RunParameters = {
     warmupRequests: options.warmupRequests ?? RITUAL_DEFAULTS.warmupRequests,
-    loadRequests: options.loadRequests ?? RITUAL_DEFAULTS.loadRequests,
+    loadRequests,
     connections: options.connections ?? RITUAL_DEFAULTS.connections,
     cycles: options.cycles ?? RITUAL_DEFAULTS.cycles,
     idleMs: options.idleMs ?? RITUAL_DEFAULTS.idleMs,
+    maxOldSpaceMb: options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB,
+    minGrowthPerCycle: minGrowthFor(loadRequests),
   };
   // Only routes the runner will actually launch a process for: skipped ones
   // (dynamic without sample params, intercepting, static assets) were
