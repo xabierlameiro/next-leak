@@ -26,10 +26,20 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
+      # No `release-type` input on purpose. Passing it puts the action in its
+      # simple mode, where it builds a config from the inputs and ignores
+      # release-please-config.json entirely — which made that file dead
+      # configuration despite being committed and schema-annotated. It is why
+      # `bump-minor-pre-major` had no effect and the first release after the
+      # breaking change in #21 came out as 1.0.0 instead of 0.2.0.
+      #
+      # Omitting it makes the action read the manifest config, whose defaults
+      # are already the files this repo has: release-please-config.json and
+      # .release-please-manifest.json. The release type still says `node` —
+      # it just lives in the config file now, where the rest of the settings
+      # can be seen and honoured alongside it.
       - uses: googleapis/release-please-action@v5
         id: release
-        with:
-          release-type: node
 
   publish:
     needs: release-please
