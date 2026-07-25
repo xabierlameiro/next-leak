@@ -1,5 +1,6 @@
+import type { HeapSample } from "./control-server.js";
 import type { LoadOutcome, SettleOutcome } from "./ritual.js";
-import type { TrendResult, TrendVerdict } from "./trend.js";
+import { MIN_GROWTH_NOISE_FLOOR, type TrendResult, type TrendVerdict } from "./trend.js";
 
 /**
  * Why a measurement may not support its own verdict.
@@ -12,6 +13,8 @@ import type { TrendResult, TrendVerdict } from "./trend.js";
  *   mid-stream teardown path was never reached
  * `spiky-growth`        — one cycle dominates, so the mean describes little
  * `near-threshold`      — growth barely clears the noise floor
+ * `near-heap-ceiling`   — the heap approached the cap the process ran under,
+ *   so the curve was measured against a ceiling instead of running free
  */
 export type WarningCode =
   | "unsettled"
@@ -20,7 +23,8 @@ export type WarningCode =
   | "abandon-ineffective"
   | "abandon-before-response"
   | "spiky-growth"
-  | "near-threshold";
+  | "near-threshold"
+  | "near-heap-ceiling";
 
 export type MeasurementWarning = {
   code: WarningCode;
@@ -47,6 +51,10 @@ export type ConfidenceInput = {
   abandonAfterMs?: number;
   /** Threshold the verdict used, for the noise-floor check. */
   minGrowthPerCycle?: number;
+  /** Post-GC samples, for the heap-ceiling check. */
+  memorySamples?: readonly HeapSample[];
+  /** Old-space cap the measured process ran under (MB). */
+  maxOldSpaceMb?: number;
 };
 
 /**
@@ -96,8 +104,6 @@ export function warrantsIssueDraft(report: {
     !report.confidence.warnings.some((warning) => VERDICT_WEAKENING.has(warning.code))
   );
 }
-
-const DEFAULT_MIN_GROWTH = 256 * 1024;
 
 /** Below this share of requests landing, the load was not the one requested. */
 const LOAD_COMPLETION_FLOOR = 0.99;
@@ -227,6 +233,39 @@ function noiseFloorWarnings(trend: TrendResult, minGrowth: number): MeasurementW
   }];
 }
 
+/** Share of the old-space cap a post-GC heap may reach before it is news. */
+const HEAP_CEILING_RATIO = 0.7;
+
+/**
+ * Whether the run had room to grow.
+ *
+ * Post-GC retained heap is measured after a forced mark-compact, so the cap
+ * does not distort *what is retained*. What it does distort is how far the
+ * curve was allowed to go: a route that would have kept climbing gets clipped
+ * by the ceiling, or dies as an OOM the report attributes to the app. The
+ * measured #84884 reproduction peaked at 369 MB under the 512 MB default —
+ * 72% of the way there, and nothing said so.
+ */
+function heapCeilingWarnings(input: ConfidenceInput): MeasurementWarning[] {
+  const samples = input.memorySamples;
+  const capMb = input.maxOldSpaceMb;
+  if (samples === undefined || capMb === undefined || samples.length === 0) {
+    return [];
+  }
+  const peak = Math.max(...samples.map((sample) => sample.heapUsed));
+  const capBytes = capMb * 1024 * 1024;
+  if (peak < capBytes * HEAP_CEILING_RATIO) {
+    return [];
+  }
+  return [{
+    code: "near-heap-ceiling",
+    detail:
+      `the heap peaked at ${mb(peak)} against a ${capMb} MB cap ` +
+      `(${pct(peak, capBytes)}) — the curve may have been clipped by the ` +
+      `ceiling rather than by the app; re-run with a larger --max-old-space`,
+  }];
+}
+
 /**
  * Invalidity, not noise: the measurement did not observe what it claims to.
  * Only a leak verdict is withdrawn — a stable one keeps its warnings, since
@@ -258,12 +297,13 @@ function isVerdictInvalid(input: ConfidenceInput): boolean {
  * trail caught them. This turns that trail into a check that runs every time.
  */
 export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
-  const minGrowth = input.minGrowthPerCycle ?? DEFAULT_MIN_GROWTH;
+  const minGrowth = input.minGrowthPerCycle ?? MIN_GROWTH_NOISE_FLOOR;
   const warnings = [
     ...settleWarnings(input.settleOutcomes),
     ...loadWarnings(input.loadOutcomes, input.abandonAfterMs),
     ...growthShapeWarnings(input.trend),
     ...noiseFloorWarnings(input.trend, minGrowth),
+    ...heapCeilingWarnings(input),
   ];
 
   return {

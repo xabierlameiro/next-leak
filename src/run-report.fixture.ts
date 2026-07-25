@@ -31,8 +31,10 @@ export function makeRunReport(): RunReport {
       warmupRequests: 200,
       loadRequests: 5000,
       connections: 100,
-      cycles: 3,
+      cycles: 4,
       idleMs: 30_000,
+      maxOldSpaceMb: 512,
+      minGrowthPerCycle: 256 * 1024,
     },
     bundle: {
       htmlReport: "/apps/shop/.next-leak/2026-07-20T12-00-00-000Z/report.html",

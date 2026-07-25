@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   assessConfidence,
+  effectiveVerdict,
   warrantsIssueDraft,
   type ConfidenceInput,
 } from "./confidence.js";
+import type { HeapSample } from "./control-server.js";
 import type { LoadOutcome, SettleOutcome } from "./ritual.js";
 import type { TrendResult } from "./trend.js";
 
@@ -325,6 +327,56 @@ describe("noise floor auditing", () => {
     );
 
     expect(codesOf(result)).toEqual([]);
+  });
+});
+
+// The measured process runs under an old-space cap. Post-GC retention is not
+// distorted by it, but how far the curve was allowed to climb is: a route that
+// would have kept growing gets clipped, or dies as an OOM the report blames on
+// the app. Nothing used to say the run was near that limit.
+describe("heap ceiling audit", () => {
+  const samplesPeaking = (peakMb: number): HeapSample[] =>
+    [10, peakMb / 2, peakMb].map((heapUsed) => ({
+      gcExposed: true,
+      heapUsed: heapUsed * MB,
+      rss: 3 * heapUsed * MB,
+      external: 0,
+      arrayBuffers: 0,
+    }));
+
+  it("warns when the heap approaches the cap it ran under", () => {
+    // The measured vercel/next.js#84884 reproduction: 369 MB under the 512 MB
+    // default, 72% of the way to a ceiling nobody was told about.
+    const result = assessConfidence(
+      input({ memorySamples: samplesPeaking(369), maxOldSpaceMb: 512 })
+    );
+
+    expect(codesOf(result)).toEqual(["near-heap-ceiling"]);
+    expect(result.warnings[0]?.detail).toContain("512 MB cap");
+    expect(result.warnings[0]?.detail).toContain("--max-old-space");
+  });
+
+  it("stays quiet when the run had headroom", () => {
+    expect(
+      codesOf(assessConfidence(input({ memorySamples: samplesPeaking(120), maxOldSpaceMb: 512 })))
+    ).toEqual([]);
+    // Same absolute peak, a cap that leaves room for it.
+    expect(
+      codesOf(assessConfidence(input({ memorySamples: samplesPeaking(369), maxOldSpaceMb: 4096 })))
+    ).toEqual([]);
+  });
+
+  it("does not withdraw the verdict — a clipped leak is still a leak", () => {
+    const result = assessConfidence(
+      input({ memorySamples: samplesPeaking(500), maxOldSpaceMb: 512 })
+    );
+
+    expect(result.supersededVerdict).toBeUndefined();
+    expect(effectiveVerdict({ trend: trend(), confidence: result })).toBe("leak");
+  });
+
+  it("says nothing when the run did not record a cap", () => {
+    expect(codesOf(assessConfidence(input({ memorySamples: samplesPeaking(500) })))).toEqual([]);
   });
 });
 
