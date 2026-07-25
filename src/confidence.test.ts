@@ -426,7 +426,11 @@ describe("abandonment reaches the stream", () => {
     );
 
     expect(codesOf(result)).toEqual(["abandon-before-response"]);
-    expect(result.warnings[0]?.detail).toContain("time-to-first-byte");
+    // The old remedy ("raise abandonAfterMs above time-to-first-byte") was
+    // unfollowable under load and is now moot: the deadline starts at the
+    // first byte, so landing here means the route never answered.
+    expect(result.warnings[0]?.detail).toContain("did not start responding");
+    expect(result.warnings[0]?.detail).not.toContain("time-to-first-byte");
   });
 
   it("stays quiet when a tenth of the abandonments reached mid-stream", () => {

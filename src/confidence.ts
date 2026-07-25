@@ -160,15 +160,20 @@ function abandonmentWarnings(outcome: LoadOutcome): MeasurementWarning[] {
   // the server never got a byte out first. Measuring #94919 hit exactly
   // this: 1500/1500 abandoned, 1 of them mid-stream, and without saying so
   // the run reads as a clean test of a path it never touched.
+  //
+  // The remedy used to be "raise abandonAfterMs above time-to-first-byte".
+  // That advice was unfollowable — under load there is no such value — and it
+  // is now moot: the deadline starts at the first byte. Landing here means the
+  // route sent nothing at all within the first-byte budget.
   const midStream = outcome.abandonedMidStream ?? 0;
   if (abandoned > 0 && midStream < abandoned * MID_STREAM_FLOOR) {
     return [{
       code: "abandon-before-response",
       detail:
-        `${outcome.phase} cut ${abandoned} requests before the server sent ` +
-        `anything (${midStream} mid-stream) — this tested pre-response ` +
-        `disconnects, not mid-stream teardown; raise abandonAfterMs above ` +
-        `the route's time-to-first-byte`,
+        `${outcome.phase} cut ${abandoned} requests that never produced a ` +
+        `byte (${midStream} mid-stream) — the route did not start responding, ` +
+        `so mid-stream teardown was not exercised; the route is saturated or ` +
+        `hung at this load, not mistuned`,
     }];
   }
   return [];

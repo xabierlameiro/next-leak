@@ -126,10 +126,14 @@ Dynamic routes need sample params in `next-leak.config.json` in your app dir:
   without it.
 - **`query`** appends a query string per route template
   (`{ "/api/payload/[slug]": "weightKb=2048" }`).
-- **`abandonAfterMs`** makes clients hang up before the response arrives, the
-  way closed tabs, load-balancer timeouts and bots do. Some leaks only exist
-  on that path (`ServerResponse` retained after an early disconnect). Requests
-  abandoned on purpose are not counted as failures.
+- **`abandonAfterMs`** makes clients hang up mid-response, the way closed tabs,
+  load-balancer timeouts and bots do. Some leaks only exist on that path
+  (`ServerResponse` retained after an early disconnect; the RSC tee branch in
+  [#94919](https://github.com/vercel/next.js/issues/94919)). The clock starts
+  at the **first byte of the response**, not at the request — under load a
+  request-relative window cuts before the stream begins and tests a different
+  path. Small values are the point: `4` means "read the first chunk, then
+  vanish". Requests abandoned on purpose are not counted as failures.
 
 `run.json` records what every load phase actually did — requests sent,
 2xx, abandoned — so a run can be audited instead of trusted.

@@ -28,15 +28,13 @@ afterEach(async () => {
 // answering in milliseconds is never abandoned. Real leaks live on that path
 // (vercel/next.js#89091: ServerResponse retained after an early disconnect).
 describe("runAbandonPhase", () => {
-  it("hangs up before a slow response arrives", async () => {
+  it("hangs up on a route that starts streaming and never finishes", async () => {
     let started = 0;
-    let aborted = 0;
-    const port = await listen((req, res) => {
+    const port = await listen((_req, res) => {
       started += 1;
-      req.on("aborted", () => {
-        aborted += 1;
-      });
-      setTimeout(() => res.end("late"), 3000).unref();
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("chunk");
+      setTimeout(() => res.end("late"), 30_000).unref();
     });
 
     const result = await runAbandonPhase({
@@ -76,7 +74,8 @@ describe("runAbandonPhase", () => {
     const seen: Array<string | undefined> = [];
     const port = await listen((req, res) => {
       seen.push(req.headers["accept-encoding"] as string | undefined);
-      setTimeout(() => res.end(), 3000).unref();
+      res.write("chunk");
+      setTimeout(() => res.end(), 30_000).unref();
     });
     await runAbandonPhase({
       url: `http://127.0.0.1:${port}/x`,
@@ -97,9 +96,10 @@ describe("runAbandonPhase", () => {
 describe("abandonment accounting", () => {
   it("only counts requests that actually reached the server", async () => {
     let received = 0;
-    const port = await listen((req, res) => {
+    const port = await listen((_req, res) => {
       received += 1;
-      setTimeout(() => res.end(), 3000).unref();
+      res.write("chunk");
+      setTimeout(() => res.end(), 30_000).unref();
     });
 
     const result = await runAbandonPhase({
@@ -151,21 +151,47 @@ describe("mid-stream abandonment", () => {
     expect(result.completed).toBe(0);
   }, 60_000);
 
-  it("separates abandonment before the first byte from mid-stream", async () => {
+  // The fix for the connect-relative deadline: under load a server's first
+  // byte arrives long after any sane `abandonAfterMs`. Measured against the
+  // #94919 repro, the old timing produced 2 mid-stream cuts out of ~1500.
+  it("waits for the first byte however late it is, then cuts mid-stream", async () => {
     const port = await listen((_req, res) => {
-      // Answers far later than the abandon window: nothing is ever received.
-      setTimeout(() => res.end("late"), 30_000).unref();
+      // First byte far beyond the abandon window, exactly like a saturated
+      // route: the deadline must start here, not when the request was sent.
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.write("first chunk");
+      }, 400).unref();
+      setTimeout(() => res.end(), 30_000).unref();
     });
 
     const result = await runAbandonPhase({
       url: `http://127.0.0.1:${port}/x`,
-      amount: 20,
+      amount: 10,
       connections: 5,
-      abandonAfterMs: 100,
+      abandonAfterMs: 20,
     });
 
-    expect(result.abandoned).toBe(20);
+    expect(result.abandoned).toBe(10);
+    expect(result.abandonedMidStream).toBe(10);
+    expect(result.abandonedBeforeResponse).toBe(0);
+  }, 60_000);
+
+  it("gives up on a route that never sends a byte, counting it pre-response", async () => {
+    const port = await listen(() => {
+      // Never responds at all: only the first-byte budget can end this.
+      });
+
+    const result = await runAbandonPhase({
+      url: `http://127.0.0.1:${port}/x`,
+      amount: 4,
+      connections: 4,
+      abandonAfterMs: 10,
+    });
+
+    expect(result.abandoned).toBe(4);
     expect(result.abandonedMidStream).toBe(0);
+    expect(result.abandonedBeforeResponse).toBe(4);
   }, 60_000);
 
   it("counts a response that finished in time as completed, not abandoned", async () => {
