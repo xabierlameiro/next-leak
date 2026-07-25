@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: weekly
       day: saturday
+    # Pinned rather than left to Dependabot's auto-detection of the repo's
+    # commit style: the PR title is now a required check and the input to
+    # release-please, so a heuristic guessing it wrong would block the bot.
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
     # One grouped PR for routine bumps; majors stay individual because they
     # need actual review (this project pins measurement-sensitive versions).
     groups:
@@ -16,3 +23,6 @@ updates:
     schedule:
       interval: weekly
       day: saturday
+    commit-message:
+      prefix: chore
+      include: scope
