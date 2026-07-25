@@ -90,7 +90,7 @@ OS: ${environment.platform} ${environment.arch}${environment.cpuModel ? ` (${env
 Memory: ${(environment.totalMemoryBytes / (1024 * MB)).toFixed(0)} GB
 Next.js: ${environment.nextVersion ?? "unknown"}
 next-leak: ${environment.nextLeakVersion}
-Deployment: output "standalone", node --expose-gc --max-old-space-size=512
+Deployment: output "standalone", node --expose-gc --max-old-space-size=${parameters.maxOldSpaceMb}
 \`\`\`
 
 ### To Reproduce
@@ -102,6 +102,8 @@ Deployment: output "standalone", node --expose-gc --max-old-space-size=512
 2. next-leak boots \`.next/standalone/server.js\` in a fresh process per route and runs, against \`${route.requestPath}\`:
    warm-up ${parameters.warmupRequests} requests → forced GC → baseline heap snapshot →
    ${parameters.cycles} × [${parameters.loadRequests} requests at ${parameters.connections} connections → ${(parameters.idleMs / 1000).toFixed(0)}s idle → forced GC → post-GC sample] → final snapshot.
+3. A cycle counts as growing when it retains at least ${(parameters.minGrowthPerCycle / 1024).toFixed(0)} KiB
+   (the gate for this run's ${parameters.loadRequests} requests per cycle); the warm-up cycle is excluded.
 
 ### Current vs. Expected behavior
 

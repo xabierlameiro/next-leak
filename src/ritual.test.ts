@@ -123,7 +123,7 @@ async function baseOptions() {
 describe("runRitual", () => {
   it("executes the validated phase order and wires the trend verdict", async () => {
     // Phase-0 leaky route shape: linear growth.
-    harness = await makeHarness([29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+    harness = await makeHarness([29 * MB, 31 * MB, 33 * MB, 35 * MB, 37 * MB]);
     const result = await runRitual(await baseOptions(), harness.deps);
 
     // The methodology, not the implementation: warm-up before the baseline,
@@ -131,7 +131,7 @@ describe("runRitual", () => {
     const shape = harness.events.filter((event) => !event.startsWith("sleep:"));
     expect(shape[0]).toBe("load:200");
     expect(shape[1]).toBe("snapshot:baseline");
-    expect(shape.filter((event) => event === "load:5000")).toHaveLength(3);
+    expect(shape.filter((event) => event === "load:5000")).toHaveLength(4);
     expect(shape.at(-1)).toBe("snapshot:after");
     // At least one forced GC between each load and its sample.
     for (const [index, event] of shape.entries()) {
@@ -139,7 +139,7 @@ describe("runRitual", () => {
         expect(shape.slice(index + 1, index + 3)).toContain("gc");
       }
     }
-    expect(result.samples).toEqual([29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+    expect(result.samples).toEqual([29 * MB, 31 * MB, 33 * MB, 35 * MB, 37 * MB]);
     expect(result.trend.verdict).toBe("leak");
     expect(result.baselineSnapshot).toBe("/fake/baseline.heapsnapshot");
     expect(result.afterSnapshot).toBe("/fake/after.heapsnapshot");

@@ -79,21 +79,28 @@ npx next-leak .
 For each discovered route, in a fresh process, it runs the validated ritual:
 
 ```
-warm-up → forced GC → baseline snapshot → [load → idle → GC → sample] ×3 → snapshot
+warm-up → forced GC → baseline snapshot → [load → idle → GC → sample] ×4 → snapshot
 ```
 
-The verdict comes from the **shape of the post-GC curve**: retained heap that keeps growing every cycle is a leak; growth that flattens is warm-up. Absolute sizes are noise; shapes are robust.
+The verdict comes from the **shape of the post-GC curve**: retained heap that
+keeps growing every cycle is a leak; growth that flattens is warm-up. Where the
+heap sits is noise — 40 MB and 400 MB say nothing on their own — so only the
+shape is judged. The one absolute number involved is the gate a cycle's growth
+must clear to count, and it scales with the traffic that cycle served, so
+changing `--requests` changes how long the run takes and not what it decides.
+Every report prints the gate it used.
 
 ## Options
 
 | Flag | Default | What it does |
 |---|---|---|
 | `--routes <list>` | all | Only measure these routes (comma-separated templates or prefixes) |
-| `--cycles <n>` | 3 | Load cycles per route (min 3) |
-| `--requests <n>` | 5000 | Requests per cycle |
+| `--cycles <n>` | 4 | Load cycles per route (min 3). The first is dropped as warm-up, so the verdict sees `n − 1` deltas — at 3 it sees two |
+| `--requests <n>` | 5000 | Requests per cycle. Raises sensitivity as well as duration: the growth gate scales with it, down to a noise floor around 5000 |
 | `--connections <n>` | 100 | Concurrent connections |
 | `--idle <seconds>` | 30 | **Maximum** wait before each sample; the run continues as soon as the heap settles |
-| `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Explicit flags override it |
+| `--max-old-space <mb>` | 512 | Heap cap of each measured process. Raise it for apps whose legitimate working set is larger, or they die under measurement |
+| `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Same cycle count as the default; what it trades away is traffic per cycle, so it sits on the noise floor and is less sensitive to slow leaks. Explicit flags override it |
 | `--diff-all` | off | Diff snapshots for stable routes too |
 | `--output <dir>` | `<app>/.next-leak` | Where runs are written |
 
@@ -138,13 +145,19 @@ separates them, because each one has a different fix:
 | Growth that pauses and resumes (stepwise) | `leak` | A healthy route gives back 20-30% of its growth; a stepwise leak gives back nothing |
 | Native/buffer memory with a flat JS heap | `leak (external)` or an explicit RSS note | Heap, `external` and RSS are sampled and judged separately |
 | A leak in your code vs a dependency vs Next itself | `culprit: src/app/x/page.tsx (your code)` — or the package, or framework internals | Retainer chains mapped through the build's source maps |
-| A run whose own evidence is weak | `low confidence` warnings, or the verdict is withdrawn | Every run audits itself: did the load land, did the heap settle, does one cycle carry the average |
+| A run whose own evidence is weak | `low confidence` warnings, or the verdict is withdrawn | Every run audits itself: did the load land, did the heap settle, does one cycle carry the average, did the heap run into its own ceiling |
 
 ## Reading the verdicts
 
-- **`stable`** — done, stop hunting. The report proves it. If the heap is flat
-  but RSS keeps climbing, the report says so explicitly: that is an allocator,
-  external-buffer or fragmentation problem, not a JS-heap leak.
+- **`stable`** — no growth this run could detect: across the cycles it ran, the
+  post-GC curve never cleared the growth gate printed at the foot of the
+  report. That is not proof of absence, and the wording matters — the verdict
+  is deliberately biased toward missing a leak rather than inventing one (a
+  single flat or falling cycle is enough to call a route stable), so a leak
+  that oscillates while it climbs can land here. To press harder, raise
+  `--cycles` and `--requests`: both make the run more sensitive. If the heap is
+  flat but RSS keeps climbing, the report says so explicitly: that is an
+  allocator, external-buffer or fragmentation problem, not a JS-heap leak.
 - **`leak`** — the report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. An `ISSUE-<route>.md` draft is generated; if the leak is app-owned, the draft tells you **not** to file it upstream.
 - **`inconclusive`** — sustained sub-threshold growth: measure longer. The CLI prints the exact re-run command (`--routes <those> --cycles 6`).
 - **`failed`** — the route errored under load (auth redirects, POST-only endpoints). >1% non-2xx aborts measurement instead of measuring garbage. That's by design.
@@ -163,8 +176,10 @@ its own evidence, and anything that undermines a verdict is printed next to it:
 
 What gets checked: whether the heap actually held still before each sample,
 whether the requests you asked for really landed, whether an early-disconnect
-run disconnected anything, whether one cycle dominates the average, and
-whether the growth barely clears the noise floor.
+run disconnected anything, whether one cycle dominates the average, whether
+the growth barely clears the noise floor, and whether the heap came close
+enough to its own cap that the curve was clipped by the ceiling rather than by
+the app.
 
 When the run didn't observe what a `leak` verdict requires — the heap never
 settled, or an abandonment run abandoned nothing — the verdict is **withdrawn**
@@ -212,6 +227,11 @@ through the build's source maps.
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
 - Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against real reproductions from open issues. The contracts it relies on are stable since Next 13–14, but older versions are untested.
+- **Each measured process runs under a 512 MB heap cap** by default, so a leak
+  reaches a ceiling in minutes instead of the hours a production container
+  takes. An app whose legitimate working set is larger needs
+  `--max-old-space`, or every route dies as an OOM that is not the app's
+  fault. When a run's heap gets close to the cap, the report says so.
 - Borderline routes can flip between `stable`/`leak` across runs — more cycles resolves this.
 - The measured app runs with its real environment: routes that call external services will call them under load. Scope with `--routes` and moderate `--requests` accordingly.
 
@@ -223,6 +243,11 @@ pnpm typecheck && pnpm test && pnpm build
 pnpm pack:smoke      # release gate: installs the real tarball and measures the fixture app
 pnpm test:mutation   # Stryker — slow; run before releases, weekly in CI
 ```
+
+`pnpm build` also regenerates [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)
+from the build's metafile and runs `scripts/check-bundle.mjs`, which fails the
+build if browser tooling ever gets back into `dist/`. Commit the regenerated
+notices when a dependency changes.
 
 CI runs typecheck, tests, build, `pnpm audit --prod` and the pack smoke on
 Node 22 and 24; mutation testing runs weekly and uploads its report.

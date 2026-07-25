@@ -1,4 +1,10 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "tsup";
+
+// Resolved against this file, not against the build's working directory: a
+// relative alias that silently stops matching would put real puppeteer back in
+// the bundle, which is exactly what the stub exists to prevent.
+const browserStub = fileURLToPath(new URL("src/stubs/browser-stub.cjs", import.meta.url));
 
 export default defineConfig({
   entry: ["src/cli.ts", "src/index.ts", "src/bootstrap.ts"],
@@ -7,6 +13,9 @@ export default defineConfig({
   target: "node22",
   dts: false,
   clean: true,
+  // Read by scripts/generate-notices.mjs to enumerate what actually ended up
+  // inlined in dist/ — a hand-kept list of bundled packages goes stale.
+  metafile: true,
   // The memlab family drags puppeteer/xvfb (a full Chrome download) into
   // consumer installs. Bundle the heap-parsing code we actually use at build
   // time instead; browser tooling stays external and must never load.
@@ -31,9 +40,9 @@ export default defineConfig({
     // loud stub so the published package never depends on puppeteer/Chrome.
     options.alias = {
       ...options.alias,
-      puppeteer: "./src/stubs/browser-stub.cjs",
-      "puppeteer-core": "./src/stubs/browser-stub.cjs",
-      xvfb: "./src/stubs/browser-stub.cjs",
+      puppeteer: browserStub,
+      "puppeteer-core": browserStub,
+      xvfb: browserStub,
     };
   },
   banner: {
