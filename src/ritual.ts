@@ -117,6 +117,8 @@ export type RitualResult = {
 export type RitualDeps = {
   launch: typeof launchInstrumented;
   load: typeof runLoadPhase;
+  /** Early-disconnect load; a seam like `load`, for the same reasons. */
+  abandon: typeof runAbandonPhase;
   sleep: (ms: number) => Promise<void>;
   /** GC-free read, polled while the app is under load. */
   readMemory: (port: number) => Promise<HeapSample>;
@@ -218,6 +220,7 @@ async function waitUntilSettled(
 const defaultDeps: RitualDeps = {
   launch: launchInstrumented,
   load: runLoadPhase,
+  abandon: runAbandonPhase,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   readMemory: requestMemory,
 };
@@ -312,7 +315,7 @@ export async function runRitual(
       });
       return;
     }
-    const outcome: AbandonPhaseResult = await runAbandonPhase({
+    const outcome: AbandonPhaseResult = await deps.abandon({
       url: `http://127.0.0.1:${app.appPort}${options.route}`,
       amount,
       connections,
