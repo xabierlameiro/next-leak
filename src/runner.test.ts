@@ -224,6 +224,56 @@ describe("resolving inconclusive routes", () => {
     expect(route.resolvedWithCycles).toBeUndefined();
   });
 
+  it("keeps the first pass when the second one dies", async () => {
+    // The second pass is a bonus, not a bet: a child that loses the port race
+    // twice or dies under the longer run must not turn a valid inconclusive
+    // measurement into a "failed" route.
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let calls = 0;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", routeFilter: ["/"] },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          calls += 1;
+          if (calls === 2) {
+            throw new Error("the measured process ran out of heap");
+          }
+          return inconclusive(options.route);
+        },
+      }
+    );
+    expect(calls).toBe(2);
+    const route = report.routes.find((entry) => entry.route === "/");
+    if (route?.status !== "measured") throw new Error("first pass should survive");
+    expect(route.trend.verdict).toBe("inconclusive");
+    expect(route.resolvedWithCycles).toBeUndefined();
+  });
+
+  it("does not start a second pass after the user interrupted", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const aborter = new AbortController();
+    let calls = 0;
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        routeFilter: ["/"],
+        signal: aborter.signal,
+      },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          calls += 1;
+          // The interrupt lands while the first pass is finishing.
+          aborter.abort();
+          return inconclusive(options.route);
+        },
+      }
+    );
+    expect(calls).toBe(1);
+  });
+
   it("reports the second pass when it is still undecided", async () => {
     const appDir = await makeAppDir({ "/page": "app/page.js" });
     const report = await runMeasurement(
