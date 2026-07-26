@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/xabierlameiro/next-leak/compare/v0.4.3...v0.5.0) (2026-07-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* LoadPhaseOptions (exported from the package root) no longer accepts abandonAfterMs; callers get a type error instead of whole-second, pre-first-byte behaviour. The CLI and the next-leak.config.json knob are unchanged.
+
+### Code Refactoring
+
+* remove the legacy autocannon-timeout abandon path from the load phase ([#41](https://github.com/xabierlameiro/next-leak/issues/41)) ([77a129c](https://github.com/xabierlameiro/next-leak/commit/77a129c17808a9829da838a1211a1e0226f634c7))
+
 ## [0.4.3](https://github.com/xabierlameiro/next-leak/compare/v0.4.2...v0.4.3) (2026-07-26)
 
 

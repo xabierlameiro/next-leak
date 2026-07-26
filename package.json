@@ -1,6 +1,6 @@
 {
   "name": "next-leak",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "Find out whether your Next.js app actually leaks memory — how much, on which route, and whose fault it is.",
   "keywords": [
     "nextjs",
