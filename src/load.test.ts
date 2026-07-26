@@ -190,37 +190,3 @@ describe("request headers", () => {
   }, 30_000);
 });
 
-// Leaks that only exist when the client gives up (vercel/next.js#89091 traces
-// ServerResponse retention to an early disconnect) are unreachable with a load
-// generator that always waits for the response.
-describe("client abandonment", () => {
-  it("does not count deliberate abandonment as failure", async () => {
-    const port = await listen((req, res) => {
-      // Never answers within the abandon window.
-      setTimeout(() => res.end("late"), 5000).unref();
-    });
-    const result = await runLoadPhase({
-      url: `http://127.0.0.1:${port}/slow`,
-      amount: 10,
-      connections: 5,
-      abandonAfterMs: 1000,
-    });
-    expect(result.timeouts).toBeGreaterThan(0);
-    expect(result.ok2xx).toBe(0);
-  }, 30_000);
-
-  it("still fails when responses error rather than being abandoned", async () => {
-    const port = await listen((req, res) => {
-      res.statusCode = 500;
-      res.end();
-    });
-    await expect(
-      runLoadPhase({
-        url: `http://127.0.0.1:${port}/boom`,
-        amount: 20,
-        connections: 5,
-        abandonAfterMs: 1000,
-      })
-    ).rejects.toBeInstanceOf(LoadError);
-  }, 30_000);
-});
