@@ -125,6 +125,77 @@ describe("abandonment accounting", () => {
   }, 60_000);
 });
 
+// Mutation survivors that mattered: a wrong header join corrupts the request,
+// an unhandled connect error hangs the phase, and losing the concurrency cap
+// silently turns `--connections 24` into 1500 sockets.
+describe("request shape and limits", () => {
+  it("sends every configured header on its own line", async () => {
+    const seen: Array<Record<string, string | string[] | undefined>> = [];
+    const port = await listen((req, res) => {
+      seen.push(req.headers);
+      res.write("chunk");
+      setTimeout(() => res.end(), 30_000).unref();
+    });
+
+    await runAbandonPhase({
+      url: `http://127.0.0.1:${port}/x`,
+      amount: 2,
+      connections: 1,
+      abandonAfterMs: 20,
+      headers: { "accept-encoding": "gzip", "x-probe": "yes" },
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]?.["accept-encoding"]).toBe("gzip");
+    expect(seen[0]?.["x-probe"]).toBe("yes");
+  }, 30_000);
+
+  it("counts connect errors instead of hanging the phase", async () => {
+    const port = await listen(() => undefined);
+    await new Promise<void>((resolve) => server?.close(() => resolve()));
+    server = undefined;
+
+    const result = await runAbandonPhase({
+      url: `http://127.0.0.1:${port}/x`,
+      amount: 4,
+      connections: 2,
+      abandonAfterMs: 10,
+    });
+
+    expect(result.errors).toBe(4);
+    expect(result.sent).toBe(0);
+    expect(result.completed).toBe(0);
+  }, 30_000);
+
+  it("never opens more sockets at once than the configured connections", async () => {
+    let open = 0;
+    let peak = 0;
+    const port = await listen((_req, res) => {
+      res.write("chunk");
+      setTimeout(() => res.end(), 30_000).unref();
+    });
+    server?.on("connection", (socket) => {
+      open += 1;
+      peak = Math.max(peak, open);
+      socket.once("close", () => {
+        open -= 1;
+      });
+    });
+
+    await runAbandonPhase({
+      url: `http://127.0.0.1:${port}/x`,
+      amount: 40,
+      connections: 4,
+      abandonAfterMs: 15,
+    });
+
+    // One over the cap is the socket already destroyed whose `close` has not
+    // propagated to the server yet; the in-flight requests are still 4. What
+    // this guards against is the cap being ignored altogether (40 at once).
+    expect(peak).toBeLessThanOrEqual(5);
+  }, 60_000);
+});
+
 // vercel/next.js#94919 retains the RSC stream's tee branch when a client
 // reads part of a response and disappears. Closing on the first byte made
 // that scenario impossible to reproduce: the run only ever tested clients
@@ -176,6 +247,59 @@ describe("mid-stream abandonment", () => {
     expect(result.abandonedMidStream).toBe(10);
     expect(result.abandonedBeforeResponse).toBe(0);
   }, 60_000);
+
+  // Caught by mutation testing: without the early return in the data handler,
+  // every chunk re-arms the timer and the cut lands `abandonAfterMs` after the
+  // LAST byte instead of the first — on a stream that keeps sending, that is
+  // never. The deadline must be relative to the start of the response.
+  it("cuts relative to the first byte, not the last, on a chunked stream", async () => {
+    const port = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("first");
+      // Keeps sending well past the abandon window; a last-byte-relative
+      // deadline would never fire while this runs.
+      const chunker = setInterval(() => res.write("more"), 20);
+      chunker.unref();
+      setTimeout(() => {
+        clearInterval(chunker);
+        res.end();
+      }, 30_000).unref();
+    });
+
+    const started = Date.now();
+    const result = await runAbandonPhase({
+      url: `http://127.0.0.1:${port}/x`,
+      amount: 6,
+      connections: 3,
+      abandonAfterMs: 30,
+    });
+
+    expect(result.abandonedMidStream).toBe(6);
+    expect(result.completed).toBe(0);
+    // Two rounds of ~30ms cuts, not two rounds of "whenever the stream stops".
+    expect(Date.now() - started).toBeLessThan(5000);
+  }, 60_000);
+
+  // Also from mutation testing: an unhandled socket error left the request
+  // promise pending forever, which would hang a load phase rather than fail it.
+  it("counts a socket error and still finishes the phase", async () => {
+    const port = await listen(() => {
+      // Never responds; the socket is destroyed from the server side below.
+    });
+    server?.on("connection", (socket) => {
+      socket.destroy(new Error("boom"));
+    });
+
+    const result = await runAbandonPhase({
+      url: `http://127.0.0.1:${port}/x`,
+      amount: 4,
+      connections: 2,
+      abandonAfterMs: 10,
+    });
+
+    expect(result.errors + result.abandoned).toBeGreaterThan(0);
+    expect(result.completed).toBe(0);
+  }, 30_000);
 
   it("gives up on a route that never sends a byte, counting it pre-response", async () => {
     const port = await listen(() => {
