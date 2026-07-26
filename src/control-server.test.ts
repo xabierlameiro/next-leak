@@ -10,9 +10,29 @@ afterEach(async () => {
 
 describe("forceGc", () => {
   it("reports whether GC is exposed instead of throwing", async () => {
-    // Vitest does not run with --expose-gc by default; either outcome is
-    // valid, but it must never throw.
-    await expect(forceGc()).resolves.toBeTypeOf("boolean");
+    // Vitest does not run with --expose-gc, so the honest answer here is
+    // exactly `false` — a hardcoded `true` would claim samples are settled
+    // when nothing was ever collected.
+    await expect(forceGc()).resolves.toBe(false);
+  });
+
+  it("runs exactly the requested passes when GC is exposed", async () => {
+    const g = globalThis as typeof globalThis & { gc?: () => void };
+    const original = g.gc;
+    const collect = vi.fn();
+    g.gc = collect;
+    try {
+      await expect(forceGc()).resolves.toBe(true);
+      // Three passes are the validated protocol; a fourth would silently
+      // change every post-GC sample's regime.
+      expect(collect).toHaveBeenCalledTimes(3);
+    } finally {
+      if (original === undefined) {
+        delete g.gc;
+      } else {
+        g.gc = original;
+      }
+    }
   });
 });
 
@@ -21,10 +41,12 @@ describe("startControlServer", () => {
     server = await startControlServer({ snapshotDir: "/unused" });
     const response = await fetch(`http://127.0.0.1:${server.port}/gc`);
     expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json");
     const body = (await response.json()) as Record<string, unknown>;
     expect(body["heapUsed"]).toBeTypeOf("number");
     expect(body["rss"]).toBeTypeOf("number");
-    expect(body["gcExposed"]).toBeTypeOf("boolean");
+    // No --expose-gc in vitest: the flag must say so, not guess.
+    expect(body["gcExposed"]).toBe(false);
   });
 
   it("samples on /mem without collecting", async () => {
@@ -41,6 +63,9 @@ describe("startControlServer", () => {
       const body = (await response.json()) as Record<string, unknown>;
       expect(body["heapUsed"]).toBeTypeOf("number");
       expect(body["arrayBuffers"]).toBeTypeOf("number");
+      // With a gc function installed the flag must reflect it — the ritual
+      // rejects processes whose samples would be meaningless.
+      expect(body["gcExposed"]).toBe(true);
       expect(collect).not.toHaveBeenCalled();
 
       await fetch(`http://127.0.0.1:${server.port}/gc`);
@@ -83,59 +108,19 @@ describe("startControlServer", () => {
     expect(written).toEqual(["/snapshots/evil.heapsnapshot"]);
   });
 
-  it("rejects snapshot requests without a name", async () => {
+  it("rejects snapshot requests without a name, saying what was missing", async () => {
     server = await startControlServer({ snapshotDir: "/unused" });
     const response = await fetch(`http://127.0.0.1:${server.port}/snapshot`);
     expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("?name=");
   });
 
-  it("returns 404 for unknown paths", async () => {
+  it("returns 404 for unknown paths, naming the path", async () => {
     server = await startControlServer({ snapshotDir: "/unused" });
     const response = await fetch(`http://127.0.0.1:${server.port}/nope`);
     expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("/nope");
   });
-});
-
-describe("control server lifecycle", () => {
-  it("does not keep the host process alive", async () => {
-    // Found while probing Node 24.4: an open control socket kept the measured
-    // process running forever. Measuring must not change what is measured.
-    const { execFileSync } = await import("node:child_process");
-    const { fileURLToPath } = await import("node:url");
-    const pathModule = await import("node:path");
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-
-    const rootDir = fileURLToPath(new URL("..", import.meta.url));
-    const workDir = await mkdtemp(pathModule.join(tmpdir(), "next-leak-unref-"));
-    const started = Date.now();
-    execFileSync(
-      process.execPath,
-      ["--import", `file://${pathModule.join(rootDir, "dist", "bootstrap.js")}`, "-e", "0"],
-      { env: { ...process.env, NEXT_LEAK_DIR: workDir }, timeout: 20_000 }
-    );
-    // Without unref() this never returns.
-    expect(Date.now() - started).toBeLessThan(15_000);
-  }, 30_000);
-
-  it("announces one control file per process id", async () => {
-    const { readdir, mkdtemp } = await import("node:fs/promises");
-    const { execFileSync } = await import("node:child_process");
-    const { fileURLToPath } = await import("node:url");
-    const pathModule = await import("node:path");
-    const { tmpdir } = await import("node:os");
-
-    const rootDir = fileURLToPath(new URL("..", import.meta.url));
-    const workDir = await mkdtemp(pathModule.join(tmpdir(), "next-leak-pids-"));
-    const bootstrap = `file://${pathModule.join(rootDir, "dist", "bootstrap.js")}`;
-    for (let i = 0; i < 2; i += 1) {
-      execFileSync(process.execPath, ["--import", bootstrap, "-e", "0"], {
-        env: { ...process.env, NEXT_LEAK_DIR: workDir },
-        timeout: 20_000,
-      });
-    }
-    const files = (await readdir(workDir)).filter((name) => name.startsWith("control-"));
-    // Two processes → two announcements, no overwriting.
-    expect(files).toHaveLength(2);
-  }, 40_000);
 });

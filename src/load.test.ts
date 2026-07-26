@@ -77,6 +77,69 @@ describe("runLoadPhase", () => {
   }, 30_000);
 });
 
+// Killed mutants: the redirect explainer's status window, the error budget's
+// exact boundary, and the failure message's arithmetic were all mutable
+// without a test noticing.
+describe("mutation-hardening: load", () => {
+  it("names the redirect target across the whole 3xx window, and only there", async () => {
+    const at = async (status: number, location?: string): Promise<() => Promise<unknown>> => {
+      const port = await listen((_req, res) => {
+        res.statusCode = status;
+        if (location !== undefined) {
+          res.setHeader("location", location);
+        }
+        res.end();
+      });
+      return () => runLoadPhase({ url: `http://127.0.0.1:${port}/`, amount: 20, connections: 2 });
+    };
+
+    // 300 is inside the window: the message must point at the target.
+    await expect((await at(300, "/es"))()).rejects.toThrow(/redirects \(300\) to "\/es"/);
+    await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+
+    // 400 is outside it: a location header there is not a redirect.
+    await expect((await at(400, "/es"))()).rejects.toThrow(LoadError);
+    await expect((await at(400, "/es"))()).rejects.not.toThrow(/redirects/);
+  }, 30_000);
+
+  it("tolerates failures exactly at the error budget", async () => {
+    // 1 failure in 100 requests sits exactly ON the 1% budget: the phase must
+    // pass — the budget is "more than", not "at least".
+    let served = 0;
+    const port = await listen((_req, res) => {
+      served += 1;
+      res.statusCode = served === 1 ? 500 : 200;
+      res.end("ok");
+    });
+    const result = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/`,
+      amount: 100,
+      connections: 1,
+    });
+    expect(result.non2xx).toBe(1);
+  }, 30_000);
+
+  it("does not report phantom unanswered requests when every failure answered", async () => {
+    // Every request gets a real 500: failures == non2xx, so the "no recorded
+    // response" clause must stay out of the message. A sign flip in that
+    // arithmetic invents unanswered requests out of answered ones.
+    const port = await listen((_req, res) => {
+      res.statusCode = 500;
+      res.end();
+    });
+    await runLoadPhase({ url: `http://127.0.0.1:${port}/`, amount: 30, connections: 3 }).then(
+      () => {
+        throw new Error("expected a LoadError");
+      },
+      (error: unknown) => {
+        const message = String((error as Error).message);
+        expect(message).toContain("30 non-2xx");
+        expect(message).not.toContain("no recorded response");
+      }
+    );
+  }, 30_000);
+});
+
 // Leaks keyed by URL (route caches, LRUs — vercel/next.js#94890) are invisible
 // when every request hits the same path.
 describe("unique URL generation", () => {

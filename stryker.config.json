@@ -36,7 +36,11 @@
     "src/peak-pressure.ts",
     "src/abandon-load.ts",
     "src/ritual.ts",
-    "src/runner.ts"
+    "src/runner.ts",
+    "src/load.ts",
+    "src/control-server.ts",
+    "src/launcher.ts",
+    "src/control-client.ts"
   ],
   "thresholds": {
     "high": 90,
