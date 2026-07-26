@@ -99,6 +99,567 @@ function makeDeps(events: string[]): RunnerDeps {
   };
 }
 
+// Killed mutants — each one a behaviour the suite previously accepted broken.
+describe("mutation-hardening: runner", () => {
+  it("hands every option through to the ritual, and omits what was not given", async () => {
+    // The silent-passthrough class: an option dropped between runMeasurement
+    // and the ritual measures a different experiment than the one requested.
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    await writeFile(
+      path.join(appDir, "next-leak.config.json"),
+      JSON.stringify({
+        headers: { "accept-encoding": "gzip" },
+        abandonAfterMs: 7,
+      })
+    );
+    const received: unknown[] = [];
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        warmupRequests: 111,
+        loadRequests: 2222,
+        connections: 33,
+        cycles: 5,
+        idleMs: 4444,
+        maxOldSpaceMb: 1024,
+      },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          received.push(options);
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    const ritualOptions = received[0] as Record<string, unknown>;
+    expect(ritualOptions["warmupRequests"]).toBe(111);
+    expect(ritualOptions["loadRequests"]).toBe(2222);
+    expect(ritualOptions["connections"]).toBe(33);
+    expect(ritualOptions["cycles"]).toBe(5);
+    expect(ritualOptions["idleMs"]).toBe(4444);
+    expect(ritualOptions["maxOldSpaceMb"]).toBe(1024);
+    expect(ritualOptions["headers"]).toEqual({ "accept-encoding": "gzip" });
+    expect(ritualOptions["abandonAfterMs"]).toBe(7);
+
+    // The work directory is per-route, ordinal-prefixed, and slugged.
+    expect(String(ritualOptions["workDir"])).toMatch(/01-root$/);
+  });
+
+  it("passes nothing the caller did not set, so ritual defaults stay in charge", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const received: unknown[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          received.push(options);
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    const ritualOptions = received[0] as Record<string, unknown>;
+    for (const knob of ["warmupRequests", "loadRequests", "connections", "cycles", "idleMs", "maxOldSpaceMb", "headers", "abandonAfterMs"]) {
+      expect(knob in ritualOptions, knob).toBe(false);
+    }
+  });
+
+  it("records the regime in parameters even when defaults fill it", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", connections: 12, maxOldSpaceMb: 2048 },
+      makeDeps([])
+    );
+    // `?? default` degraded to `&& default` overwrites explicit values.
+    expect(report.parameters.connections).toBe(12);
+    expect(report.parameters.maxOldSpaceMb).toBe(2048);
+  });
+
+  it("computes the RSS rate from the same window as the heap verdict", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const rss = [100 * MB, 200 * MB, 210 * MB, 226 * MB];
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => ({
+          ...ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]),
+          memorySamples: rss.map((value) => ({
+            gcExposed: true,
+            heapUsed: 30 * MB,
+            rss: value,
+            external: 0,
+            arrayBuffers: 0,
+          })),
+        }),
+      }
+    );
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    // Warm-up delta (100→200) excluded; mean of (+10, +16) = 13 MB per cycle
+    // over 5000 requests/cycle → 2.6 MB per 1000 requests.
+    expect(route.rssPer1000Requests).toBeCloseTo(2.6 * MB, -4);
+  });
+
+  it("does not diff stable routes unless asked, and announces the diff when it runs", async () => {
+    const appDir = await makeAppDir({ "/stable/page": "app/stable/page.js" });
+    const events: string[] = [];
+    const progressLines: string[] = [];
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        onProgress: (message) => progressLines.push(message),
+      },
+      {
+        ...makeDeps(events),
+        ritual: async (options) => ({
+          ...ritualResult(options.route, [29 * MB, 30 * MB, 30 * MB, 30 * MB]),
+          trend: { verdict: "stable" as const, growthPerCycle: 0, deltas: [0, 0], source: "heap" as const },
+        }),
+      }
+    );
+    expect(events.filter((event) => event.startsWith("diff:"))).toEqual([]);
+    expect(progressLines.some((line) => line.startsWith("diffing snapshots"))).toBe(false);
+  });
+
+  it("narrates each route with its ordinal and the concrete path measured", async () => {
+    const appDir = await makeAppDir({ "/products/[id]/page": "app/products/[id]/page.js" });
+    await writeFile(
+      path.join(appDir, "next-leak.config.json"),
+      JSON.stringify({ params: { id: "42" } })
+    );
+    const progressLines: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => progressLines.push(m) },
+      makeDeps([])
+    );
+    expect(progressLines.some((line) => line.includes("measuring /products/[id] (1/1) as /products/42"))).toBe(true);
+  });
+
+  it("announces the withdrawal when the audit overrides a verdict", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progressLines: string[] = [];
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        resolveInconclusive: false,
+        onProgress: (m) => progressLines.push(m),
+      },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => ({
+          ...ritualResult(options.route, [29 * MB, 30 * MB, 31 * MB, 32 * MB]),
+          // A leak on thin evidence: three deltas below 4x the gate → the
+          // audit withdraws it. (1 MB would sit exactly ON the 4x boundary
+          // of the 256 KiB gate and survive — found writing this test.)
+          trend: {
+            verdict: "leak" as const,
+            growthPerCycle: 0.5 * MB,
+            deltas: [0.5 * MB, 0.5 * MB, 0.5 * MB],
+            source: "heap" as const,
+          },
+        }),
+      }
+    );
+    expect(progressLines.some((line) => line.includes("withdrawing / verdict"))).toBe(true);
+  });
+
+  it("keeps the run directory filesystem-safe and under the app by default", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      makeDeps([])
+    );
+    // Colons in ISO timestamps are invalid on some filesystems; the default
+    // output home is the app's own .next-leak.
+    expect(path.basename(report.workDir)).not.toMatch(/[:.]/);
+    expect(report.workDir).toContain(path.join(appDir, ".next-leak"));
+  });
+
+  it("reads the module registry from the server build", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const registryPaths: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        registry: async (dir: string) => {
+          registryPaths.push(dir);
+          return new Map();
+        },
+      }
+    );
+    expect(registryPaths[0]).toBe(path.join(appDir, ".next", "server"));
+  });
+
+  it("orders routes deterministically", async () => {
+    const appDir = await makeAppDir({
+      "/zebra/page": "app/zebra/page.js",
+      "/alpha/page": "app/alpha/page.js",
+      "/middle/page": "app/middle/page.js",
+    });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      makeDeps([])
+    );
+    expect(report.routes.map((route) => route.route)).toEqual(["/alpha", "/middle", "/zebra"]);
+  });
+});
+
+describe("mutation-hardening: runner, second pass", () => {
+  const stableRitual = (route: string): RitualResult => ({
+    ...ritualResult(route, [29 * MB, 30 * MB, 30 * MB, 30 * MB]),
+    trend: { verdict: "stable" as const, growthPerCycle: 0, deltas: [0, 0], source: "heap" as const },
+  });
+
+  it("diffs stable routes when --diff-all asks for it", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const events: string[] = [];
+    const progressLines: string[] = [];
+    const report = await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        diffAll: true,
+        onProgress: (m) => progressLines.push(m),
+      },
+      { ...makeDeps(events), ritual: async (options) => stableRitual(options.route) }
+    );
+    expect(events.some((event) => event.startsWith("diff:"))).toBe(true);
+    expect(progressLines.some((line) => line === "diffing snapshots for /")).toBe(true);
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    // With a diff and a registry present, attribution must be computed too.
+    expect(route.attribution).not.toBeNull();
+  });
+
+  it("flags an abandon run that abandoned nothing — the audit saw the config", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    await writeFile(
+      path.join(appDir, "next-leak.config.json"),
+      JSON.stringify({ abandonAfterMs: 7 })
+    );
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", resolveInconclusive: false },
+      makeDeps([])
+    );
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    // ritualResult's outcomes carry no abandonments, so the audit must warn —
+    // unless abandonAfterMs was dropped on its way in.
+    expect(route.confidence.warnings.map((warning) => warning.code)).toContain("abandon-ineffective");
+  });
+
+  it("leaves attribution null when the registry is empty", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      { ...makeDeps([]), registry: async () => new Map() }
+    );
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    // An empty registry cannot attribute anything; fabricating an attribution
+    // from it would put "unattributed" rows where the report expects silence.
+    expect(route.attribution).toBeNull();
+  });
+
+  it("omits the Next version from the narration when none was found", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progressLines: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => progressLines.push(m) },
+      { ...makeDeps([]), nextVersion: async () => null }
+    );
+    const line = progressLines.find((entry) => entry.includes("module registry"));
+    expect(line).toBe("module registry: 1 modules");
+  });
+
+  it("suppresses the long-run hint once either load knob is hand-set", async () => {
+    const manyRoutes = Object.fromEntries(
+      Array.from({ length: 6 }, (_, index) => [`/route${index}/page`, `app/route${index}/page.js`])
+    );
+    const appDir = await makeAppDir(manyRoutes);
+    const onlyRequests: string[] = [];
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        loadRequests: 300,
+        onProgress: (m) => onlyRequests.push(m),
+      },
+      makeDeps([])
+    );
+    expect(onlyRequests.find((line) => line.includes("estimated"))).not.toContain("--routes");
+
+    const onlyIdle: string[] = [];
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        idleMs: 2000,
+        onProgress: (m) => onlyIdle.push(m),
+      },
+      makeDeps([])
+    );
+    expect(onlyIdle.find((line) => line.includes("estimated"))).not.toContain("--routes");
+  });
+
+  it("writes the second pass into its own -resolve directory", async () => {
+    // Reusing the first pass's directory would overwrite its snapshots:
+    // baseline.heapsnapshot and after.heapsnapshot are named per phase, not
+    // per pass, and evidence that gets clobbered cannot be audited.
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const workDirs: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", routeFilter: ["/"] },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          workDirs.push(options.workDir);
+          if (workDirs.length === 1) {
+            return {
+              ...ritualResult(options.route, [30 * MB, 31 * MB, 31 * MB, 32 * MB]),
+              trend: {
+                verdict: "inconclusive" as const,
+                growthPerCycle: 0.4 * MB,
+                deltas: [0, 0.4 * MB],
+                source: "heap" as const,
+              },
+            };
+          }
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    expect(workDirs).toHaveLength(2);
+    expect(workDirs[1]).toBe(`${workDirs[0]}-resolve`);
+  });
+
+  it("narrates the second pass and its failure with the route named", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progressLines: string[] = [];
+    let calls = 0;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => progressLines.push(m) },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          calls += 1;
+          if (calls === 2) {
+            throw new Error("port race lost twice");
+          }
+          return {
+            ...ritualResult(options.route, [30 * MB, 31 * MB, 31 * MB, 32 * MB]),
+            trend: {
+              verdict: "inconclusive" as const,
+              growthPerCycle: 0.4 * MB,
+              deltas: [0, 0.4 * MB],
+              source: "heap" as const,
+            },
+          };
+        },
+      }
+    );
+    expect(progressLines.some((line) => line.includes("re-measuring / with 8 cycles"))).toBe(true);
+    expect(
+      progressLines.some((line) => line.includes("re-measurement of / failed") && line.includes("keeping the first pass"))
+    ).toBe(true);
+  });
+
+  it("announces the second pass in the estimate, unless opted out", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const withNote: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => withNote.push(m) },
+      makeDeps([])
+    );
+    expect(withNote.some((line) => line.includes("inconclusive routes are measured again"))).toBe(true);
+
+    const without: string[] = [];
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        resolveInconclusive: false,
+        onProgress: (m) => without.push(m),
+      },
+      makeDeps([])
+    );
+    expect(without.some((line) => line.includes("measured again"))).toBe(false);
+  });
+
+  it("warns about long default runs, and stays quiet once load is hand-tuned", async () => {
+    const manyRoutes = Object.fromEntries(
+      Array.from({ length: 6 }, (_, index) => [`/route${index}/page`, `app/route${index}/page.js`])
+    );
+    const appDir = await makeAppDir(manyRoutes);
+    const slow: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => slow.push(m) },
+      makeDeps([])
+    );
+    const estimateLine = slow.find((line) => line.includes("estimated")) ?? "";
+    expect(estimateLine).toContain("--routes");
+
+    const tuned: string[] = [];
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        loadRequests: 300,
+        idleMs: 2000,
+        onProgress: (m) => tuned.push(m),
+      },
+      makeDeps([])
+    );
+    const tunedLine = tuned.find((line) => line.includes("estimated")) ?? "";
+    expect(tunedLine).not.toContain("--routes");
+  });
+
+  it("narrates the registry size and the Next version it found", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progressLines: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => progressLines.push(m) },
+      makeDeps([])
+    );
+    expect(progressLines.some((line) => line.includes("module registry: 1 modules · next 16.0.1"))).toBe(true);
+  });
+
+  it("names the missing sample params when skipping a dynamic route", async () => {
+    const appDir = await makeAppDir({ "/products/[id]/page": "app/products/[id]/page.js" });
+    const progressLines: string[] = [];
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => progressLines.push(m) },
+      makeDeps([])
+    );
+    const skipped = report.routes.find((route) => route.status === "skipped");
+    expect(skipped?.status === "skipped" && skipped.reason).toContain("sample params");
+    expect(
+      progressLines.some((line) => line.includes("skipping /products/[id] (1/1)") && line.includes("sample params"))
+    ).toBe(true);
+  });
+
+  it("measures a static route with a bare label — no phantom 'as' suffix", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progressLines: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => progressLines.push(m) },
+      makeDeps([])
+    );
+    expect(progressLines).toContain("measuring / (1/1)");
+    // And a clean run never claims to withdraw anything.
+    expect(progressLines.some((line) => line.includes("withdrawing"))).toBe(false);
+  });
+
+  it("computes an RSS rate from exactly three samples and refuses fewer", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const withSamples = async (rss: number[]): Promise<number> => {
+      const report = await runMeasurement(
+        { appDir, bootstrapPath: "/fake/bootstrap.js" },
+        {
+          ...makeDeps([]),
+          ritual: async (options) => ({
+            ...ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]),
+            memorySamples: rss.map((value) => ({
+              gcExposed: true,
+              heapUsed: 30 * MB,
+              rss: value,
+              external: 0,
+              arrayBuffers: 0,
+            })),
+          }),
+        }
+      );
+      const route = report.routes[0];
+      if (route?.status !== "measured") throw new Error("route should be measured");
+      return route.rssPer1000Requests;
+    };
+    // Three samples leave one post-warm-up delta: (+20 MB) / 5000 req → 4 MB/1000.
+    expect(await withSamples([100 * MB, 200 * MB, 220 * MB])).toBeCloseTo(4 * MB, -4);
+    // Two samples cannot exclude warm-up and still have a delta: rate is 0.
+    expect(await withSamples([100 * MB, 200 * MB])).toBe(0);
+  });
+
+  it("matches selectors exactly and ignores their trailing slashes", async () => {
+    const appDir = await makeAppDir({
+      "/api/page": "app/api/page.js",
+      "/api/users/page": "app/api/users/page.js",
+    });
+    const exact = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", routeFilter: ["/api"] },
+      makeDeps([])
+    );
+    expect(exact.routes.map((route) => route.route).sort()).toEqual(["/api", "/api/users"]);
+
+    const trailing = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", routeFilter: ["/api/"] },
+      makeDeps([])
+    );
+    expect(trailing.routes.map((route) => route.route)).toContain("/api");
+  });
+
+  it("stamps the run directory with the full sortable timestamp", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      makeDeps([])
+    );
+    expect(path.basename(report.workDir)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/);
+  });
+
+  it("judges the heap ceiling against the cap the run actually used", async () => {
+    // 400 MB retained under a 4096 MB cap is nowhere near the ceiling; a
+    // mutant that swaps the cap for the 512 MB default would warn here.
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", maxOldSpaceMb: 4096 },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => ({
+          ...ritualResult(options.route, [390 * MB, 395 * MB, 400 * MB, 400 * MB]),
+          memorySamples: [390, 395, 400, 400].map((mb) => ({
+            gcExposed: true,
+            heapUsed: mb * MB,
+            rss: 500 * MB,
+            external: 0,
+            arrayBuffers: 0,
+          })),
+        }),
+      }
+    );
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.confidence.warnings.map((warning) => warning.code)).not.toContain("near-heap-ceiling");
+  });
+});
+
+describe("routeSlug", () => {
+  it("keeps a reversible slug bare and gives lossy ones a 6-hex digest", () => {
+    // "/a/b" is made of safe characters, so its slug is reversible and stays
+    // bare; "/a_b" sanitizes to the same "a_b", and the digest is what keeps
+    // the two from colliding on one ISSUE-a_b.md.
+    expect(routeSlug("/a/b")).toBe("a_b");
+    expect(routeSlug("/a_b")).toMatch(/^a_b-[0-9a-f]{6}$/);
+    expect(routeSlug("/a/b")).not.toBe(routeSlug("/a_b"));
+  });
+
+  it("falls back to route-<digest> when nothing sanitizable remains", () => {
+    expect(routeSlug("/ñ")).toMatch(/^route-[0-9a-f]{6}$/);
+  });
+});
+
+describe("formatDuration boundaries", () => {
+  it("switches to hours exactly at 90 minutes", () => {
+    expect(formatDuration(5399)).toBe("90m");
+    expect(formatDuration(5400)).toBe("1.5h");
+  });
+});
+
 describe("estimateRun", () => {
   const parameters = {
     warmupRequests: 200,
