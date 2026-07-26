@@ -26,6 +26,11 @@ const routeConfigSchema = z
      * that path — vercel/next.js#89091 traces `ServerResponse` retention to
      * an early disconnect — and a load generator that always waits politely
      * never reaches it.
+     *
+     * Counted **from the first byte of the response**, not from the request:
+     * under load a server's first byte arrives long after any sane fixed
+     * window, so a request-relative clock cuts before the stream starts and
+     * tests the wrong path entirely.
      */
     abandonAfterMs: z.number().int().positive().optional(),
   })

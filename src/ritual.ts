@@ -45,6 +45,8 @@ export type LoadOutcome = {
   abandoned?: number;
   /** Abandonments where the response had already started — the mid-stream path. */
   abandonedMidStream?: number;
+  /** Abandonments where the first-byte budget expired in silence. */
+  abandonedBeforeResponse?: number;
 };
 
 /**
@@ -322,6 +324,7 @@ export async function runRitual(
       sent: outcome.sent,
       abandoned: outcome.abandoned,
       abandonedMidStream: outcome.abandonedMidStream,
+      abandonedBeforeResponse: outcome.abandonedBeforeResponse,
       ok2xx: outcome.completed,
       errors: outcome.errors,
     });
