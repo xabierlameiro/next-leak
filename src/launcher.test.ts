@@ -1,4 +1,4 @@
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdtemp, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -62,6 +62,43 @@ describe("launchInstrumented", () => {
     await app.close();
     app = undefined;
     await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
+  }, 30_000);
+
+  it("keeps both ends of a long fatal dump, so the FATAL line survives the frames", async () => {
+    // The field case: a real V8 OOM dump is >8 KB with its one load-bearing
+    // line at the top and ~75 native frames after it. A tail-only window
+    // reported an anonymous C++ stack; the head must survive.
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-dump-"));
+    const dumpServer = path.join(workDir, "dumping-server.js");
+    const frames = Array.from(
+      { length: 80 },
+      (_, index) => `${index + 1}: 0xdeadbeef${index} node::SomeNativeFrame::Invoke(v8::FunctionCallbackInfo<v8::Value> const&) [libnode.dylib]`
+    ).join("\n");
+    await writeFile(
+      dumpServer,
+      `process.stderr.write("FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\\n");
+` +
+        `process.stderr.write(${JSON.stringify(frames)});
+` +
+        `process.exit(134);
+`
+    );
+
+    const failure = await launchInstrumented({
+      serverPath: dumpServer,
+      workDir,
+      appPort: await freePort(),
+      bootstrapPath,
+      readyTimeoutMs: 10_000,
+    }).catch((cause: Error) => cause);
+
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    // Head: the line that names the failure. Tail: the last frames. Marker:
+    // proof the window really joined two ends instead of keeping one.
+    expect(message).toContain("FATAL ERROR: Ineffective mark-compacts");
+    expect(message).toContain("[...]");
+    expect(message).toContain("80: 0xdeadbeef79");
   }, 30_000);
 
   it("fails with the child's stderr when the server crashes on boot", async () => {
