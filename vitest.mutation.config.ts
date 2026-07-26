@@ -10,6 +10,14 @@ export default defineConfig({
     // with in-memory doubles, not real snapshots, so it is as fast and as
     // mutation-worthy as any other pure-logic suite. Excluding it once left
     // the whole attribution path unjudged at a reported 100% line coverage.
-    exclude: ["src/e2e.test.ts", "src/launcher.test.ts", "src/cli-interrupt.test.ts"],
+    exclude: [
+      "src/e2e.test.ts",
+      "src/launcher.test.ts",
+      "src/cli-interrupt.test.ts",
+      // Subprocess suites: they spawn real node processes per test, which is
+      // exactly the cost mutation runs cannot afford per mutant.
+      "src/bootstrap.test.ts",
+      "src/cli-surface.test.ts",
+    ],
   },
 });
