@@ -162,3 +162,11 @@ export async function requestSnapshot(
 
 /** Test seam: the production deadlines would make a hung-server test take minutes. */
 export const requestWithDeadline = request;
+
+/**
+ * Test seam for the deadline table itself. A mutation run showed the mapping
+ * could quietly send `/snapshot?name=x` to the 30-second default instead of
+ * its 30-minute bound — reinstating, from the inside, the exact ceiling this
+ * client exists to remove.
+ */
+export const deadlineForOperation = deadlineFor;
