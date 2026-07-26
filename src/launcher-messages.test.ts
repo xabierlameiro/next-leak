@@ -59,4 +59,27 @@ describe("explainRuntimeFailure", () => {
       "build problem"
     );
   });
+
+  it("recognises a REAL-sized fatal dump, where the FATAL line is nowhere near the end", () => {
+    // A genuine V8 OOM dump: GC trace, the one load-bearing line, then ~75
+    // native frames pushing it thousands of characters from the tail. The
+    // measured process on the vercel/next.js#89091 repro died exactly like
+    // this and was reported as a generic exit, because only a 2000-char tail
+    // was kept.
+    const frames = Array.from(
+      { length: 75 },
+      (_, index) =>
+        `${index + 1}: 0x108e3a4${String(index).padStart(2, "0")} node::SomeVeryLongNativeFrameName::WithTemplates<v8::internal::DirectHandle<v8::internal::Object>>(v8::FunctionCallbackInfo<v8::Value> const&) [/opt/homebrew/lib/libnode.141.dylib]`
+    ).join("\n");
+    const dump =
+      "<--- Last few GCs --->\n" +
+      "[48563:0xb65c00000] 26941 ms: Scavenge 496.6 (505.3) -> 493.7 (506.1) MB\n" +
+      "FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\n" +
+      "----- Native stack trace -----\n" +
+      frames;
+    expect(dump.length).toBeGreaterThan(8000);
+    // The window handed to the explainer must still contain the FATAL line.
+    const window = `${dump.slice(0, 4096)}\n[...]\n${dump.slice(-4096)}`;
+    expect(explainRuntimeFailure(window, 512)).toContain("ran out of heap");
+  });
 });
