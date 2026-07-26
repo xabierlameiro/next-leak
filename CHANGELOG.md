@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/xabierlameiro/next-leak/compare/v0.4.1...v0.4.2) (2026-07-26)
+
+
+### Bug Fixes
+
+* keep the first pass when a re-measurement dies, and honour Ctrl+C between passes ([#33](https://github.com/xabierlameiro/next-leak/issues/33)) ([567e0d1](https://github.com/xabierlameiro/next-leak/commit/567e0d1f786847959c7655596114515015c09de4))
+
 ## [0.4.1](https://github.com/xabierlameiro/next-leak/compare/v0.4.0...v0.4.1) (2026-07-26)
 
 
