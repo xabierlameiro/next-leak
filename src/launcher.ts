@@ -55,6 +55,13 @@ export class LaunchError extends Error {
 
 const activeChildren = new Set<ChildProcess>();
 
+/**
+ * Characters of stderr kept from each end of the stream. 4096 comfortably
+ * holds a fatal header (GC trace + FATAL line) on one side and the last
+ * frames plus any explanatory epilogue on the other.
+ */
+const STDERR_WINDOW = 4096;
+
 /** Interrupt safety: no measured-app process may outlive the CLI. */
 export function killActiveChildren(): void {
   for (const child of activeChildren) {
@@ -159,10 +166,25 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
     }
   );
 
-  let stderrTail = "";
+  // Head AND tail, not tail alone. A real V8 fatal dump puts its one
+  // load-bearing line ("FATAL ERROR: ... heap out of memory") ahead of ~75
+  // native stack frames, several thousand characters before the end — a
+  // tail-only window showed an anonymous C++ stack and the OOM recognition
+  // below never fired. Found measuring the vercel/next.js#89091 repro, whose
+  // measured process died at the cap and was reported as a generic exit.
+  let stderrHead = "";
+  let stderrTailBuffer = "";
   child.stderr?.on("data", (chunk: Buffer) => {
-    stderrTail = (stderrTail + chunk.toString()).slice(-2000);
+    const text = chunk.toString();
+    if (stderrHead.length < STDERR_WINDOW) {
+      stderrHead = (stderrHead + text).slice(0, STDERR_WINDOW);
+    }
+    stderrTailBuffer = (stderrTailBuffer + text).slice(-STDERR_WINDOW);
   });
+  const stderrWindow = (): string =>
+    stderrHead === stderrTailBuffer || stderrTailBuffer === ""
+      ? stderrHead
+      : `${stderrHead}\n[...]\n${stderrTailBuffer}`;
   let exited = false;
   activeChildren.add(child);
   child.once("exit", () => {
@@ -170,7 +192,7 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
     activeChildren.delete(child);
   });
   const failed = (): string | undefined =>
-    exited ? `server exited before becoming ready. ${explainStartupFailure(stderrTail)}` : undefined;
+    exited ? `server exited before becoming ready. ${explainStartupFailure(stderrWindow())}` : undefined;
 
   try {
     const controlPort = await pollUntil(
@@ -225,7 +247,7 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
       controlPort,
       explainExit: () =>
         exited
-          ? explainRuntimeFailure(stderrTail, options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB)
+          ? explainRuntimeFailure(stderrWindow(), options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB)
           : null,
       close: async () => {
         if (exited) {
