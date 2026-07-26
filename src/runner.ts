@@ -6,6 +6,7 @@ import { attributeDiff, type AttributedDiff } from "./attribution.js";
 import {
   assessConfidence,
   effectiveVerdict,
+  resolveCycles,
   warrantsIssueDraft,
   type ConfidenceReport,
 } from "./confidence.js";
@@ -427,12 +428,6 @@ async function writeEvidenceBundle(report: RunReport, workDir: string): Promise<
   await writeFile(report.bundle.htmlReport, renderHtmlReport(report));
 }
 
-/**
- * Cycles a second pass uses — the same figure the report recommends for a
- * manual re-run, so the tool follows its own advice.
- */
-export const resolveCycles = (cycles: number): number => Math.max(cycles * 2, 6);
-
 /** Skip, measure or record the failure for one route — never throws. */
 async function routeReportFor(
   context: MeasurementContext,
@@ -459,16 +454,32 @@ async function routeReportFor(
     ) {
       return first;
     }
+    // A Ctrl+C that lands after the first pass must not start a second one:
+    // the user asked the run to stop, and an inconclusive result is still a
+    // result worth keeping.
+    if (context.options.signal?.aborted === true) {
+      return first;
+    }
     // `inconclusive` means "the evidence does not decide" and the report knows
     // exactly what would: the same route, twice the cycles. Printing that
     // command and stopping asks someone whose pods are restarting to run the
     // tool twice; going and getting the evidence is the answer they came for.
     const cycles = resolveCycles(context.options.cycles ?? RITUAL_DEFAULTS.cycles);
     progress(`re-measuring ${route.path} with ${cycles} cycles: the first pass could not call it`);
-    return await measureRoute(context, route, requestPath, index, {
-      cycles,
-      dirSuffix: "-resolve",
-    });
+    try {
+      return await measureRoute(context, route, requestPath, index, {
+        cycles,
+        dirSuffix: "-resolve",
+      });
+    } catch (cause) {
+      // The second pass is a bonus, not a bet: losing it (port race lost
+      // twice, the app dying under the longer run, an interrupt mid-pass)
+      // must not discard the valid measurement already in hand.
+      progress(
+        `re-measurement of ${route.path} failed (${cause instanceof Error ? cause.message : String(cause)}) — keeping the first pass`
+      );
+      return first;
+    }
   } catch (cause) {
     const failure = cause instanceof Error ? cause.message : String(cause);
     progress(`failed ${label}: ${failure}`);

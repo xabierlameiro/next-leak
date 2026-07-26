@@ -1,7 +1,7 @@
 import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend } from "./trend.js";
-import { effectiveVerdict } from "./confidence.js";
+import { effectiveVerdict, resolveCycles } from "./confidence.js";
 import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
 
@@ -209,7 +209,7 @@ export function formatReport(report: RunReport): string {
   );
   if (inconclusive.length > 0) {
     const routeList = inconclusive.map((route) => route.route).join(",");
-    const moreCycles = Math.max(report.parameters.cycles * 2, 6);
+    const moreCycles = resolveCycles(report.parameters.cycles);
     lines.push(
       "",
       "hint: inconclusive means sustained sub-threshold growth — measure longer to resolve it:",

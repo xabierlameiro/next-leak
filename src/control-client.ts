@@ -19,7 +19,20 @@ class ControlError extends Error {
 }
 
 async function request(port: number, pathname: string): Promise<unknown> {
-  const response = await fetch(`http://127.0.0.1:${port}${pathname}`);
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${port}${pathname}`);
+  } catch (cause) {
+    // Bare "fetch failed" reads like a bug in this tool. Name the channel and
+    // the operation: the usual causes are the measured process dying (the
+    // ritual then surfaces its exit) or, on multi-GB heaps, a snapshot write
+    // blocking the child's event loop past the HTTP client's own timeout.
+    throw new ControlError(
+      `control channel ${pathname} on port ${port} did not answer ` +
+        `(${cause instanceof Error ? cause.message : String(cause)}) — ` +
+        `the measured process is gone or its event loop is blocked`
+    );
+  }
   if (!response.ok) {
     throw new ControlError(`control channel ${pathname} responded ${response.status}`);
   }

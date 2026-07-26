@@ -60,6 +60,13 @@ export type ConfidenceInput = {
 };
 
 /**
+ * Cycles a re-measurement uses when a verdict came back `inconclusive` — the
+ * same figure the report's manual re-run hint prints. One definition, imported
+ * by both, so the tool can never recommend one number and use another.
+ */
+export const resolveCycles = (cycles: number): number => Math.max(cycles * 2, 6);
+
+/**
  * The verdict a route's evidence actually supports.
  *
  * `trend.verdict` stays exactly as measured — the raw record must survive — so
