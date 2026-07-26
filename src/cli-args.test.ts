@@ -15,6 +15,7 @@ describe("parseCliArgs", () => {
         idleSeconds: null,
         maxOldSpaceMb: null,
         quick: false,
+        noResolve: false,
         diffAll: false,
         output: null,
       },
@@ -25,7 +26,7 @@ describe("parseCliArgs", () => {
     const parsed = parseCliArgs([
       "app", "--routes", "/api,/dashboard", "--cycles", "6", "--requests", "1000",
       "--connections", "20", "--idle", "8", "--max-old-space", "2048", "--quick",
-      "--diff-all", "--output", "/tmp/out",
+      "--diff-all", "--no-resolve", "--output", "/tmp/out",
     ]);
     if (parsed.kind !== "run") {
       throw new Error(`expected run, got ${parsed.kind}`);
@@ -39,6 +40,7 @@ describe("parseCliArgs", () => {
       idleSeconds: 8,
       maxOldSpaceMb: 2048,
       quick: true,
+      noResolve: true,
       diffAll: true,
       output: "/tmp/out",
     });

@@ -7,6 +7,7 @@ export type CliRunOptions = {
   idleSeconds: number | null;
   maxOldSpaceMb: number | null;
   quick: boolean;
+  noResolve: boolean;
   diffAll: boolean;
   output: string | null;
 };
@@ -49,6 +50,11 @@ const FLAGS: FlagSpec[] = [
     help: "Fast preset: 2000 requests x 4 cycles, 8s idle — same cycle count as the default, less traffic per cycle",
   },
   { flag: "--diff-all", value: "none", help: "Diff snapshots for stable routes too (slow)" },
+  {
+    flag: "--no-resolve",
+    value: "none",
+    help: "Do not re-measure inconclusive routes with more cycles (default: re-measure once)",
+  },
   { flag: "--output", value: "string", argName: "<dir>", help: "Where to write runs (default <app-dir>/.next-leak)" },
   { flag: "--help", alias: "-h", value: "none", help: "Show this help" },
   { flag: "--version", alias: "-v", value: "none", help: "Print the version" },
@@ -162,6 +168,9 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--diff-all":
       options.diffAll = true;
       return FLAG_OK;
+    case "--no-resolve":
+      options.noResolve = true;
+      return FLAG_OK;
     case "--output":
       options.output = value;
       return FLAG_OK;
@@ -220,6 +229,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     idleSeconds: null,
     maxOldSpaceMb: null,
     quick: false,
+    noResolve: false,
     diffAll: false,
     output: null,
   };

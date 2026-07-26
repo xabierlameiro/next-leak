@@ -153,10 +153,16 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
 
   const verdict = effectiveVerdict(route);
   const curve = route.samples.map(formatMb).join(" → ");
+  // A verdict the run had to go back for is not the same claim as one it got
+  // first time; saying so is the difference between a number and its provenance.
+  const resolved =
+    route.resolvedWithCycles === undefined
+      ? ""
+      : `  (resolved at ${route.resolvedWithCycles} cycles)`;
   return [
     `  ${VERDICT_ICON[verdict]} ${route.route}  ${verdict}  (${formatGrowth(
       route.growthPer1000Requests
-    )})  heap ${curve}`,
+    )})  heap ${curve}${resolved}`,
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),
     ...peakPressureLines(route, parameters),
@@ -173,9 +179,24 @@ export function formatReport(report: RunReport): string {
   // A verdict whose gate is not printed cannot be reproduced: the same route
   // judged against a different threshold is a different measurement.
   const { minGrowthPerCycle, loadRequests, cycles, maxOldSpaceMb } = report.parameters;
+  // Routes that needed a second pass were judged over more cycles than the run
+  // asked for; a footer quoting only the run's figure describes neither.
+  const resolvedCycles = [
+    ...new Set(
+      report.routes.flatMap((route) =>
+        route.status === "measured" && route.resolvedWithCycles !== undefined
+          ? [route.resolvedWithCycles]
+          : []
+      )
+    ),
+  ].sort((a, b) => a - b);
+  const cyclesLabel =
+    resolvedCycles.length === 0
+      ? `${cycles} cycles`
+      : `${cycles} cycles (${resolvedCycles.join(", ")} where resolved)`;
   lines.push(
     "",
-    `judged over ${cycles} cycles × ${loadRequests} requests, growth gate ` +
+    `judged over ${cyclesLabel} × ${loadRequests} requests, growth gate ` +
       `${(minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle ` +
       `(${formatGrowth((minGrowthPerCycle / loadRequests) * 1000)}), heap cap ${maxOldSpaceMb} MB`,
     `snapshots and run.json: ${report.workDir}`,

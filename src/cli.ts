@@ -121,6 +121,7 @@ async function main(): Promise<void> {
     ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),
     ...(options.maxOldSpaceMb !== null && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(options.diffAll && { diffAll: true }),
+    ...(options.noResolve && { resolveInconclusive: false }),
     ...(options.output !== null && { outputDir: options.output }),
     onProgress: (message) => console.error(`· ${message}`),
   });

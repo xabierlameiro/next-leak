@@ -232,11 +232,12 @@ describe("abandonment auditing", () => {
 
 describe("growth shape auditing", () => {
   it("accepts a 4x spread between cycles and warns just beyond it", () => {
+    const pad = [2 * MB, 2 * MB, 2 * MB];
     const at = assessConfidence(
-      input({ trend: trend({ deltas: [1 * MB, 4 * MB], growthPerCycle: 2.5 * MB }) })
+      input({ trend: trend({ deltas: [1 * MB, 4 * MB, ...pad], growthPerCycle: 2.5 * MB }) })
     );
     const beyond = assessConfidence(
-      input({ trend: trend({ deltas: [1 * MB, 4 * MB + 1], growthPerCycle: 2.5 * MB }) })
+      input({ trend: trend({ deltas: [1 * MB, 4 * MB + 1, ...pad], growthPerCycle: 2.5 * MB }) })
     );
 
     expect(codesOf(at)).toEqual([]);
@@ -292,7 +293,7 @@ describe("noise floor auditing", () => {
       input({
         trend: trend({
           growthPerCycle: 2 * MIN_GROWTH,
-          deltas: [2 * MIN_GROWTH, 2 * MIN_GROWTH],
+          deltas: Array.from({ length: 5 }, () => 2 * MIN_GROWTH),
         }),
       })
     );
@@ -300,7 +301,7 @@ describe("noise floor auditing", () => {
       input({
         trend: trend({
           growthPerCycle: 2 * MIN_GROWTH - 1,
-          deltas: [2 * MIN_GROWTH - 1, 2 * MIN_GROWTH - 1],
+          deltas: Array.from({ length: 5 }, () => 2 * MIN_GROWTH - 1),
         }),
       })
     );
@@ -313,7 +314,10 @@ describe("noise floor auditing", () => {
     const result = assessConfidence(
       input({
         minGrowthPerCycle: 4 * MB,
-        trend: trend({ growthPerCycle: 5 * MB, deltas: [5 * MB, 5 * MB] }),
+        trend: trend({
+          growthPerCycle: 5 * MB,
+          deltas: Array.from({ length: 5 }, () => 5 * MB),
+        }),
       })
     );
 
@@ -414,6 +418,93 @@ describe("heap ceiling audit", () => {
 
 // Measuring vercel/next.js#94919: 1500/1500 abandoned, 1 of them mid-stream.
 // The run looked like a clean test of stream teardown and had not touched it.
+// Measured 2026-07-26 on the app from vercel/next.js#94919 with --quick:
+// three of nine healthy routes came back `leak`, two with an issue draft, and
+// a repeat run disagreed with itself. Three deltas cannot carry an accusation
+// unless the growth is far larger than the noise that produced them.
+describe("a leak needs evidence proportional to its size", () => {
+  const MB = 1024 * 1024;
+  const gate = 256 * 1024;
+
+  const leakFrom = (deltas: number[]) => ({
+    verdict: "leak" as const,
+    growthPerCycle: deltas.reduce((sum, d) => sum + d, 0) / deltas.length,
+    deltas,
+    source: "heap" as const,
+  });
+
+  const audit = (deltas: number[]) =>
+    assessConfidence({
+      trend: leakFrom(deltas),
+      loadOutcomes: [{ phase: "cycle 1", sent: 2000, ok2xx: 2000 }],
+      settleOutcomes: [{ phase: "cycle 1", status: "settled", polls: 2 }],
+      minGrowthPerCycle: gate,
+    });
+
+  it("withdraws /missing, the false positive that shipped an issue draft", () => {
+    // The measured series: +3.43, -0.03, +2.76 MB over three deltas.
+    const result = audit([3.43 * MB, -0.03 * MB, 2.76 * MB]);
+    expect(result.supersededVerdict).toBe("inconclusive");
+    expect(codesOf(result)).toContain("thin-evidence");
+    expect(
+      warrantsIssueDraft({ trend: leakFrom([3.43 * MB, -0.03 * MB, 2.76 * MB]), confidence: result })
+    ).toBe(false);
+  });
+
+  it("withdraws the other two measured false positives", () => {
+    // /product-fail heap and /client-plp external, same run.
+    expect(audit([1.41 * MB, 2.78 * MB, 0.61 * MB]).supersededVerdict).toBe("inconclusive");
+    expect(audit([1.09 * MB, 2.02 * MB, 0.0]).supersededVerdict).toBe("inconclusive");
+  });
+
+  it("leaves #94919 alone: three deltas, but a hundred times the gate", () => {
+    const result = audit([25.6 * MB, 25.02 * MB, 24.77 * MB]);
+    expect(result.supersededVerdict).toBeUndefined();
+    expect(codesOf(result)).not.toContain("thin-evidence");
+  });
+
+  it("leaves #95094 alone: a stepwise leak measured over enough cycles", () => {
+    // canary.96, six cycles: +12.51, +11.24, +0.10, +16.83, +0.00 MB. Flat
+    // cycles are the shape of a stepwise leak; five deltas is the evidence
+    // that makes them believable.
+    const result = audit([12.51 * MB, 11.24 * MB, 0.1 * MB, 16.83 * MB, 0.0]);
+    expect(result.supersededVerdict).toBeUndefined();
+  });
+
+  it("accepts modest growth once there are enough cycles to trust it", () => {
+    // Same magnitude as the false positives, five deltas instead of three.
+    const result = audit([1.4 * MB, 2.8 * MB, 0.6 * MB, 1.2 * MB, 0.9 * MB]);
+    expect(result.supersededVerdict).toBeUndefined();
+  });
+
+  it("keeps the bundled fixture, which grows every cycle by design", () => {
+    // 8 KB retained per request x 300 requests = ~2.4 MB per cycle, on two
+    // deltas. Modest against the gate on average, but no cycle gives it back.
+    const result = audit([2.4 * MB, 2.3 * MB]);
+    expect(result.supersededVerdict).toBeUndefined();
+  });
+
+  it("says how many cycles and how far above the gate", () => {
+    const detail = audit([3.43 * MB, -0.03 * MB, 2.76 * MB]).warnings.find(
+      (warning) => warning.code === "thin-evidence"
+    )?.detail;
+    expect(detail).toContain("3 cycles");
+    expect(detail).toContain("weakest");
+    expect(detail).toContain("measure more cycles");
+  });
+
+  it("never touches a stable verdict", () => {
+    const result = assessConfidence({
+      trend: { verdict: "stable", growthPerCycle: 0.1 * MB, deltas: [0.1 * MB, -0.2 * MB], source: "heap" },
+      loadOutcomes: [{ phase: "cycle 1", sent: 2000, ok2xx: 2000 }],
+      settleOutcomes: [{ phase: "cycle 1", status: "settled", polls: 2 }],
+      minGrowthPerCycle: gate,
+    });
+    expect(result.supersededVerdict).toBeUndefined();
+    expect(codesOf(result)).not.toContain("thin-evidence");
+  });
+});
+
 describe("abandonment reaches the stream", () => {
   it("warns when everything was cut before the server responded", () => {
     const result = assessConfidence(

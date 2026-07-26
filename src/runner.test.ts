@@ -143,6 +143,100 @@ describe("estimateRun", () => {
   });
 });
 
+// `inconclusive` is the verdict that asks the user to run the tool again. On
+// the vercel/next.js#95094 repro at --quick it lands on a real leak: three
+// deltas cannot carry it, six can. The run goes back for the evidence itself.
+describe("resolving inconclusive routes", () => {
+  const inconclusive = (route: string): RitualResult => ({
+    ...ritualResult(route, [30 * MB, 31 * MB, 31 * MB, 32 * MB]),
+    trend: { verdict: "inconclusive", growthPerCycle: 0.4 * MB, deltas: [0, 0.4 * MB], source: "heap" },
+  });
+  const leaking = (route: string): RitualResult => ({
+    ...ritualResult(route, [30 * MB, 40 * MB, 50 * MB, 60 * MB, 70 * MB, 80 * MB, 90 * MB]),
+    trend: {
+      verdict: "leak",
+      growthPerCycle: 10 * MB,
+      deltas: Array.from({ length: 5 }, () => 10 * MB),
+      source: "heap",
+    },
+  });
+
+  it("measures again with more cycles and reports the resolved verdict", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const calls: Array<number | undefined> = [];
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", routeFilter: ["/"] },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          calls.push(options.cycles);
+          return calls.length === 1 ? inconclusive(options.route) : leaking(options.route);
+        },
+      }
+    );
+
+    const route = report.routes.find((entry) => entry.route === "/");
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.trend.verdict).toBe("leak");
+    expect(route.resolvedWithCycles).toBe(8);
+    // Default is 4 cycles; the second pass uses the figure the report tells a
+    // user to pass by hand.
+    expect(calls).toEqual([undefined, 8]);
+  });
+
+  it("leaves decided routes alone", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let calls = 0;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", routeFilter: ["/"] },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          calls += 1;
+          return leaking(options.route);
+        },
+      }
+    );
+    expect(calls).toBe(1);
+  });
+
+  it("does not go back when the user said not to", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let calls = 0;
+    const report = await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        routeFilter: ["/"],
+        resolveInconclusive: false,
+      },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          calls += 1;
+          return inconclusive(options.route);
+        },
+      }
+    );
+    expect(calls).toBe(1);
+    const route = report.routes.find((entry) => entry.route === "/");
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.resolvedWithCycles).toBeUndefined();
+  });
+
+  it("reports the second pass when it is still undecided", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", routeFilter: ["/"] },
+      { ...makeDeps([]), ritual: async (options) => inconclusive(options.route) }
+    );
+    const route = report.routes.find((entry) => entry.route === "/");
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.trend.verdict).toBe("inconclusive");
+    expect(route.resolvedWithCycles).toBe(8);
+  });
+});
+
 describe("runMeasurement", () => {
   it("measures static routes, skips dynamic ones, and survives failing routes", async () => {
     const appDir = await makeAppDir({
