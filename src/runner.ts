@@ -5,6 +5,7 @@ import path from "node:path";
 import { attributeDiff, type AttributedDiff } from "./attribution.js";
 import {
   assessConfidence,
+  effectiveVerdict,
   warrantsIssueDraft,
   type ConfidenceReport,
 } from "./confidence.js";
@@ -71,6 +72,11 @@ export type RouteReport =
       /** Null when there is no diff or no module registry. */
       attribution: AttributedDiff | null;
       signatures: MatchedSignature[];
+      /**
+       * Cycles used by the second pass, when the first came back
+       * `inconclusive` and the run went back for more evidence.
+       */
+      resolvedWithCycles?: number;
     };
 
 export type MeasuredRoute = Extract<RouteReport, { status: "measured" }>;
@@ -125,6 +131,11 @@ export type RunOptions = {
   diffAll?: boolean;
   /** Only measure routes matching these templates or prefixes. */
   routeFilter?: string[];
+  /**
+   * Measure a route again, with more cycles, when the first pass could not
+   * call it. Default true: the run should answer the question it was asked.
+   */
+  resolveInconclusive?: boolean;
   /** Abort between phases; remaining routes are reported as interrupted. */
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
@@ -322,19 +333,25 @@ async function measureRoute(
   context: MeasurementContext,
   route: DiscoveredRoute,
   requestPath: string,
-  index: number
+  index: number,
+  pass: { cycles: number; dirSuffix: string } | undefined = undefined
 ): Promise<RouteReport> {
   const { deps, options, target, workDir, routeConfig, registry, nextVersion, progress } = context;
   const result = await deps.ritual({
     serverPath: target.standaloneServer,
     route: requestPath,
-    workDir: path.join(workDir, `${String(index + 1).padStart(2, "0")}-${routeSlug(route.path)}`),
+    workDir: path.join(
+      workDir,
+      `${String(index + 1).padStart(2, "0")}-${routeSlug(route.path)}${pass?.dirSuffix ?? ""}`
+    ),
     bootstrapPath: options.bootstrapPath,
     appPort: await deps.freePort(),
     ...(options.warmupRequests !== undefined && { warmupRequests: options.warmupRequests }),
     ...(options.loadRequests !== undefined && { loadRequests: options.loadRequests }),
     ...(options.connections !== undefined && { connections: options.connections }),
-    ...(options.cycles !== undefined && { cycles: options.cycles }),
+    ...(pass !== undefined
+      ? { cycles: pass.cycles }
+      : options.cycles !== undefined && { cycles: options.cycles }),
     ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
     ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(routeConfig.headers !== undefined && { headers: routeConfig.headers }),
@@ -374,6 +391,7 @@ async function measureRoute(
     route: route.path,
     status: "measured",
     requestPath,
+    ...(pass !== undefined && { resolvedWithCycles: pass.cycles }),
     samples: result.samples,
     memorySamples: result.memorySamples,
     peaks: result.peaks,
@@ -409,6 +427,12 @@ async function writeEvidenceBundle(report: RunReport, workDir: string): Promise<
   await writeFile(report.bundle.htmlReport, renderHtmlReport(report));
 }
 
+/**
+ * Cycles a second pass uses — the same figure the report recommends for a
+ * manual re-run, so the tool follows its own advice.
+ */
+export const resolveCycles = (cycles: number): number => Math.max(cycles * 2, 6);
+
 /** Skip, measure or record the failure for one route — never throws. */
 async function routeReportFor(
   context: MeasurementContext,
@@ -427,7 +451,24 @@ async function routeReportFor(
   try {
     const asPath = requestPath === route.path ? "" : ` as ${requestPath}`;
     progress(`measuring ${label}${asPath}`);
-    return await measureRoute(context, route, requestPath, index);
+    const first = await measureRoute(context, route, requestPath, index);
+    if (
+      first.status !== "measured" ||
+      context.options.resolveInconclusive === false ||
+      effectiveVerdict(first) !== "inconclusive"
+    ) {
+      return first;
+    }
+    // `inconclusive` means "the evidence does not decide" and the report knows
+    // exactly what would: the same route, twice the cycles. Printing that
+    // command and stopping asks someone whose pods are restarting to run the
+    // tool twice; going and getting the evidence is the answer they came for.
+    const cycles = resolveCycles(context.options.cycles ?? RITUAL_DEFAULTS.cycles);
+    progress(`re-measuring ${route.path} with ${cycles} cycles: the first pass could not call it`);
+    return await measureRoute(context, route, requestPath, index, {
+      cycles,
+      dirSuffix: "-resolve",
+    });
   } catch (cause) {
     const failure = cause instanceof Error ? cause.message : String(cause);
     progress(`failed ${label}: ${failure}`);
@@ -488,6 +529,9 @@ async function planRun(
     `${routes.length} routes discovered` +
       (measurable === routes.length ? "" : ` · ${measurable} measurable`) +
       ` · estimated ${formatEstimate(estimate)}` +
+      (options.resolveInconclusive === false
+        ? ""
+        : " (inconclusive routes are measured again)") +
       // Long default runs are where first-time users give up; point at the two
       // ways out. Suppressed once load parameters were tuned by hand (or by
       // --quick, which arrives here as explicit loadRequests/idleMs).
