@@ -18,6 +18,7 @@ export default defineConfig({
       // exactly the cost mutation runs cannot afford per mutant.
       "src/bootstrap.test.ts",
       "src/cli-surface.test.ts",
+      "src/control-lifecycle.test.ts",
     ],
   },
 });
