@@ -9,12 +9,6 @@ export type LoadPhaseOptions = {
   /** Sent with every request (compression, cookies, auth). */
   headers?: Record<string, string>;
   /**
-   * Give up on each request after this many milliseconds, emulating clients
-   * that disconnect before the response arrives. Abandoned requests are
-   * expected, so they do not count against the error budget.
-   */
-  abandonAfterMs?: number;
-  /**
    * Maximum tolerated ratio of non-2xx responses plus socket errors before
    * the phase fails. A route that errors under load must fail the run, not
    * silently measure garbage. Default: 0.01 (1%).
@@ -71,9 +65,6 @@ export async function runLoadPhase(options: LoadPhaseOptions): Promise<LoadPhase
     amount: options.amount,
     connections: options.connections,
     ...(options.headers !== undefined && { headers: options.headers }),
-    ...(options.abandonAfterMs !== undefined && {
-      timeout: Math.max(Math.ceil(options.abandonAfterMs / 1000), 1),
-    }),
     ...(unique && { idReplacement: true }),
   });
 
@@ -91,9 +82,12 @@ export async function runLoadPhase(options: LoadPhaseOptions): Promise<LoadPhase
   // autocannon report requests as sent with zero recorded responses, which
   // the narrower check accepted: the route was never really loaded, yet it
   // would have produced a confident "stable" verdict.
-  // When abandoning on purpose, timeouts are the point of the exercise.
-  const expected = options.abandonAfterMs === undefined ? 0 : result.timeouts;
-  const failures = Math.max(options.amount - result.ok2xx - expected, 0);
+  //
+  // Client abandonment deliberately has no seat here: it once did, via
+  // autocannon's whole-second timeout, which cannot abandon a route that
+  // answers in milliseconds and cut before the first byte besides. The
+  // raw-socket phase (abandon-load.ts) is the one implementation.
+  const failures = Math.max(options.amount - result.ok2xx, 0);
   const ratio = options.amount === 0 ? 0 : failures / options.amount;
   if (ratio > (options.maxErrorRatio ?? 0.01)) {
     const unanswered = failures - result.non2xx - result.errors - result.timeouts;
