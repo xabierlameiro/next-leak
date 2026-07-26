@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/xabierlameiro/next-leak/compare/v0.4.0...v0.4.1) (2026-07-26)
+
+
+### Bug Fixes
+
+* stop calling healthy routes leaks, and answer the ones it cannot call ([#31](https://github.com/xabierlameiro/next-leak/issues/31)) ([b90f474](https://github.com/xabierlameiro/next-leak/commit/b90f474cc20c2738bfe7965bc7d897ac886de580))
+
 ## [0.4.0](https://github.com/xabierlameiro/next-leak/compare/v0.3.0...v0.4.0) (2026-07-26)
 
 
