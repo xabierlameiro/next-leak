@@ -13,6 +13,7 @@ import { MIN_GROWTH_NOISE_FLOOR, type TrendResult, type TrendVerdict } from "./t
  *   mid-stream teardown path was never reached
  * `spiky-growth`        — one cycle dominates, so the mean describes little
  * `near-threshold`      — growth barely clears the noise floor
+ * `thin-evidence`       — a leak called on too few cycles for its size
  * `near-heap-ceiling`   — the heap approached the cap the process ran under,
  *   so the curve was measured against a ceiling instead of running free
  */
@@ -24,6 +25,7 @@ export type WarningCode =
   | "abandon-before-response"
   | "spiky-growth"
   | "near-threshold"
+  | "thin-evidence"
   | "near-heap-ceiling";
 
 export type MeasurementWarning = {
@@ -83,6 +85,7 @@ export function effectiveVerdict(report: {
 const VERDICT_WEAKENING: ReadonlySet<WarningCode> = new Set([
   "near-threshold",
   "spiky-growth",
+  "thin-evidence",
 ]);
 
 /**
@@ -282,6 +285,56 @@ function heapCeilingWarnings(input: ConfidenceInput): MeasurementWarning[] {
  * only an *observed* moving heap invalidates: "unverified" means the run
  * never looked, which is a reason to say so, not to overturn the reading.
  */
+/**
+ * Deltas below which a leak verdict has to be large to be believed.
+ *
+ * Four cycles leave three deltas after the warm-up one is dropped, and three
+ * points of a heap oscillating a couple of MB around its plateau satisfy both
+ * leak shapes. Measured on 2026-07-26 against the app from vercel/next.js#94919
+ * with `--quick`: three of nine healthy routes came back `leak`, two of them
+ * with an issue draft, and a repeat run returned `stable` for two of the three.
+ */
+const THIN_EVIDENCE_MIN_DELTAS = 5;
+
+/**
+ * What every cycle must grow, as a multiple of the gate, for a leak called on
+ * thin evidence to stand.
+ *
+ * The mean is the wrong test here: the false positives averaged 4.1-8.2x the
+ * gate, and so does the bundled leaky fixture, which retains 8 KB per request
+ * by construction. What separates them is the *worst* cycle. The false
+ * positives all contain a cycle that gave memory back or stood still
+ * (-0.03 MB, 0.00 MB, +0.08 MB); a real leak measured on three deltas grows
+ * every one of them — the fixture by ~2.4 MB (9x), #94919 by ~25 MB (99x).
+ */
+const THIN_EVIDENCE_MIN_DELTA_RATIO = 4;
+
+function isThinEvidence(trend: TrendResult, minGrowth: number): boolean {
+  if (trend.deltas.length >= THIN_EVIDENCE_MIN_DELTAS || trend.deltas.length === 0) {
+    return false;
+  }
+  const smallest = Math.min(...trend.deltas);
+  return smallest < minGrowth * THIN_EVIDENCE_MIN_DELTA_RATIO;
+}
+
+function thinEvidenceWarnings(
+  trend: TrendResult,
+  minGrowth: number
+): MeasurementWarning[] {
+  if (trend.verdict !== "leak" || !isThinEvidence(trend, minGrowth)) {
+    return [];
+  }
+  const smallest = Math.min(...trend.deltas);
+  return [{
+    code: "thin-evidence",
+    detail:
+      `judged on ${trend.deltas.length} cycles, and its weakest grew ` +
+      `${mb(smallest)} against a ${mb(minGrowth)} gate — on that few cycles ` +
+      `ordinary oscillation reaches that, and a repeat run often disagrees; ` +
+      `measure more cycles to resolve it`,
+  }];
+}
+
 function isVerdictInvalid(input: ConfidenceInput): boolean {
   if (input.trend.verdict !== "leak") {
     return false;
@@ -293,7 +346,11 @@ function isVerdictInvalid(input: ConfidenceInput): boolean {
     input.abandonAfterMs !== undefined &&
     input.loadOutcomes.length > 0 &&
     input.loadOutcomes.every((outcome) => (outcome.abandoned ?? 0) === 0);
-  return neverSettled || abandonedNothing;
+  const thinEvidence = isThinEvidence(
+    input.trend,
+    input.minGrowthPerCycle ?? MIN_GROWTH_NOISE_FLOOR
+  );
+  return neverSettled || abandonedNothing || thinEvidence;
 }
 
 /**
@@ -312,6 +369,7 @@ export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
     ...loadWarnings(input.loadOutcomes, input.abandonAfterMs),
     ...growthShapeWarnings(input.trend),
     ...noiseFloorWarnings(input.trend, minGrowth),
+    ...thinEvidenceWarnings(input.trend, minGrowth),
     ...heapCeilingWarnings(input),
   ];
 

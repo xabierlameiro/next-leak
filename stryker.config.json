@@ -33,7 +33,8 @@
     "src/target.ts",
     "src/environment.ts",
     "src/confidence.ts",
-    "src/peak-pressure.ts"
+    "src/peak-pressure.ts",
+    "src/abandon-load.ts"
   ],
   "thresholds": {
     "high": 90,

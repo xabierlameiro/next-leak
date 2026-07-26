@@ -44,6 +44,18 @@ describe("formatReport", () => {
     expect(output).toContain("next-leak /apps/shop --routes / --cycles 8");
   });
 
+  it("says which cycle count a resolved verdict was judged over", () => {
+    const report = makeRunReport();
+    const healthy = report.routes[0];
+    if (healthy?.status !== "measured") throw new Error("fixture broken");
+    healthy.resolvedWithCycles = 8;
+    const output = formatReport(report);
+    expect(output).toContain("(resolved at 8 cycles)");
+    // The footer quotes the run's figure and the resolved one, not just the
+    // parameter the user passed.
+    expect(output).toContain("judged over 4 cycles (8 where resolved)");
+  });
+
   it("prints no hint when nothing is inconclusive", () => {
     expect(formatReport(makeRunReport())).not.toContain("hint:");
   });

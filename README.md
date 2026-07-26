@@ -104,6 +104,7 @@ Every report prints the gate it used.
 | `--idle <seconds>` | 30 | **Maximum** wait before each sample; the run continues as soon as the heap settles |
 | `--max-old-space <mb>` | 512 | Heap cap of each measured process. Raise it for apps whose legitimate working set is larger, or they die under measurement |
 | `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Same cycle count as the default; what it trades away is traffic per cycle, so it sits on the noise floor and is less sensitive to slow leaks. Explicit flags override it |
+| `--no-resolve` | off | Skip the second pass on inconclusive routes |
 | `--diff-all` | off | Diff snapshots for stable routes too |
 | `--output <dir>` | `<app>/.next-leak` | Where runs are written |
 
@@ -168,7 +169,7 @@ separates them, because each one has a different fix:
   flat but RSS keeps climbing, the report says so explicitly: that is an
   allocator, external-buffer or fragmentation problem, not a JS-heap leak.
 - **`leak`** — the report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. An `ISSUE-<route>.md` draft is generated; if the leak is app-owned, the draft tells you **not** to file it upstream.
-- **`inconclusive`** — sustained sub-threshold growth: measure longer. The CLI prints the exact re-run command (`--routes <those> --cycles 6`).
+- **`inconclusive`** — the evidence does not decide. The run does not stop there: any inconclusive route is **measured again automatically**, with twice the cycles, and the second pass is what you see (`resolved at 8 cycles` next to the verdict). On the reproduction for [#95094](https://github.com/vercel/next.js/issues/95094), `--quick` alone reports `inconclusive` on three deltas and then comes back with the leak. `--no-resolve` turns the second pass off; when even that is undecided, the re-run command is still printed.
 - **`failed`** — the route errored under load (auth redirects, POST-only endpoints). >1% non-2xx aborts measurement instead of measuring garbage. That's by design.
 
 ## Peak pressure: `stable` is not the same as safe
