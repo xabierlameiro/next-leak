@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/xabierlameiro/next-leak/compare/v0.4.2...v0.4.3) (2026-07-26)
+
+
+### Bug Fixes
+
+* own the control channel's deadlines instead of inheriting undici's ([#35](https://github.com/xabierlameiro/next-leak/issues/35)) ([44e2332](https://github.com/xabierlameiro/next-leak/commit/44e2332f748b6f2f15be3d0d5cab67904734e185))
+
 ## [0.4.2](https://github.com/xabierlameiro/next-leak/compare/v0.4.1...v0.4.2) (2026-07-26)
 
 
