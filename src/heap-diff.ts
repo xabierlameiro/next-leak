@@ -200,6 +200,17 @@ export function diffAgainstBaseline(
       (afterTypeSelfSizes.get(node.type) ?? 0) + node.self_size
     );
 
+    // Synthetic nodes are V8's scaffolding — the unnamed root, (GC roots),
+    // (Global handles). They name nothing and their retained size counts
+    // everything below them, so the root's delta is simply the heap's growth
+    // and it outranks every real object. Measuring vercel/next.js#94919 put
+    // `grown [synthetic] 1755.4 MB` at the top of a route whose heap grew
+    // 39 → 162 MB, with the one named object third. The chain walker already
+    // steps around these; findings must too.
+    if (node.type === "synthetic") {
+      return;
+    }
+
     if (!baseline.nodeIds.has(node.id)) {
       if (node.retainedSize >= resolved.newThresholdBytes) {
         const chain = walkChain(node, resolved.chainDepth);

@@ -4,7 +4,7 @@ export type AbandonPhaseOptions = {
   url: string;
   amount: number;
   connections: number;
-  /** Destroy the socket this many ms after sending the request. */
+  /** Destroy the socket this many ms after the first byte of the response. */
   abandonAfterMs: number;
   headers?: Record<string, string>;
 };
@@ -18,9 +18,21 @@ export type AbandonPhaseResult = {
    * different path (the server may never have begun rendering).
    */
   abandonedMidStream: number;
+  /** Abandonments where the first-byte budget expired in silence. */
+  abandonedBeforeResponse: number;
   completed: number;
   errors: number;
 };
+
+/**
+ * How long a request waits for its first byte before being written off.
+ *
+ * Only reached by routes that are not answering, so its exact value matters
+ * little; it exists so one hung route cannot stall a phase forever. Deliberately
+ * not a flag — `--help` is not the place to explain what to do about a server
+ * that sends nothing for five seconds.
+ */
+const FIRST_BYTE_BUDGET_MS = 5000;
 
 /**
  * Sends requests and hangs up before the response arrives.
@@ -31,8 +43,8 @@ export type AbandonPhaseResult = {
  * `ServerResponse` retention to an early disconnect, which only happens when
  * a client goes away mid-flight (closed tabs, load-balancer timeouts, bots).
  *
- * Raw sockets keep this honest: write the request, wait `abandonAfterMs`,
- * destroy the socket. No response is read.
+ * Raw sockets keep this honest: write the request, wait for the response to
+ * start, then wait `abandonAfterMs` and destroy the socket mid-stream.
  */
 export async function runAbandonPhase(
   options: AbandonPhaseOptions
@@ -52,6 +64,7 @@ export async function runAbandonPhase(
     sent: 0,
     abandoned: 0,
     abandonedMidStream: 0,
+    abandonedBeforeResponse: 0,
     completed: 0,
     errors: 0,
   };
@@ -77,28 +90,36 @@ export async function runAbandonPhase(
           result.abandoned += 1;
           if (responseStarted) {
             result.abandonedMidStream += 1;
+          } else {
+            result.abandonedBeforeResponse += 1;
           }
         }
         finish();
       };
 
-      // The clock starts when the request is on the wire, not when the socket
-      // is created: under concurrency the connect itself can take longer than
-      // the abandon window, and a request never sent teaches the server
-      // nothing.
+      // Only the first-byte budget is armed here. An earlier version started
+      // the abandon window on connect, which raced the server's first byte —
+      // and under load the server lost that race almost every time: measured
+      // against the vercel/next.js#94919 repro, 2 of ~1500 cuts per cycle
+      // landed mid-stream. The window has to start where the stream does.
       socket.once("connect", () => {
         result.sent += 1;
         socket.write(request);
-        timer = setTimeout(giveUp, options.abandonAfterMs);
+        timer = setTimeout(giveUp, FIRST_BYTE_BUDGET_MS);
         timer.unref();
       });
       // Receiving bytes is not the end of the experiment, it is the start of
       // the interesting part: a client that reads a chunk and then vanishes
       // leaves the server mid-stream, which is where stream-shaped leaks live
       // (vercel/next.js#94919 retains the RSC tee branch exactly there).
-      // Closing on the first byte made that case inexpressible.
       socket.on("data", () => {
+        if (responseStarted) {
+          return;
+        }
         responseStarted = true;
+        clearTimeout(timer);
+        timer = setTimeout(giveUp, options.abandonAfterMs);
+        timer.unref();
       });
       socket.once("end", () => {
         // The server finished the response before the timer fired.

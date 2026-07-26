@@ -126,6 +126,52 @@ describe("diffAgainstBaseline", () => {
   });
 });
 
+// V8's roots aggregate everything below them, so the root's growth is simply
+// the heap's growth. Reporting it as a finding put `grown [synthetic] 1755 MB`
+// above the one named object on the vercel/next.js#94919 measurement.
+describe("synthetic aggregates", () => {
+  it("never reports a synthetic node as a finding", () => {
+    const root = makeNode({ id: 1, type: "synthetic", name: "", retainedSize: 100 * KB });
+    const grownRoot = makeNode({
+      id: 1,
+      type: "synthetic",
+      name: "",
+      self_size: 500 * KB,
+      retainedSize: 9000 * KB,
+    });
+    const gcRoots = makeNode({
+      id: 2,
+      type: "synthetic",
+      name: "(GC roots)",
+      retainedSize: 8000 * KB,
+    });
+    const named = makeNode({ id: 3, name: "Array", self_size: 64, retainedSize: 100 * KB });
+    const grownNamed = makeNode({ id: 3, name: "Array", self_size: 64, retainedSize: 900 * KB });
+
+    const baseline = summarizeBaseline(makeHeap([root, named]), OPTIONS);
+    const diff = diffAgainstBaseline(baseline, makeHeap([grownRoot, gcRoots, grownNamed]), OPTIONS);
+
+    const reported = [...diff.grownNodes, ...diff.newNodes];
+    expect(reported.every((finding) => finding.nodeType !== "synthetic")).toBe(true);
+    // The named object next to it is still reported.
+    expect(diff.grownNodes.map((finding) => finding.name)).toContain("Array");
+  });
+
+  it("still counts synthetic bytes in the per-type deltas", () => {
+    const before = makeNode({ id: 1, type: "synthetic", name: "", self_size: 10 * KB });
+    const after = makeNode({ id: 1, type: "synthetic", name: "", self_size: 90 * KB });
+
+    const diff = diffAgainstBaseline(
+      summarizeBaseline(makeHeap([before]), OPTIONS),
+      makeHeap([after]),
+      OPTIONS
+    );
+
+    const synthetic = diff.typeDeltas.find((delta) => delta.type === "synthetic");
+    expect(synthetic?.deltaBytes).toBe(80 * KB);
+  });
+});
+
 describe("module id harvesting", () => {
   it("collects ids from cache element edges of module instances on the chain", () => {
     const leaked = makeNode({ id: 1, name: "Leak", self_size: 4 * KB, retainedSize: 200 * KB });
