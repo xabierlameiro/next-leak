@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/xabierlameiro/next-leak/compare/v0.3.0...v0.4.0) (2026-07-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* the same `abandonAfterMs` value produces different traffic, so runs recorded before this change are not comparable with runs after it.
+
+### Bug Fixes
+
+* start the abandon deadline at the first byte, not at the request ([#29](https://github.com/xabierlameiro/next-leak/issues/29)) ([bcc8c8d](https://github.com/xabierlameiro/next-leak/commit/bcc8c8d23947a9928c11adb93549237219677b8c))
+
 ## [0.3.0](https://github.com/xabierlameiro/next-leak/compare/v0.2.0...v0.3.0) (2026-07-25)
 
 
