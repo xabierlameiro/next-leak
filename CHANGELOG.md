@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/xabierlameiro/next-leak/compare/v0.5.0...v0.5.1) (2026-07-26)
+
+
+### Bug Fixes
+
+* keep both ends of the measured process's stderr, not just the tail ([#44](https://github.com/xabierlameiro/next-leak/issues/44)) ([254384b](https://github.com/xabierlameiro/next-leak/commit/254384b7db242455a682870572f6d336d39b32ed))
+
 ## [0.5.0](https://github.com/xabierlameiro/next-leak/compare/v0.4.3...v0.5.0) (2026-07-26)
 
 
