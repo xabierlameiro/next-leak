@@ -55,6 +55,8 @@ function ritualResult(route: string, samples: number[]): RitualResult {
       external: 0,
       arrayBuffers: 0,
     })),
+    unreclaimedSamples: [],
+    unreclaimedTrend: { verdict: "inconclusive" as const, growthPerCycle: 0, deltas: [] },
     baselineSnapshot: `/snap/${route}/baseline.heapsnapshot`,
     afterSnapshot: `/snap/${route}/after.heapsnapshot`,
     trend: {
