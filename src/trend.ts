@@ -66,6 +66,21 @@ export function minGrowthFor(requestsPerCycle: number): number {
 const STEPWISE_MIN_GROWING_CYCLES = 2;
 /** Share of net growth a series may give back and still count as monotonic. */
 const STEPWISE_MAX_DRAWDOWN_RATIO = 0.1;
+/**
+ * How far above the gate a series' mean growth may sit and still be acquitted
+ * by a flat or negative cycle.
+ *
+ * A give-back only means a plateau when the growth around it is small. On the
+ * repro of vercel/next.js#97424 — an app that died of OOM at a 1 GB heap cap
+ * and peaked at 4577 MB RSS — the deltas were
+ * [+129.6, -77.4, -75.5, +80.8, +53.9] MB against a 0.25 MB gate: mean growth
+ * 85x the gate, and the two negatives were enough to call it `stable`.
+ *
+ * Every healthy route ever measured here sits below 2x: the phase-0 fixtures
+ * below are 1.2x and 1.8x, and the worst of the July validation set was 1.96x.
+ * 8x leaves four times that headroom and still catches #97424 tenfold over.
+ */
+const ACQUITTAL_MAX_GROWTH_MULTIPLE = 8;
 
 /**
  * Largest give-back from a running peak, over the post-warm-up window.
@@ -114,6 +129,24 @@ function isStepwiseGrowth(
 }
 
 /**
+ * Whether a series is growing too much to be excused by a flat cycle.
+ *
+ * Both terms are load-bearing. The mean alone would flag a route that spikes
+ * once and comes back down — a transient, which this tool exists to tell apart
+ * from a leak; net growth alone would flag any route that ends a hair above
+ * where it started. Together they describe a series that is both large and
+ * going somewhere, which is not something six samples can acquit.
+ */
+function isTooLargeToAcquit(
+  deltas: readonly number[],
+  mean: number,
+  minGrowth: number
+): boolean {
+  const netGrowth = deltas.reduce((sum, delta) => sum + delta, 0);
+  return mean >= minGrowth * ACQUITTAL_MAX_GROWTH_MULTIPLE && netGrowth > 0;
+}
+
+/**
  * Classifies a series of post-GC retained-heap samples — baseline first, then
  * one sample per load cycle — as leaking or stable.
  *
@@ -146,12 +179,16 @@ export function classifyTrend(samples: readonly number[], options: TrendOptions 
 
   // Post-GC samples of a real leak grow every cycle; a healthy route
   // oscillates around its plateau, so at least one delta goes flat or
-  // negative (observed on every healthy phase-0 run). Exactly three outcomes:
+  // negative (observed on every healthy phase-0 run). Four outcomes:
   //   leak         — every cycle grows by at least the threshold
-  //   stable       — some cycle went flat/down, or the mean is below the
-  //                  threshold (small consistent drift is measurement noise)
+  //   stable       — some cycle went flat/down while the growth around it was
+  //                  small, or the mean is below the threshold (small
+  //                  consistent drift is measurement noise)
   //   inconclusive — never flat, no cycle reaches the threshold alone, yet
-  //                  the mean does: too close to call, measure more cycles
+  //                  the mean does: too close to call, measure more cycles.
+  //                  Also where a large oscillating series lands: the
+  //                  acquittal is withdrawn, but a magnitude is not a shape
+  //                  and will not carry an accusation.
   if (allGrow) {
     return { verdict: "leak", growthPerCycle: mean, deltas, source: "heap" };
   }
@@ -159,6 +196,9 @@ export function classifyTrend(samples: readonly number[], options: TrendOptions 
     return { verdict: "leak", growthPerCycle: mean, deltas, source: "heap" };
   }
   if (anyFlatOrDown || mean < minGrowth) {
+    if (isTooLargeToAcquit(deltas, mean, minGrowth)) {
+      return { verdict: "inconclusive", growthPerCycle: mean, deltas, source: "heap" };
+    }
     return { verdict: "stable", growthPerCycle: mean, deltas, source: "heap" };
   }
   return { verdict: "inconclusive", growthPerCycle: mean, deltas, source: "heap" };

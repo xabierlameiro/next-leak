@@ -210,10 +210,19 @@ describe("stepwise growth", () => {
     expect(result.growthPerCycle).toBeGreaterThan(10 * MB);
   });
 
-  it("still calls an oscillating route stable, however small the dip", () => {
-    // A healthy route gives back a real share of what it took. Measured
-    // healthy routes drew down 22–33% of net growth; this is 20%.
+  it("leaves an oscillating route undecided once the dip is dwarfed by the climb", () => {
+    // A healthy route gives back a real share of what it took, and this one
+    // draws down 20% of net growth — but it also averages 6 MB per cycle,
+    // 24x the gate. Give-back only acquits while the growth around it is
+    // small; every healthy route ever measured here averaged under 2x.
     const samples = [10 * MB, 20 * MB, 30 * MB, 28 * MB, 38 * MB];
+    expect(classifyTrend(samples).verdict).toBe("inconclusive");
+  });
+
+  it("still calls a modest oscillating route stable, however small the dip", () => {
+    // Same shape, scaled to the magnitude of a real healthy route: 0.3 MB per
+    // cycle against the 256 KiB gate.
+    const samples = [10 * MB, 20 * MB, 20.5 * MB, 20.4 * MB, 20.9 * MB];
     expect(classifyTrend(samples).verdict).toBe("stable");
   });
 
@@ -240,6 +249,68 @@ describe("stepwise growth", () => {
     const result = classifyMemoryTrend(flat, stepwise);
 
     expect(result.verdict).toBe("leak");
+    expect(result.source).toBe("external");
+  });
+});
+
+// An app that dies of OOM must not come back `stable`. The acquittal for a
+// flat or negative cycle is bounded by how much the series grew around it.
+describe("withdrawn acquittal on large oscillating series", () => {
+  // Real measurement, 2026-08-17: the repro of vercel/next.js#97424 measured
+  // at 300 requests per cycle. The process was killed at a 512 MB heap cap and
+  // again at 1024 MB, and peaked at 4577 MB RSS; this run reported `stable`.
+  const ISSUE_97424 = [861.7, 129.4, 253.0, 179.1, 107.1, 184.1, 235.5].map((mb) => mb * MB);
+  const GATE_AT_300_REQUESTS = minGrowthFor(300);
+
+  it("leaves the #97424 series undecided instead of calling it stable", () => {
+    const result = classifyTrend(ISSUE_97424, { minGrowthPerCycle: GATE_AT_300_REQUESTS });
+    expect(result.verdict).toBe("inconclusive");
+  });
+
+  it("does not turn the #97424 series into an accusation", () => {
+    // A magnitude is not a shape: the evidence defeats the acquittal without
+    // supporting a leak verdict.
+    const result = classifyTrend(ISSUE_97424, { minGrowthPerCycle: GATE_AT_300_REQUESTS });
+    expect(result.verdict).not.toBe("leak");
+  });
+
+  it("keeps the measured healthy routes on the acquitted side of the line", () => {
+    // The phase-0 fixtures that do reach this branch: both dip, and both
+    // average well under 2x the gate. The 8x line has to clear them by a wide
+    // margin or the July false positives come back through another door.
+    const macos = [29.4 * MB, 31.5 * MB, 32.3 * MB, 32.1 * MB];
+    const linux = [28.0 * MB, 32.3 * MB, 32.1 * MB, 33.2 * MB];
+
+    expect(classifyTrend(macos).verdict).toBe("stable");
+    expect(classifyTrend(linux).verdict).toBe("stable");
+  });
+
+  it("withdraws the acquittal from the same shape scaled up tenfold", () => {
+    // Identical curve shape to the healthy Linux fixture, ten times the
+    // magnitude. Shape alone no longer decides it.
+    const samples = [280 * MB, 323 * MB, 321 * MB, 332 * MB];
+    expect(classifyTrend(samples).verdict).toBe("inconclusive");
+  });
+
+  it("acquits a large oscillation that ends where it started", () => {
+    // Net growth of zero over the analyzed window is a transient, however big
+    // the swings: the series has to be going somewhere.
+    const samples = [10 * MB, 40 * MB, 90 * MB, 30 * MB, 40 * MB];
+    expect(classifyTrend(samples).verdict).toBe("stable");
+  });
+
+  it("acquits a large oscillation that ends below where it started", () => {
+    const samples = [10 * MB, 40 * MB, 90 * MB, 30 * MB, 35 * MB];
+    expect(classifyTrend(samples).verdict).toBe("stable");
+  });
+
+  it("withdraws the acquittal on external memory too", () => {
+    const flatHeap = [10 * MB, 11 * MB, 11 * MB, 11 * MB, 11 * MB];
+    const result = classifyMemoryTrend(flatHeap, ISSUE_97424, {
+      minGrowthPerCycle: GATE_AT_300_REQUESTS,
+    });
+
+    expect(result.verdict).toBe("inconclusive");
     expect(result.source).toBe("external");
   });
 });
