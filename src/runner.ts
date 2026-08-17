@@ -50,6 +50,17 @@ export type RouteReport =
        * here is post-GC; this is the one a container limit is judged against.
        */
       peaks: PeakSample[];
+      /**
+       * One reading per cycle taken before any forced collection, and the
+       * trend over them. What a production process holds between full GCs is
+       * not what this tool's verdict measures — see `unreclaimed-retention`.
+       * Empty when a reading was lost: a hole would make every later delta
+       * span two cycles.
+       */
+      unreclaimedSamples: HeapSample[];
+      unreclaimedTrend: TrendResult;
+      /** Requests each cycle served — what the growth rates normalize by. */
+      requestsPerCycle: number;
       /** RSS growth per 1000 requests, computed like the heap figure. */
       rssPer1000Requests: number;
       /** Wall-clock per phase — explains where a long run spent its time. */
@@ -396,6 +407,9 @@ async function measureRoute(
     samples: result.samples,
     memorySamples: result.memorySamples,
     peaks: result.peaks,
+    unreclaimedSamples: result.unreclaimedSamples,
+    unreclaimedTrend: result.unreclaimedTrend,
+    requestsPerCycle: result.requestsPerCycle,
     timings: result.timings,
     loadOutcomes: result.loadOutcomes,
     settleOutcomes: result.settleOutcomes,
