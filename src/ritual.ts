@@ -101,6 +101,21 @@ export type RitualResult = {
   memorySamples: HeapSample[];
   /** Highest memory seen during each load cycle, sampled without collecting. */
   peaks: PeakSample[];
+  /**
+   * One reading per cycle taken before any collection is forced — what the
+   * process is holding on its own.
+   *
+   * Every other number here is post-GC, which is what makes a verdict mean
+   * something and is also blind to a whole class of leak: memory a full GC
+   * would reclaim that a production process never runs one often enough to
+   * (vercel/next.js#96533). Absolute values overstate retention — this is
+   * taken seconds after load, not hours, so it includes garbage not yet
+   * collected — but a roughly constant offset across identical cycles cancels
+   * out of the deltas the trend is read from.
+   */
+  unreclaimedSamples: HeapSample[];
+  /** Trend over `unreclaimedSamples`. Reported, never the verdict. */
+  unreclaimedTrend: TrendResult;
   baselineSnapshot: string;
   afterSnapshot: string;
   trend: TrendResult;
@@ -132,6 +147,28 @@ const SETTLE_TOLERANCE = 0.01;
  * port from the app, so the measured request path never sees them.
  */
 const PEAK_POLL_MS = 250;
+
+/**
+ * How long to let a cycle settle before reading memory without collecting.
+ *
+ * Reading the instant load stops catches the heap at its most volatile —
+ * in-flight buffers, possibly a collection already under way — and the
+ * cycle-to-cycle variance would swamp the trend this reading exists to show.
+ *
+ * One settle poll, deliberately: nothing in this ritual sleeps longer than
+ * `SETTLE_POLL_MS` in one go, so a run stays responsive to Ctrl+C.
+ */
+const UNRECLAIMED_SETTLE_MS = SETTLE_POLL_MS;
+
+/**
+ * The pre-collection wait, taken *out of* the idle rather than added to it.
+ *
+ * Capped at a quarter of the idle so short profiles keep their settle budget:
+ * `--quick` idles for 8 s, and a flat 3 s would be nearly half of it.
+ */
+export function unreclaimedSettleFor(idleMs: number): number {
+  return Math.min(UNRECLAIMED_SETTLE_MS, Math.floor(idleMs / 4));
+}
 
 /**
  * Polls the measured process while a load phase runs, keeping the maximum of
@@ -357,6 +394,8 @@ export async function runRitual(
     );
 
     const memorySamples: HeapSample[] = [baseline.sample];
+    const unreclaimedSamples: HeapSample[] = [];
+    let unreclaimedLost = false;
     const peaks: PeakSample[] = [];
     let afterSnapshot = "";
     for (let cycle = 1; cycle <= cycles; cycle += 1) {
@@ -370,8 +409,26 @@ export async function runRitual(
           peaks.push(await poller.stop());
         }
       });
+      // Read what the process holds before anything is collected. The wait
+      // comes out of the idle below, not on top of it: `waitUntilSettled`
+      // forces a GC on every poll, so this is the only point in the cycle
+      // where the process can be observed holding its own memory.
+      const unreclaimedSettleMs = unreclaimedSettleFor(idleMs);
+      await timed(`cycle ${cycle} unreclaimed read`, async () => {
+        await deps.sleep(unreclaimedSettleMs);
+        try {
+          unreclaimedSamples.push(await deps.readMemory(app.controlPort));
+        } catch {
+          // A missed reading leaves a hole, and a hole makes every later delta
+          // span two cycles instead of one. Drop the series rather than report
+          // a trend over it; the verdict does not depend on it, and if the app
+          // is actually gone the post-GC sample below says so properly.
+          unreclaimedLost = true;
+        }
+      });
+
       const settle = await timed(`cycle ${cycle} settle`, () =>
-        waitUntilSettled(app.controlPort, idleMs, deps)
+        waitUntilSettled(app.controlPort, idleMs - unreclaimedSettleMs, deps)
       );
       settleOutcomes.push({ phase: `cycle ${cycle}`, ...settle });
 
@@ -400,6 +457,16 @@ export async function runRitual(
       samples,
       memorySamples,
       peaks,
+      unreclaimedSamples: unreclaimedLost ? [] : unreclaimedSamples,
+      // The first cycle plays the part the baseline plays for the post-GC
+      // series, so both trends drop a warm-up delta and stay comparable.
+      unreclaimedTrend: unreclaimedLost
+        ? { verdict: "inconclusive", growthPerCycle: 0, deltas: [] }
+        : classifyMemoryTrend(
+            unreclaimedSamples.map((sample) => sample.heapUsed),
+            unreclaimedSamples.map((sample) => sample.external),
+            { minGrowthPerCycle }
+          ),
       baselineSnapshot: baseline.file,
       afterSnapshot,
       trend: classifyMemoryTrend(samples, externalSamples, { minGrowthPerCycle }),

@@ -97,6 +97,32 @@ describe("formatReport", () => {
   it("says nothing about peaks on a proportionate route", () => {
     expect(formatReport(makeRunReport())).not.toContain("peak pressure");
   });
+
+  it("reports unreclaimed retention beside a stable verdict", () => {
+    // The vercel/next.js#96533 shape: climbs before collection, flat after —
+    // a forced GC takes it back, a production process may never run one.
+    const report = makeRunReport();
+    const healthy = report.routes[0];
+    if (healthy?.status !== "measured") {
+      throw new Error("fixture broken");
+    }
+    healthy.unreclaimedTrend = {
+      verdict: "leak",
+      growthPerCycle: 10 * MB,
+      deltas: [10 * MB, 10 * MB],
+      source: "external",
+    };
+    const output = formatReport(report);
+
+    expect(output).toContain("stable");
+    expect(output).toContain("unreclaimed");
+    expect(output).toContain("external memory");
+    expect(output).toContain("2.00 MB/1000 req");
+  });
+
+  it("says nothing about unreclaimed memory on a route that is flat both ways", () => {
+    expect(formatReport(makeRunReport())).not.toContain("unreclaimed");
+  });
 });
 
 // Renderer regressions: the mutation run showed the report bodies were only

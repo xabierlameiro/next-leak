@@ -1,8 +1,12 @@
 import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
-import { classifyTrend } from "./trend.js";
+import { classifyTrend, type TrendVerdict } from "./trend.js";
 import { effectiveVerdict, resolveCycles } from "./confidence.js";
 import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
+import {
+  assessUnreclaimedRetention,
+  describeUnreclaimedRetention,
+} from "./unreclaimed-retention.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
 
 type MeasuredRouteView = Extract<RouteReport, { status: "measured" }>;
@@ -143,6 +147,22 @@ function peakPressureLines(route: MeasuredRouteView, parameters: RunParameters):
   return pressure === null ? [] : [`      ▲ peak pressure: ${describePeakPressure(pressure)}`];
 }
 
+/**
+ * Memory held before collection is a third question again — not what survives
+ * a GC, and not what the process reached under load, but what it is sitting on
+ * between collections. Reported next to the verdict for the same reason.
+ */
+function unreclaimedLines(route: MeasuredRouteView, verdict: TrendVerdict): string[] {
+  const retention = assessUnreclaimedRetention({
+    unreclaimedTrend: route.unreclaimedTrend,
+    verdict,
+    requestsPerCycle: route.requestsPerCycle,
+  });
+  return retention === null
+    ? []
+    : [`      ▲ unreclaimed: ${describeUnreclaimedRetention(retention)}`];
+}
+
 function routeLines(route: RouteReport, parameters: RunParameters): string[] {
   if (route.status === "skipped") {
     return [`  – ${route.route}  skipped: ${route.reason}`];
@@ -166,6 +186,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),
     ...peakPressureLines(route, parameters),
+    ...unreclaimedLines(route, verdict),
     ...findingLines(route),
   ];
 }

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { requestMemory } from "./control-client.js";
 import type { LaunchedApp } from "./launcher.js";
 import type { LoadPhaseResult } from "./load.js";
-import { runRitual, type RitualDeps } from "./ritual.js";
+import { runRitual, unreclaimedSettleFor, type RitualDeps } from "./ritual.js";
 
 const MB = 1024 * 1024;
 
@@ -178,11 +178,17 @@ describe("runRitual", () => {
     expect(shape[1]).toBe("snapshot:baseline");
     expect(shape.filter((event) => event === "load:5000")).toHaveLength(4);
     expect(shape.at(-1)).toBe("snapshot:after");
-    // At least one forced GC between each load and its sample.
+    // Every cycle's sample is preceded by a forced collection: a `gc` for the
+    // intermediate cycles, the after-snapshot for the last one. Asserted over
+    // the whole span to the next load rather than a fixed-width window, so
+    // adding a phase inside the cycle cannot silently void the check.
     for (const [index, event] of shape.entries()) {
-      if (event === "load:5000") {
-        expect(shape.slice(index + 1, index + 3)).toContain("gc");
+      if (event !== "load:5000") {
+        continue;
       }
+      const nextLoad = shape.findIndex((later, at) => at > index && later === "load:5000");
+      const cycle = shape.slice(index + 1, nextLoad === -1 ? undefined : nextLoad);
+      expect(cycle.some((phase) => phase === "gc" || phase === "snapshot:after")).toBe(true);
     }
     expect(result.samples).toEqual([29 * MB, 31 * MB, 33 * MB, 35 * MB, 37 * MB]);
     expect(result.trend.verdict).toBe("leak");
@@ -473,10 +479,13 @@ describe("mutation-hardening: ritual", () => {
       "warm-up",
       "baseline snapshot",
       "cycle 1 load",
+      "cycle 1 unreclaimed read",
       "cycle 1 settle",
       "cycle 2 load",
+      "cycle 2 unreclaimed read",
       "cycle 2 settle",
       "cycle 3 load",
+      "cycle 3 unreclaimed read",
       "cycle 3 settle",
       "after snapshot",
     ]);
@@ -485,6 +494,64 @@ describe("mutation-hardening: ritual", () => {
       "cycle 2",
       "cycle 3",
     ]);
+  });
+});
+
+// Every other number in a run is post-GC, which is what makes the verdict
+// mean something and is also blind to memory a full GC would reclaim that a
+// production process never runs one often enough to (vercel/next.js#96533).
+describe("unreclaimed retention", () => {
+  it("caps the pre-collection wait at a quarter of the idle", () => {
+    // --quick idles for 8s: a flat 2s wait would be a quarter of its budget,
+    // and anything shorter must scale down rather than eat the settle.
+    expect(unreclaimedSettleFor(30_000)).toBe(2000);
+    expect(unreclaimedSettleFor(8000)).toBe(2000);
+    expect(unreclaimedSettleFor(4000)).toBe(1000);
+    expect(unreclaimedSettleFor(0)).toBe(0);
+  });
+
+  it("records one pre-collection reading per cycle", async () => {
+    harness = await makeHarness([29 * MB, 30 * MB, 31 * MB, 32 * MB]);
+    const result = await runRitual({ ...(await baseOptions()), cycles: 3 }, harness.deps);
+
+    expect(result.unreclaimedSamples).toHaveLength(3);
+    expect(result.samples).toHaveLength(4); // baseline + 3 cycles, unchanged
+  });
+
+  it("waits idle/4 before the reading and hands the rest to the settle", async () => {
+    harness = await makeHarness([29 * MB, 30 * MB, 31 * MB, 32 * MB]);
+    await runRitual({ ...(await baseOptions()), cycles: 3, idleMs: 4000 }, harness.deps);
+
+    // Sleeps here are fake and instant, so their sum is not wall clock and
+    // cannot show the total idle. What it does show is the shape: each cycle
+    // opens its idle with the 1000 ms pre-collection wait (4000 / 4) before
+    // the first `mem`, and the settle that follows never blocks longer than
+    // one poll.
+    const idle = harness.events.filter(
+      (event) => event === "mem" || event === "gc" || event.startsWith("sleep:")
+    );
+    const firstCycle = idle.slice(idle.indexOf("sleep:1000"));
+
+    expect(firstCycle[0]).toBe("sleep:1000");
+    expect(firstCycle[1]).toBe("mem");
+    expect(
+      idle
+        .filter((event) => event.startsWith("sleep:"))
+        .map((event) => Number(event.split(":")[1]))
+        .every((ms) => ms <= 2000)
+    ).toBe(true);
+  });
+
+  it("drops the whole series when a reading is lost", async () => {
+    // A hole makes every later delta span two cycles instead of one, so a
+    // partial series is worse than none. The verdict must survive it.
+    harness = await makeHarness([29 * MB, 30 * MB, 31 * MB, 32 * MB], { failMemory: true });
+    const result = await runRitual({ ...(await baseOptions()), cycles: 3 }, harness.deps);
+
+    expect(result.unreclaimedSamples).toEqual([]);
+    expect(result.unreclaimedTrend.verdict).toBe("inconclusive");
+    expect(result.samples).toHaveLength(4);
+    expect(result.trend.verdict).toBeDefined();
   });
 });
 

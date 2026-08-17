@@ -22,6 +22,20 @@ const cleanPhases = () => ({
       polls: 40,
     },
   ],
+  requestsPerCycle: 5000,
+  // Flat before collection as well as after it: no unreclaimed note.
+  unreclaimedSamples: [40.1, 40.4, 40.2, 40.3].map((mb) => ({
+    gcExposed: true,
+    heapUsed: mb * MB,
+    rss: 190 * MB,
+    external: 2 * MB,
+    arrayBuffers: 1 * MB,
+  })),
+  unreclaimedTrend: {
+    verdict: "stable" as const,
+    growthPerCycle: 0.05 * MB,
+    deltas: [-0.2 * MB, 0.1 * MB],
+  },
 });
 
 export function makeRunReport(): RunReport {
