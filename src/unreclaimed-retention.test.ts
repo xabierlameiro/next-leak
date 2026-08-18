@@ -55,12 +55,14 @@ describe("assessUnreclaimedRetention", () => {
 
     expect(retention).not.toBeNull();
     expect(retention?.class).toBe("arrayBuffers");
-    expect((retention?.medianGapBytes ?? 0) / MB).toBeCloseTo(3.96, 1);
+    // The largest gap observed, not the typical one: a cycle that held 5.40 MB
+    // proves the process can, while a cycle at zero only proves it had just
+    // been collected.
+    expect((retention?.largestGapBytes ?? 0) / MB).toBeCloseTo(5.4, 1);
   });
 
   it("names the class where holding is most out of proportion, not the biggest", () => {
-    // Measured ratios: heap 0.68x, external 0.99x, arrayBuffers 3.96x. The
-    // heap gap is far larger in megabytes (18.8 vs 3.96), but arrayBuffers is
+    // The heap gap is far larger in megabytes (24.8 vs 5.40), but arrayBuffers is
     // where the process holds many times what it keeps — that names the
     // mechanism the issue describes.
     const retention = assessUnreclaimedRetention({
@@ -187,7 +189,7 @@ describe("assessUnreclaimedRetention", () => {
     });
 
     // Only two cycles pair up; the rule still runs on what it has.
-    expect(retention === null || retention.medianGapBytes > 0).toBe(true);
+    expect(retention === null || retention.largestGapBytes > 0).toBe(true);
   });
 });
 
@@ -195,7 +197,7 @@ describe("describeUnreclaimedRetention", () => {
   it("states the gap, the class and its own limits", () => {
     const line = describeUnreclaimedRetention({
       class: "arrayBuffers",
-      medianGapBytes: 3.96 * MB,
+      largestGapBytes: 3.96 * MB,
       retainedBytes: 0.32 * MB,
       ratio: 3.96,
     });
@@ -209,11 +211,40 @@ describe("describeUnreclaimedRetention", () => {
   it("labels external memory readably", () => {
     const line = describeUnreclaimedRetention({
       class: "external",
-      medianGapBytes: 5 * MB,
+      largestGapBytes: 5 * MB,
       retainedBytes: 2 * MB,
       ratio: 2.5,
     });
 
     expect(line).toContain("external memory");
+  });
+});
+
+// Run 3 of the real reproduction: four of six cycles collected on their own
+// just before the reading, so their gap is zero. A median reports nothing
+// about an app that demonstrably held 3.79 MB in another cycle.
+describe("a run where most cycles happened to be collected", () => {
+  const RUN_3 = {
+    unreclaimed: samples({
+      heap: [40, 40, 40, 40, 40, 40],
+      arrayBuffers: [0.32, 1.81, 0.32, 0.32, 4.11, 0.32],
+    }),
+    postGc: samples({
+      heap: [27.1, 26.3, 27.3, 27.6, 27.7, 27.8, 27.8],
+      arrayBuffers: [0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32],
+    }),
+  };
+
+  it("still reports what the process was seen holding", () => {
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: RUN_3.unreclaimed,
+      memorySamples: RUN_3.postGc,
+      verdict: "stable",
+      verdictIsWellSupported: false,
+    });
+
+    expect(retention).not.toBeNull();
+    expect(retention?.class).toBe("arrayBuffers");
+    expect((retention?.largestGapBytes ?? 0) / MB).toBeCloseTo(3.79, 1);
   });
 });

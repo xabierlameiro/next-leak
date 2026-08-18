@@ -27,11 +27,19 @@ import {
 } from "./ritual.js";
 import { matchSignatures, readNextVersion, type MatchedSignature } from "./signatures.js";
 import { validateTarget, type ValidatedTarget } from "./target.js";
+import { planRevalidation, revalidateSecondsFor } from "./isr.js";
 import { minGrowthFor, type TrendResult } from "./trend.js";
 
 export type RouteReport =
   | { route: string; status: "skipped"; reason: string }
   | { route: string; status: "failed"; reason: string }
+  /**
+   * The route was reachable, but the load could not have exercised the code
+   * path it represents — so no verdict is emitted. Measuring an ISR route
+   * without driving revalidation reports a flat curve about the static cache,
+   * which reads as health and is not.
+   */
+  | { route: string; status: "not-exercised"; reason: string }
   | {
       route: string;
       status: "measured";
@@ -61,6 +69,13 @@ export type RouteReport =
       unreclaimedTrend: TrendResult;
       /** Requests each cycle served — what the growth rates normalize by. */
       requestsPerCycle: number;
+      /**
+       * Seconds of the ISR revalidation period this route was driven through,
+       * when it has one. Absent on routes not served from the ISR cache.
+       * Recorded because a curve measured against a cache and one measured
+       * against a re-render are different experiments.
+       */
+      revalidatedEverySeconds?: number;
       /** RSS growth per 1000 requests, computed like the heap figure. */
       rssPer1000Requests: number;
       /** Wall-clock per phase — explains where a long run spent its time. */
@@ -349,6 +364,14 @@ async function measureRoute(
   pass: { cycles: number; dirSuffix: string } | undefined = undefined
 ): Promise<RouteReport> {
   const { deps, options, target, workDir, routeConfig, registry, nextVersion, progress } = context;
+  // An ISR route serves its cache unless the request carries the build's own
+  // revalidation header; without it the load measures the static cache and
+  // nothing else.
+  const plan = planRevalidation(target.prerender, route.path, routeConfig.headers);
+  const revalidateSeconds = revalidateSecondsFor(target.prerender, route.path);
+  const driven = plan.kind === "drive" ? plan.headers : {};
+  const merged = { ...driven, ...(routeConfig.headers ?? {}) };
+  const headers = Object.keys(merged).length === 0 ? undefined : merged;
   const result = await deps.ritual({
     serverPath: target.standaloneServer,
     route: requestPath,
@@ -366,7 +389,7 @@ async function measureRoute(
       : options.cycles !== undefined && { cycles: options.cycles }),
     ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
     ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
-    ...(routeConfig.headers !== undefined && { headers: routeConfig.headers }),
+    ...(headers !== undefined && { headers }),
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
     }),
@@ -407,6 +430,7 @@ async function measureRoute(
     samples: result.samples,
     memorySamples: result.memorySamples,
     peaks: result.peaks,
+    ...(revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
     unreclaimedSamples: result.unreclaimedSamples,
     unreclaimedTrend: result.unreclaimedTrend,
     requestsPerCycle: result.requestsPerCycle,
@@ -456,6 +480,11 @@ async function routeReportFor(
   if (reason !== null || requestPath === null) {
     progress(`skipping ${label}: ${reason ?? "needs sample params"}`);
     return { route: route.path, status: "skipped", reason: reason ?? "needs sample params" };
+  }
+  const plan = planRevalidation(context.target.prerender, route.path, routeConfig.headers);
+  if (plan.kind === "cannot-drive") {
+    progress(`not measuring ${label}: ${plan.reason}`);
+    return { route: route.path, status: "not-exercised", reason: plan.reason };
   }
   try {
     const asPath = requestPath === route.path ? "" : ` as ${requestPath}`;

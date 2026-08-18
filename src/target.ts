@@ -3,9 +3,11 @@ import path from "node:path";
 import {
   appPathsManifestSchema,
   pagesManifestSchema,
+  prerenderManifestSchema,
   routesManifestSchema,
   type AppPathsManifest,
   type PagesManifest,
+  type PrerenderManifest,
   type RoutesManifest,
 } from "./manifests.js";
 
@@ -29,6 +31,11 @@ export type ValidatedTarget = {
   pages: PagesManifest;
   /** Absent on builds that do not emit it; nothing downstream reads it. */
   routes: RoutesManifest | undefined;
+  /**
+   * Absent on builds with nothing prerendered. Carries which routes revalidate
+   * and the `previewModeId` needed to make them re-render under load.
+   */
+  prerender: PrerenderManifest | undefined;
 };
 
 async function exists(file: string): Promise<boolean> {
@@ -119,5 +126,19 @@ export async function validateTarget(appDir: string): Promise<ValidatedTarget> {
     ? await readManifest(routesFile, (raw) => routesManifestSchema.parse(raw))
     : undefined;
 
-  return { appDir: path.resolve(appDir), standaloneServer, appPaths, pages, routes };
+  // Absent on an app with nothing prerendered, which is not an error: it just
+  // means no route needs driving through revalidation.
+  const prerenderFile = path.join(nextDir, "prerender-manifest.json");
+  const prerender = (await exists(prerenderFile))
+    ? await readManifest(prerenderFile, (raw) => prerenderManifestSchema.parse(raw))
+    : undefined;
+
+  return {
+    appDir: path.resolve(appDir),
+    standaloneServer,
+    appPaths,
+    pages,
+    routes,
+    prerender,
+  };
 }

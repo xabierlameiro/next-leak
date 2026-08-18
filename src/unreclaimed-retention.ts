@@ -17,8 +17,8 @@ export type MemoryClass = (typeof CLASSES)[number];
 export type UnreclaimedRetention = {
   /** Where holding-versus-retaining was most out of proportion. */
   class: MemoryClass;
-  /** Median per-cycle gap between what was held and what survived a GC. */
-  medianGapBytes: number;
+  /** Largest per-cycle gap between what was held and what survived a GC. */
+  largestGapBytes: number;
   /** What the route retained after collection, in that class. */
   retainedBytes: number;
   /** The gap as a multiple of what is retained. */
@@ -48,9 +48,10 @@ export type UnreclaimedRetentionInput = {
 /**
  * The gap must clear this in absolute terms before it is worth saying.
  *
- * Measured 2026-08-18: a healthy route's median gap is 0.77 MB. Below a floor
+ * Measured 2026-08-18: a healthy route's largest gap is 1.9 MB. Below a floor
  * like this the note would fire on every small app, and on a route retaining
- * almost nothing the ratio below is meaningless on its own.
+ * almost nothing the ratio below is meaningless on its own. The margin here is
+ * thin — the ratio below is what actually keeps the healthy app quiet.
  */
 const MIN_GAP_BYTES = 2 * MB;
 
@@ -63,11 +64,11 @@ const MIN_GAP_BYTES = 2 * MB;
  * (3.95 MB). What distinguishes this class is holding much more than survives a
  * collection:
  *
- * | app                      | median heap gap | ratio |
- * |--------------------------|-----------------|-------|
- * | healthy fixture route    | 0.77 MB         | 0.11x |
- * | deliberately leaky route | 5.13 MB         | 0.21x |
- * | #96533 reproduction      | 18.8 MB         | 0.70x |
+ * | app                      | largest heap gap | ratio |
+ * |--------------------------|------------------|-------|
+ * | healthy fixture route    | 1.9 MB           | 0.27x |
+ * | deliberately leaky route | 5.9 MB           | 0.06x |
+ * | #96533 reproduction      | 24.8 MB          | 0.89x |
  *
  * The leaky route clears the floor and fails this, correctly: its memory really
  * is retained after a GC, which is what makes it a leak rather than this.
@@ -89,23 +90,26 @@ const read = (sample: HeapSample, memoryClass: MemoryClass): number =>
       : sample.arrayBuffers;
 
 /**
- * Middle of the sorted values, averaging the two central ones when even.
+ * The largest gap observed, which is a lower bound on what the process holds.
  *
- * A median rather than a mean because the pre-collection series is sampled with
- * no collection control: on the #96533 run, one cycle of six fell all the way
- * back to the post-GC level because V8 collected on its own just before the
- * reading. A mean lets that one cycle drag the finding down; a median does not.
+ * Neither a mean nor a median. The pre-collection series is sampled with no
+ * collection control, so a cycle where V8 happened to collect just before the
+ * reading shows a gap of zero — and that says nothing about the app, only about
+ * the timing of the sample. Three runs of the same #96533 reproduction:
+ *
+ *   run 1  3.79  0.00  4.71  4.12  3.03  5.40   median 3.96
+ *   run 2                                        median 2.47
+ *   run 3  0.00  1.49  0.00  0.00  3.79  0.00   median 0.00
+ *
+ * A median survives one collapsed cycle and not four, so on run 3 it would
+ * report nothing about an app that demonstrably held 3.79 MB. A cycle that
+ * *did* hold memory proves the process can; a cycle that held none proves only
+ * that it had just been collected. The maximum answers the question actually
+ * being asked, and understates rather than overstates: a gap larger than any
+ * sampled one may well exist between samples.
  */
-function median(values: readonly number[]): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) {
-    return sorted[middle] ?? 0;
-  }
-  return ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
+function largestGap(values: readonly number[]): number {
+  return values.reduce((highest, value) => Math.max(highest, value), 0);
 }
 
 /** Per-cycle gaps for one memory class, pairing cycle i with cycle i. */
@@ -164,21 +168,21 @@ export function assessUnreclaimedRetention(
     if (gaps.length === 0) {
       continue;
     }
-    const medianGapBytes = median(gaps);
-    if (medianGapBytes < MIN_GAP_BYTES) {
+    const largestGapBytes = largestGap(gaps);
+    if (largestGapBytes < MIN_GAP_BYTES) {
       continue;
     }
-    const retainedBytes = median(
+    const retainedBytes = largestGap(
       input.memorySamples.slice(1).map((sample) => read(sample, memoryClass))
     );
-    const ratio = medianGapBytes / Math.max(retainedBytes, MIN_RETAINED_BYTES);
+    const ratio = largestGapBytes / Math.max(retainedBytes, MIN_RETAINED_BYTES);
     if (ratio < MIN_GAP_RATIO) {
       continue;
     }
     // Report where the disproportion is largest, not where the megabytes are:
     // that is what names the mechanism.
     if (worst === null || ratio >= worst.ratio) {
-      worst = { class: memoryClass, medianGapBytes, retainedBytes, ratio };
+      worst = { class: memoryClass, largestGapBytes, retainedBytes, ratio };
     }
   }
   return worst;
@@ -199,7 +203,7 @@ const CLASS_LABEL: Record<MemoryClass, string> = {
  */
 export function describeUnreclaimedRetention(retention: UnreclaimedRetention): string {
   return (
-    `held ${mb(retention.medianGapBytes)} of ${CLASS_LABEL[retention.class]} between ` +
+    `held ${mb(retention.largestGapBytes)} of ${CLASS_LABEL[retention.class]} between ` +
     `collections that a GC took back (${retention.ratio.toFixed(1)}x what it retains) — ` +
     `a forced GC reclaims this, a long-running process may not run one often ` +
     `enough to; read seconds after load, so it also includes memory not yet collected`

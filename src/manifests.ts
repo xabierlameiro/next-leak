@@ -22,6 +22,31 @@ export const routesManifestSchema = z.looseObject({
 });
 export type RoutesManifest = z.infer<typeof routesManifestSchema>;
 
+/**
+ * `.next/prerender-manifest.json` — only the fields ISR handling relies on.
+ *
+ * `routes` holds concrete prerendered paths; a dynamic template's revalidation
+ * period lives on those entries, linked back by `srcRoute`, not on the
+ * `dynamicRoutes` entry for the template itself. On the vercel/next.js#96533
+ * reproduction, `/posts/[slug]` carries no period while its 200 concrete
+ * `/posts/post-N` entries each carry `initialRevalidateSeconds: 3600` with
+ * `srcRoute: "/posts/[slug]"`.
+ */
+export const prerenderManifestSchema = z.looseObject({
+  routes: z
+    .record(
+      z.string(),
+      z.looseObject({
+        // `false` on a route that is prerendered but never revalidates.
+        initialRevalidateSeconds: z.union([z.number(), z.literal(false)]).optional(),
+        srcRoute: z.string().nullable().optional(),
+      })
+    )
+    .optional(),
+  preview: z.looseObject({ previewModeId: z.string() }).optional(),
+});
+export type PrerenderManifest = z.infer<typeof prerenderManifestSchema>;
+
 export type RouteKind = "page" | "route-handler";
 
 export type DiscoveredRoute = {
