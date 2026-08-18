@@ -2,6 +2,8 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { formatBuildReport } from "./build-report.js";
+import { runBuildMeasurement } from "./build-run.js";
 import { helpText, parseCliArgs, type ParsedCli } from "./cli-args.js";
 import { checkRuntime } from "./guards.js";
 import { killActiveChildren } from "./launcher.js";
@@ -88,9 +90,33 @@ function handleNonRunCommand(parsed: ParsedCli): boolean {
   return false;
 }
 
+/**
+ * Measuring a build needs no heap headroom of its own: nothing is diffed here,
+ * and the memory that matters belongs to the build's own processes.
+ */
+async function runBuildCommand(appDir: string): Promise<void> {
+  const aborter = installInterruptHandlers();
+  const result = await runBuildMeasurement({
+    appDir,
+    signal: aborter.signal,
+    onProgress: (message) => console.error(`· ${message}`),
+  });
+  console.log(formatBuildReport(result));
+  if (aborter.signal.aborted) {
+    process.exitCode = 130;
+  }
+}
+
 async function main(): Promise<void> {
   const parsed = parseCliArgs(process.argv.slice(2));
-  if (handleNonRunCommand(parsed) || parsed.kind !== "run") {
+  if (handleNonRunCommand(parsed)) {
+    return;
+  }
+  if (parsed.kind === "build") {
+    await runBuildCommand(parsed.options.appDir);
+    return;
+  }
+  if (parsed.kind !== "run") {
     return;
   }
   if (!hasHeapHeadroom()) {

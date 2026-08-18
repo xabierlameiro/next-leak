@@ -233,3 +233,56 @@ describe("--quick", () => {
     expect(helpText("0.0.0")).toContain("--quick");
   });
 });
+
+// A build fails before it can write the standalone bundle the default command
+// needs, so measuring one has to be its own entry point.
+describe("build command", () => {
+  it("parses the app directory after the command", () => {
+    const parsed = parseCliArgs(["build", "/app"]);
+    if (parsed.kind !== "build") throw new Error("expected build");
+    expect(parsed.options.appDir).toBe("/app");
+  });
+
+  it("leaves the default command untouched", () => {
+    const parsed = parseCliArgs(["/app"]);
+    expect(parsed.kind).toBe("run");
+  });
+
+  it("still reaches a directory that happens to be named build", () => {
+    const parsed = parseCliArgs(["./build"]);
+    expect(parsed.kind).toBe("run");
+  });
+
+  it("takes --output", () => {
+    const parsed = parseCliArgs(["build", "/app", "--output", "/tmp/runs"]);
+    if (parsed.kind !== "build") throw new Error("expected build");
+    expect(parsed.options.output).toBe("/tmp/runs");
+  });
+
+  it("rejects load-shaping flags by name instead of ignoring them", () => {
+    // Silently dropping a flag someone typed is how a run ends up measuring
+    // something other than what was asked for.
+    const parsed = parseCliArgs(["build", "/app", "--connections", "50"]);
+    if (parsed.kind !== "error") throw new Error("expected error");
+    expect(parsed.message).toContain("--connections");
+    expect(parsed.message).toContain("does not apply");
+  });
+
+  it("rejects every run-only flag", () => {
+    for (const flag of [["--quick"], ["--diff-all"], ["--no-resolve"], ["--cycles", "6"]]) {
+      const parsed = parseCliArgs(["build", "/app", ...flag]);
+      expect(parsed.kind).toBe("error");
+    }
+  });
+
+  it("shows help when the command has no directory", () => {
+    expect(parseCliArgs(["build"]).kind).toBe("help");
+  });
+
+  it("documents both commands in the help text", () => {
+    const help = helpText("0.0.0");
+    expect(help).toContain("next-leak build <app-dir>");
+    expect(help).toContain("measure the memory of \"next build\"");
+    expect(help).toContain("do not apply to it");
+  });
+});
