@@ -99,25 +99,33 @@ describe("formatReport", () => {
   });
 
   it("reports unreclaimed retention beside a stable verdict", () => {
-    // The vercel/next.js#96533 shape: climbs before collection, flat after —
-    // a forced GC takes it back, a production process may never run one.
+    // The vercel/next.js#96533 shape, measured 2026-08-18: arrayBuffers held
+    // between collections against a flat 0.32 MB after one. The pre-collection
+    // series does not climb — the gap is the finding.
     const report = makeRunReport();
     const healthy = report.routes[0];
     if (healthy?.status !== "measured") {
       throw new Error("fixture broken");
     }
-    healthy.unreclaimedTrend = {
-      verdict: "leak",
-      growthPerCycle: 10 * MB,
-      deltas: [10 * MB, 10 * MB],
-      source: "external",
-    };
+    const held = [4.11, 0.32, 5.03, 4.44, 3.35, 5.72];
+    healthy.unreclaimedSamples = held.map((mb) => ({
+      gcExposed: true,
+      heapUsed: 40 * MB,
+      rss: 190 * MB,
+      external: mb * MB,
+      arrayBuffers: mb * MB,
+    }));
+    healthy.memorySamples = healthy.memorySamples.map((sample) => ({
+      ...sample,
+      external: 0.32 * MB,
+      arrayBuffers: 0.32 * MB,
+    }));
     const output = formatReport(report);
 
     expect(output).toContain("stable");
     expect(output).toContain("unreclaimed");
-    expect(output).toContain("external memory");
-    expect(output).toContain("2.00 MB/1000 req");
+    expect(output).toContain("arrayBuffers");
+    expect(output).toContain("what it retains");
   });
 
   it("says nothing about unreclaimed memory on a route that is flat both ways", () => {
