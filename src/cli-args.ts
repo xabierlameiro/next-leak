@@ -12,11 +12,47 @@ export type CliRunOptions = {
   output: string | null;
 };
 
+export type CliBuildOptions = {
+  appDir: string;
+  output: string | null;
+};
+
 export type ParsedCli =
   | { kind: "run"; options: CliRunOptions }
+  | { kind: "build"; options: CliBuildOptions }
   | { kind: "help" }
   | { kind: "version" }
   | { kind: "error"; message: string };
+
+/** The command name that switches from measuring a server to measuring a build. */
+const BUILD_COMMAND = "build";
+
+/**
+ * Flags that shape HTTP load or the per-route ritual, and so mean nothing to a
+ * build. Rejected by name rather than ignored: silently dropping a flag someone
+ * typed is how a run ends up measuring something other than what was asked.
+ */
+const RUN_ONLY_FLAGS: ReadonlyArray<[keyof CliRunOptions, string]> = [
+  ["routes", "--routes"],
+  ["cycles", "--cycles"],
+  ["requests", "--requests"],
+  ["connections", "--connections"],
+  ["idleSeconds", "--idle"],
+  ["maxOldSpaceMb", "--max-old-space"],
+  ["quick", "--quick"],
+  ["noResolve", "--no-resolve"],
+  ["diffAll", "--diff-all"],
+];
+
+function runOnlyFlagUsed(options: CliRunOptions): string | null {
+  for (const [field, flag] of RUN_ONLY_FLAGS) {
+    const value = options[field];
+    if (value !== null && value !== false) {
+      return flag;
+    }
+  }
+  return null;
+}
 
 type FlagSpec = {
   flag: string;
@@ -73,13 +109,19 @@ Find out whether your Next.js app actually leaks memory — how much, on which
 route, and whose fault it is.
 
 Usage:
-  next-leak <app-dir> [options]
+  next-leak <app-dir> [options]        measure a built server under load
+  next-leak build <app-dir>            measure the memory of "next build"
 
 The app must be built with output: "standalone" (next build). For each
 discovered route, next-leak boots a fresh instrumented process and runs:
 warm-up → GC → baseline snapshot → [load → idle → GC → sample] × cycles →
 snapshot. Evidence (report.html, ISSUE drafts, raw snapshots, run.json) is
 written under the output directory.
+
+The build command needs neither a previous build nor standalone output: it runs
+the build itself and samples the resident memory of each static-generation
+worker, which is where large sites run out of heap while prerendering. It takes
+--output only; the options below shape HTTP load and do not apply to it.
 
 Options:
 ${rows}
@@ -220,6 +262,11 @@ function parseFlagAt(argv: string[], index: number, options: CliRunOptions): Fla
 }
 
 export function parseCliArgs(argv: string[]): ParsedCli {
+  // `next-leak build <dir>` measures a build; anything else keeps the original
+  // meaning. Only an exact first token counts, so a directory named "build" is
+  // still reachable as `next-leak ./build`.
+  const isBuild = argv[0] === BUILD_COMMAND;
+  const rest = isBuild ? argv.slice(1) : argv;
   const options: CliRunOptions = {
     appDir: "",
     routes: null,
@@ -234,8 +281,8 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     output: null,
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index] ?? "";
+  for (let index = 0; index < rest.length; index += 1) {
+    const argument = rest[index] ?? "";
     if (!argument.startsWith("-")) {
       if (options.appDir !== "") {
         return { kind: "error", message: `unexpected extra argument "${argument}" — one app directory only` };
@@ -243,7 +290,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       options.appDir = argument;
       continue;
     }
-    const step = parseFlagAt(argv, index, options);
+    const step = parseFlagAt(rest, index, options);
     if ("done" in step) {
       return step.done;
     }
@@ -252,6 +299,16 @@ export function parseCliArgs(argv: string[]): ParsedCli {
 
   if (options.appDir === "") {
     return { kind: "help" };
+  }
+  if (isBuild) {
+    const misplaced = runOnlyFlagUsed(options);
+    if (misplaced !== null) {
+      return {
+        kind: "error",
+        message: `option "${misplaced}" shapes HTTP load and does not apply to "next-leak build" — see --help`,
+      };
+    }
+    return { kind: "build", options: { appDir: options.appDir, output: options.output } };
   }
   return { kind: "run", options };
 }

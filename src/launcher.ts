@@ -70,6 +70,20 @@ export function killActiveChildren(): void {
 }
 
 /**
+ * Puts a process this tool spawned under the same interrupt safety as a
+ * measured app — a build launched by `next-leak build` must not outlive a
+ * Ctrl+C either.
+ */
+export function registerChild(child: ChildProcess): void {
+  activeChildren.add(child);
+  child.once("exit", () => activeChildren.delete(child));
+}
+
+export function unregisterChild(child: ChildProcess): void {
+  activeChildren.delete(child);
+}
+
+/**
  * Turns a stack dump into a sentence when the cause is recognisable. Seen in
  * the wild: a webpack `output: standalone` build that ships without
  * `@swc/helpers`, which fails identically when started by hand — the tool is

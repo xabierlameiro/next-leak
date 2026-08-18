@@ -260,7 +260,15 @@ through the build's source maps.
 
 ## Scope and limits (read before filing issues)
 
-- **Supported:** App Router · `output: "standalone"` · Node ≥ 22 · Linux/macOS. Pages Router, non-standalone, and Windows are rejected with a clear message.
+- **Supported (default command):** App Router · `output: "standalone"` · Node ≥ 22 · Linux/macOS. Pages Router, non-standalone, and Windows are rejected with a clear message.
+- **`next-leak build <dir>`** measures the build instead of the server, and needs
+  neither a previous build nor standalone output — it runs `next build` and
+  samples the resident memory of each static-generation worker, which is where
+  large sites run out of heap while prerendering
+  ([#97464](https://github.com/vercel/next.js/issues/97464)). It does not apply
+  to projects using `experimental.workerThreads: true`: a worker thread has no
+  resident memory of its own to sample, and the run says so instead of
+  reporting a number that would be measuring the parent.
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
 - Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against real reproductions from open issues. The contracts it relies on are stable since Next 13–14, but older versions are untested.
