@@ -58,20 +58,13 @@ const MIN_GAP_BYTES = 2 * MB;
 /**
  * And it must be this large relative to what the route actually retains.
  *
- * The absolute floor alone does not separate the classes, and the measurements
- * say so plainly — the deliberately leaky fixture holds *more* arrayBuffers
- * between collections (4.91 MB) than the vercel/next.js#96533 reproduction does
- * (3.95 MB). What distinguishes this class is holding much more than survives a
- * collection:
- *
- * | app                      | largest heap gap | ratio |
- * |--------------------------|------------------|-------|
- * | healthy fixture route    | 1.9 MB           | 0.27x |
- * | deliberately leaky route | 5.9 MB           | 0.06x |
- * | #96533 reproduction      | 24.8 MB          | 0.89x |
- *
- * The leaky route clears the floor and fails this, correctly: its memory really
- * is retained after a GC, which is what makes it a leak rather than this.
+ * An absolute floor alone does not separate the classes: the deliberately leaky
+ * fixture holds *more* arrayBuffers between collections (4.91 MB) than the
+ * vercel/next.js#96533 reproduction does (3.95 MB). What distinguishes this
+ * class is holding much more than survives a collection. Measured 2026-08-18:
+ * healthy 1.9 MB (0.27x), the leaky fixture 5.9 MB (0.06x), #96533 24.8 MB
+ * (0.89x). The leaky route clears the floor and fails the ratio, correctly —
+ * its memory really is retained after a GC, which is what makes it a leak.
  */
 const MIN_GAP_RATIO = 0.35;
 
@@ -92,21 +85,14 @@ const read = (sample: HeapSample, memoryClass: MemoryClass): number =>
 /**
  * The largest gap observed, which is a lower bound on what the process holds.
  *
- * Neither a mean nor a median. The pre-collection series is sampled with no
- * collection control, so a cycle where V8 happened to collect just before the
- * reading shows a gap of zero — and that says nothing about the app, only about
- * the timing of the sample. Three runs of the same #96533 reproduction:
- *
- *   run 1  3.79  0.00  4.71  4.12  3.03  5.40   median 3.96
- *   run 2                                        median 2.47
- *   run 3  0.00  1.49  0.00  0.00  3.79  0.00   median 0.00
- *
- * A median survives one collapsed cycle and not four, so on run 3 it would
- * report nothing about an app that demonstrably held 3.79 MB. A cycle that
- * *did* hold memory proves the process can; a cycle that held none proves only
- * that it had just been collected. The maximum answers the question actually
- * being asked, and understates rather than overstates: a gap larger than any
- * sampled one may well exist between samples.
+ * Neither a mean nor a median. The series is sampled with no collection
+ * control, so a cycle where V8 collected just before the reading shows a gap of
+ * zero — which says nothing about the app, only about the timing. Three runs of
+ * the #96533 repro gave medians of 3.96, 2.47 and 0.00 MB, the last because
+ * four of its six cycles collapsed that way. A cycle that *did* hold memory
+ * proves the process can; one that held none proves only that it had just been
+ * collected. The maximum understates rather than overstates: a larger gap may
+ * well exist between samples.
  */
 function largestGap(values: readonly number[]): number {
   return values.reduce((highest, value) => Math.max(highest, value), 0);
@@ -130,27 +116,17 @@ function gapsFor(input: UnreclaimedRetentionInput, memoryClass: MemoryClass): nu
  * Whether a route holds materially more memory between collections than it
  * retains after one.
  *
- * This is the shape of vercel/next.js#96533: the reporter measured 1.16 GB of
- * arrayBuffers accumulated over four days against a flat JS heap, and named the
- * mechanism — RSC buffers rooted through a module-scope WeakMap for as long as
- * the params key object stays reachable, on a process whose full GCs are rare.
+ * The shape of vercel/next.js#96533, where the reporter accumulated 1.16 GB of
+ * arrayBuffers over four days against a flat JS heap. Measured on that repro
+ * 2026-08-18, the signal is a *gap*, not a slope: arrayBuffers sat at 4–5 MB
+ * between collections against a flat 0.32 MB after one, while the series itself
+ * oscillated (+21.2, -3.0, -6.2, +14.2 MB) and classified as `inconclusive`. An
+ * earlier version keyed on that series climbing and reported nothing at all.
  *
- * Measured on that reproduction on 2026-08-18, the signal is a *gap*, not a
- * slope: arrayBuffers sat at 4–5 MB between collections against a flat 0.32 MB
- * after one, while the pre-collection series itself oscillated
- * (+21.2, -3.0, -6.2, +14.2 MB) and classified as `inconclusive`. An earlier
- * version of this rule keyed on that series climbing and therefore reported
- * nothing at all.
- *
- * Deliberately outside the verdict, like the peak-pressure note: `leak` /
- * `stable` / `inconclusive` are statements about what survives collection, and
- * this is a statement about what precedes it.
- *
- * Silent when the route already leaks *and* the evidence plainly supports it —
- * the retention is the headline there, and a note restating it in weaker terms
- * is noise. A marginal `leak` carrying low-confidence warnings does not silence
- * it: on the #96533 reproduction that weak verdict was hiding the finding that
- * actually names the mechanism.
+ * Outside the verdict, like the peak-pressure note: those are statements about
+ * what survives collection, this is one about what precedes it. Silent when the
+ * route already leaks on evidence that supports it — but a marginal `leak` does
+ * not silence it, since on #96533 that weak verdict was hiding this finding.
  */
 export function assessUnreclaimedRetention(
   input: UnreclaimedRetentionInput
