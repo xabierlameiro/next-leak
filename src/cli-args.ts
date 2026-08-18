@@ -9,6 +9,7 @@ export type CliRunOptions = {
   quick: boolean;
   noResolve: boolean;
   diffAll: boolean;
+  writeConfig: boolean;
   output: string | null;
 };
 
@@ -42,6 +43,7 @@ const RUN_ONLY_FLAGS: ReadonlyArray<[keyof CliRunOptions, string]> = [
   ["quick", "--quick"],
   ["noResolve", "--no-resolve"],
   ["diffAll", "--diff-all"],
+  ["writeConfig", "--write-config"],
 ];
 
 function runOnlyFlagUsed(options: CliRunOptions): string | null {
@@ -92,6 +94,11 @@ const FLAGS: FlagSpec[] = [
     help: "Do not re-measure inconclusive routes with more cycles (default: re-measure once)",
   },
   { flag: "--output", value: "string", argName: "<dir>", help: "Where to write runs (default <app-dir>/.next-leak)" },
+  {
+    flag: "--write-config",
+    value: "none",
+    help: "Write next-leak.config.json for the routes that need sample params, then exit (never overwrites)",
+  },
   { flag: "--help", alias: "-h", value: "none", help: "Show this help" },
   { flag: "--version", alias: "-v", value: "none", help: "Print the version" },
 ];
@@ -210,6 +217,9 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--diff-all":
       options.diffAll = true;
       return FLAG_OK;
+    case "--write-config":
+      options.writeConfig = true;
+      return FLAG_OK;
     case "--no-resolve":
       options.noResolve = true;
       return FLAG_OK;
@@ -278,6 +288,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     quick: false,
     noResolve: false,
     diffAll: false,
+    writeConfig: false,
     output: null,
   };
 
