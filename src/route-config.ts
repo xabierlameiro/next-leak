@@ -7,10 +7,21 @@ import { z } from "zod";
  * route params. `params` applies globally; `routes` overrides per route
  * template (keys as discovered, e.g. `/[lang]/candidate/[candidateId]`).
  */
+/**
+ * A sample value may carry `{n}` (a fresh value per request) or `{n%N}` (N
+ * distinct values, revisited) — never both. Silently preferring one would make
+ * the run measure a cardinality nobody asked for, and cardinality is precisely
+ * what these leaks turn on.
+ */
+const sampleValueSchema = z.string().refine(
+  (value) => !(value.includes("{n}") && /\{n%\d+\}/.test(value)),
+  { message: 'a sample value cannot carry both "{n}" and "{n%N}" — pick one' }
+);
+
 const routeConfigSchema = z
   .object({
-    params: z.record(z.string(), z.string()).optional(),
-    routes: z.record(z.string(), z.record(z.string(), z.string())).optional(),
+    params: z.record(z.string(), sampleValueSchema).optional(),
+    routes: z.record(z.string(), z.record(z.string(), sampleValueSchema)).optional(),
     /**
      * Headers sent with every request. Real traffic is not header-less:
      * compression (`Accept-Encoding`), sessions and auth change which code
@@ -103,11 +114,42 @@ export function dynamicSegmentsOf(routeTemplate: string): DynamicSegment[] {
  * with unique tails) are invisible when every request hits the same path.
  */
 export const UNIQUE_MARKER = "{n}";
+
+/**
+ * `{n%200}` — cycle through exactly 200 distinct values, revisiting them.
+ *
+ * `{n}` gives every request its own URL, which is the shape of bot traffic and
+ * of a cache that never repeats a key. It is not the shape the reported leaks
+ * have: vercel/next.js#96533 revalidates a fixed set of 200 posts over and over,
+ * and #92287 turns on how many distinct keys a cache holds at once. A bound is
+ * the difference between filling a cache and growing one without limit.
+ */
+const BOUNDED_MARKER = /\{n%(\d+)\}/;
+
+/** The bound in a sample value, or null when it carries none. */
+export function boundedMarkerOf(value: string): { marker: string; bound: number } | null {
+  const match = BOUNDED_MARKER.exec(value);
+  const bound = Number(match?.[1]);
+  if (match === null || !Number.isInteger(bound) || bound <= 0) {
+    return null;
+  }
+  return { marker: match[0], bound };
+}
 const ENCODED_MARKER = encodeURIComponent(UNIQUE_MARKER);
 
-/** Catch-all values may span segments, so `/` survives; everything else is escaped. */
+/**
+ * Catch-all values may span segments, so `/` survives; everything else is
+ * escaped — except the load markers, which must reach the load phase intact.
+ * `encodeURIComponent("{n%5}")` is `%7Bn%255%7D`, so the bounded marker needs
+ * restoring too, or the app receives a literal path with a percent-escape in it
+ * and every request lands on the same URL.
+ */
 const encodeSegment = (value: string): string =>
-  encodeURIComponent(value).split(ENCODED_MARKER).join(UNIQUE_MARKER);
+  restoreMarkers(encodeURIComponent(value).split(ENCODED_MARKER).join(UNIQUE_MARKER));
+
+const ENCODED_BOUNDED = /%7Bn%25(\d+)%7D/gi;
+const restoreMarkers = (value: string): string =>
+  value.replace(ENCODED_BOUNDED, (_match, bound: string) => `{n%${bound}}`);
 const encodeCatchAll = (value: string): string => value.split("/").map(encodeSegment).join("/");
 
 /**

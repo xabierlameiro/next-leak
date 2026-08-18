@@ -21,7 +21,12 @@ import {
   type PrerenderManifest,
 } from "./manifests.js";
 import { extractModuleRegistry } from "./module-registry.js";
-import { loadRouteConfig, resolveRoutePath, type RouteConfig } from "./route-config.js";
+import {
+  boundedMarkerOf,
+  loadRouteConfig,
+  resolveRoutePath,
+  type RouteConfig,
+} from "./route-config.js";
 import {
   RITUAL_DEFAULTS,
   runRitual,
@@ -74,6 +79,12 @@ export type RouteReport =
       unreclaimedTrend: TrendResult;
       /** Requests each cycle served — what the growth rates normalize by. */
       requestsPerCycle: number;
+      /**
+       * Distinct keys the load cycled through, when the route asked for a
+       * bounded set. A verdict about a cache depends on how many keys it saw,
+       * so the number belongs on the record with the rest of the regime.
+       */
+      keyCardinality?: number;
       /**
        * Seconds of the ISR revalidation period this route was driven through,
        * when it has one. Absent on routes not served from the ISR cache.
@@ -376,6 +387,7 @@ async function measureRoute(
   // nothing else.
   const plan = planRevalidation(target.prerender, route.path, routeConfig.headers);
   const revalidateSeconds = revalidateSecondsFor(target.prerender, route.path);
+  const bounded = boundedMarkerOf(requestPath);
   const driven = plan.kind === "drive" ? plan.headers : {};
   const merged = { ...driven, ...(routeConfig.headers ?? {}) };
   const headers = Object.keys(merged).length === 0 ? undefined : merged;
@@ -438,6 +450,7 @@ async function measureRoute(
     memorySamples: result.memorySamples,
     peaks: result.peaks,
     ...(revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
+    ...(bounded !== null && { keyCardinality: bounded.bound }),
     unreclaimedSamples: result.unreclaimedSamples,
     unreclaimedTrend: result.unreclaimedTrend,
     requestsPerCycle: result.requestsPerCycle,

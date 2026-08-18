@@ -190,3 +190,94 @@ describe("request headers", () => {
   }, 30_000);
 });
 
+
+// `{n}` gives every request its own URL; `{n%N}` gives N distinct URLs
+// revisited. The reported leaks turn on the second shape — #96533 revalidates
+// a fixed set of 200 posts over and over — and until now only the first
+// existed.
+describe("bounded key cardinality", () => {
+  it("cycles through exactly N distinct paths", async () => {
+    const seen = new Set<string>();
+    const port = await listen((request, response) => {
+      seen.add(request.url ?? "");
+      response.end("ok");
+    });
+
+    await runLoadPhase({
+      url: `http://127.0.0.1:${port}/posts/post-{n%5}`,
+      amount: 60,
+      connections: 4,
+    });
+
+    expect(seen.size).toBe(5);
+    expect([...seen].sort()).toEqual([
+      "/posts/post-0",
+      "/posts/post-1",
+      "/posts/post-2",
+      "/posts/post-3",
+      "/posts/post-4",
+    ]);
+  });
+
+  it("revisits the same keys rather than growing without limit", async () => {
+    const counts = new Map<string, number>();
+    const port = await listen((request, response) => {
+      const path = request.url ?? "";
+      counts.set(path, (counts.get(path) ?? 0) + 1);
+      response.end("ok");
+    });
+
+    await runLoadPhase({
+      url: `http://127.0.0.1:${port}/p/{n%3}`,
+      amount: 30,
+      connections: 2,
+    });
+
+    expect(counts.size).toBe(3);
+    // Every key seen more than once: that is what "revisited" means.
+    expect([...counts.values()].every((count) => count > 1)).toBe(true);
+  });
+
+  it("keeps the error budget working on bounded paths", async () => {
+    const port = await listen((_request, response) => {
+      response.statusCode = 500;
+      response.end("no");
+    });
+
+    await expect(
+      runLoadPhase({ url: `http://127.0.0.1:${port}/p/{n%4}`, amount: 20, connections: 2 })
+    ).rejects.toBeInstanceOf(LoadError);
+  });
+
+  it("preserves the query string alongside the bound", async () => {
+    const seen = new Set<string>();
+    const port = await listen((request, response) => {
+      seen.add(request.url ?? "");
+      response.end("ok");
+    });
+
+    await runLoadPhase({
+      url: `http://127.0.0.1:${port}/p/{n%2}?weightKb=8`,
+      amount: 10,
+      connections: 2,
+    });
+
+    expect([...seen].sort()).toEqual(["/p/0?weightKb=8", "/p/1?weightKb=8"]);
+  });
+
+  it("leaves unbounded {n} giving every request its own URL", async () => {
+    const seen = new Set<string>();
+    const port = await listen((request, response) => {
+      seen.add(request.url ?? "");
+      response.end("ok");
+    });
+
+    await runLoadPhase({
+      url: `http://127.0.0.1:${port}/p/{n}`,
+      amount: 25,
+      connections: 2,
+    });
+
+    expect(seen.size).toBeGreaterThan(20);
+  });
+});

@@ -261,6 +261,15 @@ through the build's source maps.
 ## Scope and limits (read before filing issues)
 
 - **Supported (default command):** App Router · `output: "standalone"` · Node ≥ 22 · Linux/macOS. Pages Router, non-standalone, and Windows are rejected with a clear message.
+- **Sample values can vary per request.** `"slug": "post-{n}"` gives every
+  request its own URL — the shape of bot traffic and of a cache that never
+  repeats a key. `"slug": "post-{n%200}"` cycles through exactly 200 distinct
+  values, revisiting them across cycles, which is the shape the reported leaks
+  actually have ([#96533](https://github.com/vercel/next.js/issues/96533)
+  revalidates a fixed set of posts;
+  [#92287](https://github.com/vercel/next.js/issues/92287) turns on how many
+  keys a cache holds at once). A value carrying both markers is rejected before
+  the run starts.
 - **`next-leak build <dir>`** measures the build instead of the server, and needs
   neither a previous build nor standalone output — it runs `next build` and
   samples the resident memory of each static-generation worker, which is where

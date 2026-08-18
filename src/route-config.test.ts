@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  boundedMarkerOf,
   loadRouteConfig,
   resolveRoutePath,
   ROUTE_CONFIG_FILE,
@@ -129,5 +130,45 @@ describe("query strings and client abandonment", () => {
     expect((await loadRouteConfig(dir)).abandonAfterMs).toBe(50);
     await writeFile(path.join(dir, ROUTE_CONFIG_FILE), JSON.stringify({ abandonAfterMs: -5 }));
     await expect(loadRouteConfig(dir)).rejects.toBeInstanceOf(RouteConfigError);
+  });
+});
+
+// `{n}` is unbounded by construction; the reported leaks turn on a fixed set of
+// keys revisited instead — #96533 revalidates the same 200 posts over and over.
+describe("bounded cardinality marker", () => {
+  it("reads the bound out of a sample value", () => {
+    expect(boundedMarkerOf("post-{n%200}")).toEqual({ marker: "{n%200}", bound: 200 });
+  });
+
+  it("reads nothing from an unbounded value", () => {
+    expect(boundedMarkerOf("post-{n}")).toBeNull();
+    expect(boundedMarkerOf("post-1")).toBeNull();
+  });
+
+  it("ignores a bound that is not a positive integer", () => {
+    expect(boundedMarkerOf("post-{n%0}")).toBeNull();
+  });
+
+  it("survives the percent-encoding that resolution applies", () => {
+    // encodeURIComponent turns `{n%5}` into `%7Bn%255%7D`; if that reached the
+    // load phase every request would hit the same literal path.
+    const resolved = resolveRoutePath("/posts/[slug]", {
+      routes: { "/posts/[slug]": { slug: "post-{n%5}" } },
+    });
+
+    expect(resolved).toBe("/posts/post-{n%5}");
+  });
+
+  it("rejects a value carrying both markers, before any measurement starts", async () => {
+    // Silently preferring one would make the run measure a cardinality nobody
+    // asked for, and cardinality is exactly what these leaks turn on.
+    const dir = await mkdtemp(path.join(tmpdir(), "next-leak-cfg-"));
+    await writeFile(
+      path.join(dir, ROUTE_CONFIG_FILE),
+      JSON.stringify({ params: { slug: "post-{n}-{n%10}" } })
+    );
+
+    await expect(loadRouteConfig(dir)).rejects.toBeInstanceOf(RouteConfigError);
+    await expect(loadRouteConfig(dir)).rejects.toThrow(/cannot carry both/);
   });
 });
