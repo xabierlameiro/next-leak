@@ -67,6 +67,36 @@ export async function loadRouteConfig(appDir: string): Promise<RouteConfig> {
 
 const SEGMENT_PATTERN = /^\[(\[)?(\.\.\.)?([^\]]+?)\]?\]$/;
 
+export type DynamicSegment = {
+  name: string;
+  /** `[...slug]` — the value may span several path segments. */
+  catchAll: boolean;
+  /** `[[...slug]]` — the segment can be omitted entirely. */
+  optional: boolean;
+};
+
+/**
+ * The dynamic segments of a route template, in order.
+ *
+ * Exported so guidance and resolution read the same grammar: a skeleton that
+ * named parameters the resolver does not recognise would be worse than none.
+ */
+export function dynamicSegmentsOf(routeTemplate: string): DynamicSegment[] {
+  const segments: DynamicSegment[] = [];
+  for (const segment of routeTemplate.split("/")) {
+    const match = SEGMENT_PATTERN.exec(segment);
+    if (match === null) {
+      continue;
+    }
+    segments.push({
+      name: match[3] ?? "",
+      catchAll: match[2] !== undefined,
+      optional: match[1] !== undefined,
+    });
+  }
+  return segments;
+}
+
 /**
  * Sample values may contain `{n}`, which the load phase replaces with a
  * per-request counter. Leaks keyed by URL (route caches, LRUs, bot traffic

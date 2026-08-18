@@ -17,6 +17,7 @@ describe("parseCliArgs", () => {
         quick: false,
         noResolve: false,
         diffAll: false,
+        writeConfig: false,
         output: null,
       },
     });
@@ -26,7 +27,7 @@ describe("parseCliArgs", () => {
     const parsed = parseCliArgs([
       "app", "--routes", "/api,/dashboard", "--cycles", "6", "--requests", "1000",
       "--connections", "20", "--idle", "8", "--max-old-space", "2048", "--quick",
-      "--diff-all", "--no-resolve", "--output", "/tmp/out",
+      "--diff-all", "--no-resolve", "--write-config", "--output", "/tmp/out",
     ]);
     if (parsed.kind !== "run") {
       throw new Error(`expected run, got ${parsed.kind}`);
@@ -42,6 +43,7 @@ describe("parseCliArgs", () => {
       quick: true,
       noResolve: true,
       diffAll: true,
+      writeConfig: true,
       output: "/tmp/out",
     });
   });
@@ -284,5 +286,25 @@ describe("build command", () => {
     expect(help).toContain("next-leak build <app-dir>");
     expect(help).toContain("measure the memory of \"next build\"");
     expect(help).toContain("do not apply to it");
+  });
+});
+
+describe("--write-config", () => {
+  it("parses the flag and defaults to off", () => {
+    const on = parseCliArgs(["/app", "--write-config"]);
+    const off = parseCliArgs(["/app"]);
+    if (on.kind !== "run" || off.kind !== "run") throw new Error("expected run");
+    expect(on.options.writeConfig).toBe(true);
+    expect(off.options.writeConfig).toBe(false);
+  });
+
+  it("documents itself, including that it never overwrites", () => {
+    const help = helpText("0.0.0");
+    expect(help).toContain("--write-config");
+    expect(help).toContain("never overwrites");
+  });
+
+  it("does not apply to the build command", () => {
+    expect(parseCliArgs(["build", "/app", "--write-config"]).kind).toBe("error");
   });
 });
