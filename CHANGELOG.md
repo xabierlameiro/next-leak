@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.0](https://github.com/xabierlameiro/next-leak/compare/v0.5.1...v0.6.0) (2026-08-18)
+
+
+### Features
+
+* a skipped route now prints the config that would measure it ([5e380b6](https://github.com/xabierlameiro/next-leak/commit/5e380b6235f7066d4ab465610513c0920c4a40b2))
+* bounded key cardinality, so a run can revisit a fixed key set ([ea16c66](https://github.com/xabierlameiro/next-leak/commit/ea16c6650881e8103dd0659b91bc026b9e17fc44))
+* drive ISR routes so the load reaches the render ([07402c7](https://github.com/xabierlameiro/next-leak/commit/07402c755d6d5dc8c6bad953ad57860058e4099a))
+* measure the memory of a build, not just of a built server ([4a6942c](https://github.com/xabierlameiro/next-leak/commit/4a6942c5c55d2925437cdeedda6e35917de4e9b8))
+* read what a process holds before collection, not only after it ([7358b83](https://github.com/xabierlameiro/next-leak/commit/7358b83adb87272ce9f1eb46aa37a5bcddd9513c))
+* say how much of the app the run actually covered ([6505d0d](https://github.com/xabierlameiro/next-leak/commit/6505d0da75534dcc12c56e4c7106a082a68347bd))
+* say when the baseline is carrying warm-up's memory ([2549101](https://github.com/xabierlameiro/next-leak/commit/2549101841e2e01e7279d3935e7f742e5c719d81))
+* tell saturation apart from a route that is actually broken ([38d93b7](https://github.com/xabierlameiro/next-leak/commit/38d93b7acdc92692895cb86ab45990909fcc71ce))
+
+
+### Bug Fixes
+
+* key the unreclaimed note on the gap, not on a slope ([796e6ad](https://github.com/xabierlameiro/next-leak/commit/796e6ada18cb10d91a2d614cfbd5094f51a49c36))
+* never lose a finished measurement to a snapshot that cannot be parsed ([9beb7bf](https://github.com/xabierlameiro/next-leak/commit/9beb7bfdd4206973be00038cce19e61da1488952))
+* stop acquitting a route that oscillates while it climbs ([9ed18d2](https://github.com/xabierlameiro/next-leak/commit/9ed18d299979704bebe2a3b4c14547ff89577032))
+
 ## [0.5.1](https://github.com/xabierlameiro/next-leak/compare/v0.5.0...v0.5.1) (2026-07-26)
 
 
