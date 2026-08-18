@@ -56,6 +56,21 @@ function ownerLabel(attribution: FindingAttribution): string | null {
   }
 }
 
+/**
+ * An ISR route serves its cache unless the load carries the build's own
+ * revalidation header. Saying so distinguishes a curve measured against a
+ * re-render from one measured against a static file — the difference between a
+ * verdict and a flat line that means nothing.
+ */
+function revalidationLines(route: MeasuredRouteView): string[] {
+  return route.revalidatedEverySeconds === undefined
+    ? []
+    : [
+        `      driven through ISR revalidation (revalidates every ` +
+          `${route.revalidatedEverySeconds}s; without it the load would serve the cache)`,
+      ];
+}
+
 function confidenceLines(route: MeasuredRouteView): string[] {
   const lines: string[] = [];
   // What the instrument thinks of its own reading. Silence here would be the
@@ -171,6 +186,11 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
   if (route.status === "failed") {
     return [`  ✖ ${route.route}  failed: ${route.reason}`];
   }
+  // Deliberately not `stable`: the load could not have exercised this route, so
+  // the flat curve it would have produced says nothing about the app.
+  if (route.status === "not-exercised") {
+    return [`  – ${route.route}  not exercised: ${route.reason}`];
+  }
 
   const verdict = effectiveVerdict(route);
   const curve = route.samples.map(formatMb).join(" → ");
@@ -184,6 +204,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
     `  ${VERDICT_ICON[verdict]} ${route.route}  ${verdict}  (${formatGrowth(
       route.growthPer1000Requests
     )})  heap ${curve}${resolved}`,
+    ...revalidationLines(route),
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),
     ...peakPressureLines(route, parameters),
