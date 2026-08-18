@@ -439,7 +439,18 @@ async function measureRoute(
   let diff: HeapDiff | null = null;
   if (verdict !== "stable" || options.diffAll === true) {
     progress(`diffing snapshots for ${route.path}`);
-    diff = await deps.diff(result.baselineSnapshot, result.afterSnapshot);
+    try {
+      diff = await deps.diff(result.baselineSnapshot, result.afterSnapshot);
+    } catch (cause) {
+      // The diff names the retaining object; the verdict does not depend on
+      // it. Losing a finished measurement because the extra step failed is
+      // the worse outcome by far — measured on the #97424 reproduction, where
+      // a 1.7 GB snapshot took the whole run down with it.
+      progress(
+        `snapshot diff unavailable for ${route.path}: ` +
+          `${cause instanceof Error ? cause.message : String(cause)}`
+      );
+    }
   }
 
   return {
