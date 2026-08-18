@@ -396,3 +396,24 @@ describe("formatReport guidance for skipped routes", () => {
     expect(formatReport(report)).not.toContain("need sample params");
   });
 });
+
+describe("formatReport carries the load-failure diagnosis", () => {
+  it("shows the whole reason, including which knob to reach for", () => {
+    const report = makeRunReport();
+    report.routes = [
+      {
+        route: "/p/[slug]",
+        status: "failed",
+        reason:
+          "103 of 300 requests failed against http://127.0.0.1:9/p/1 (0 non-2xx, 70 errors, " +
+          "70 timeouts) — the failures are timeouts rather than error responses, so the load " +
+          "may simply be more than the app or something it calls can serve; lower " +
+          "--connections (currently 5) and re-run before concluding anything about memory",
+      },
+    ];
+    const output = formatReport(report);
+
+    expect(output).toContain("timeouts rather than error responses");
+    expect(output).toContain("--connections (currently 5)");
+  });
+});

@@ -281,3 +281,53 @@ describe("bounded key cardinality", () => {
     expect(seen.size).toBeGreaterThan(20);
   });
 });
+
+// A failed load phase says the run did not happen; it does not say whose fault
+// that is, and the two causes need opposite responses from the user.
+describe("saturation is not the same as a broken route", () => {
+  it("names --connections when the failures are timeouts", async () => {
+    // The #97424 shape: 0 non-2xx, all timeouts, because each render fans out
+    // to 30 fetches and 5 concurrent renders is already too many.
+    const port = await listen((_request, response) => {
+      // Never answers: every request times out.
+      void response;
+    });
+
+    const failure = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/`,
+      amount: 8,
+      connections: 4,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(LoadError);
+    const message = (failure as LoadError).message;
+    expect(message).toContain("timeouts rather than error responses");
+    expect(message).toContain("--connections (currently 4)");
+    expect(message).toContain("before concluding anything about memory");
+  }, 60_000);
+
+  it("blames the route when it answers with errors, and does not suggest less load", async () => {
+    const port = await listen((_request, response) => {
+      response.statusCode = 500;
+      response.end("no");
+    });
+
+    const failure = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/`,
+      amount: 20,
+      connections: 2,
+    }).catch((error: unknown) => error);
+
+    const message = (failure as LoadError).message;
+    expect(message).toContain("answered with errors under load");
+    expect(message).not.toContain("--connections");
+  });
+
+  it("says nothing extra when the load stayed within budget", async () => {
+    const port = await listen((_request, response) => response.end("ok"));
+
+    await expect(
+      runLoadPhase({ url: `http://127.0.0.1:${port}/`, amount: 10, connections: 2 })
+    ).resolves.toBeDefined();
+  });
+});
