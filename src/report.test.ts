@@ -417,3 +417,38 @@ describe("formatReport carries the load-failure diagnosis", () => {
     expect(output).toContain("--connections (currently 5)");
   });
 });
+
+// A listing of six routes where four were skipped reads, at a glance, like an
+// app that was measured.
+describe("formatReport coverage", () => {
+  it("states how much of the app the run actually covered", () => {
+    // The fixture has two measured routes, one skipped and one failed.
+    const output = formatReport(makeRunReport());
+
+    expect(output).toContain("measured 2 of 4 discovered route(s)");
+    expect(output).toContain("1 skipped");
+    expect(output).toContain("1 failed");
+    expect(output).toContain("not a verdict about your app");
+  });
+
+  it("counts routes that were reachable but not exercised", () => {
+    const report = makeRunReport();
+    report.routes = [
+      ...report.routes,
+      { route: "/isr", status: "not-exercised", reason: "revalidates every 3600s" },
+    ];
+    const output = formatReport(report);
+
+    expect(output).toContain("measured 2 of 5 discovered route(s)");
+    expect(output).toContain("1 not exercised");
+  });
+
+  it("says so plainly when everything was measured", () => {
+    const report = makeRunReport();
+    report.routes = report.routes.filter((route) => route.status === "measured");
+    const output = formatReport(report);
+
+    expect(output).toContain("measured all 2 discovered route(s)");
+    expect(output).not.toContain("not a verdict");
+  });
+});

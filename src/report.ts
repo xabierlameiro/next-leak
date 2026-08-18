@@ -242,6 +242,30 @@ function skippedGuidanceLines(report: RunReport): string[] {
   ];
 }
 
+/**
+ * How much of the app the run actually covered.
+ *
+ * A listing of six routes where four were skipped reads, at a glance, like an
+ * app that was measured. It was not, and the difference between "your app is
+ * fine" and "we looked at a third of it" is the whole value of the number.
+ */
+function coverageLine(report: RunReport): string {
+  const total = report.routes.length;
+  const measured = report.routes.filter((route) => route.status === "measured").length;
+  if (measured === total) {
+    return `measured all ${total} discovered route(s)`;
+  }
+  const breakdown = (["skipped", "not-exercised", "failed"] as const)
+    .map((status) => ({
+      status,
+      count: report.routes.filter((route) => route.status === status).length,
+    }))
+    .filter((entry) => entry.count > 0)
+    .map((entry) => `${entry.count} ${entry.status.replace("-", " ")}`)
+    .join(", ");
+  return `measured ${measured} of ${total} discovered route(s) — ${breakdown}; the rest is not a verdict about your app`;
+}
+
 export function formatReport(report: RunReport): string {
   const lines = [`next-leak — ${report.appDir}`, ""];
   for (const route of report.routes) {
@@ -266,8 +290,8 @@ export function formatReport(report: RunReport): string {
     resolvedCycles.length === 0
       ? `${cycles} cycles`
       : `${cycles} cycles (${resolvedCycles.join(", ")} where resolved)`;
+  lines.push("", coverageLine(report));
   lines.push(
-    "",
     `judged over ${cyclesLabel} × ${loadRequests} requests, growth gate ` +
       `${(minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle ` +
       `(${formatGrowth((minGrowthPerCycle / loadRequests) * 1000)}), heap cap ${maxOldSpaceMb} MB`,
