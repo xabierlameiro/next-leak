@@ -5,6 +5,7 @@ export type CliRunOptions = {
   requests: number | null;
   connections: number | null;
   idleSeconds: number | null;
+  warmupRequests: number | null;
   maxOldSpaceMb: number | null;
   quick: boolean;
   noResolve: boolean;
@@ -39,6 +40,7 @@ const RUN_ONLY_FLAGS: ReadonlyArray<[keyof CliRunOptions, string]> = [
   ["requests", "--requests"],
   ["connections", "--connections"],
   ["idleSeconds", "--idle"],
+  ["warmupRequests", "--warmup"],
   ["maxOldSpaceMb", "--max-old-space"],
   ["quick", "--quick"],
   ["noResolve", "--no-resolve"],
@@ -76,6 +78,12 @@ const FLAGS: FlagSpec[] = [
   { flag: "--requests", value: "int", argName: "<n>", help: "Requests per cycle (default 5000)" },
   { flag: "--connections", value: "int", argName: "<n>", help: "Concurrent connections (default 100)" },
   { flag: "--idle", value: "int", argName: "<seconds>", help: "Idle seconds before each sample (default 30)" },
+  {
+    flag: "--warmup",
+    value: "int",
+    argName: "<n>",
+    help: "Requests before the baseline snapshot (default 200) — lower it on apps that cache per request",
+  },
   {
     flag: "--max-old-space",
     value: "int",
@@ -144,6 +152,7 @@ const LIMITS: Record<string, number | undefined> = {
   "--requests": 1_000_000,
   "--connections": 10_000,
   "--idle": 3_600,
+  "--warmup": 1_000_000,
   "--max-old-space": 65_536,
 };
 
@@ -197,6 +206,7 @@ function applyNumericFlag(flag: string, value: string, options: CliRunOptions): 
   if (flag === "--requests") options.requests = parsed;
   if (flag === "--connections") options.connections = parsed;
   if (flag === "--idle") options.idleSeconds = parsed;
+  if (flag === "--warmup") options.warmupRequests = parsed;
   if (flag === "--max-old-space") options.maxOldSpaceMb = parsed;
   return FLAG_OK;
 }
@@ -209,6 +219,7 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--requests":
     case "--connections":
     case "--idle":
+    case "--warmup":
     case "--max-old-space":
       return applyNumericFlag(spec.flag, value, options);
     case "--quick":
@@ -284,6 +295,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     requests: null,
     connections: null,
     idleSeconds: null,
+    warmupRequests: null,
     maxOldSpaceMb: null,
     quick: false,
     noResolve: false,

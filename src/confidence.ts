@@ -16,6 +16,9 @@ import { MIN_GROWTH_NOISE_FLOOR, type TrendResult, type TrendVerdict } from "./t
  * `thin-evidence`       — a leak called on too few cycles for its size
  * `near-heap-ceiling`   — the heap approached the cap the process ran under,
  *   so the curve was measured against a ceiling instead of running free
+ * `warm-up-baseline`    — the baseline sat far above the level the cycles
+ *   settled at, so it carries warm-up's own retention rather than the app's
+ *   resting size
  */
 export type WarningCode =
   | "unsettled"
@@ -26,7 +29,8 @@ export type WarningCode =
   | "spiky-growth"
   | "near-threshold"
   | "thin-evidence"
-  | "near-heap-ceiling";
+  | "near-heap-ceiling"
+  | "warm-up-baseline";
 
 export type MeasurementWarning = {
   code: WarningCode;
@@ -57,6 +61,8 @@ export type ConfidenceInput = {
   memorySamples?: readonly HeapSample[];
   /** Old-space cap the measured process ran under (MB). */
   maxOldSpaceMb?: number;
+  /** Warm-up requests the run sent before the baseline, for the warm-up check. */
+  warmupRequests?: number;
 };
 
 /**
@@ -286,6 +292,56 @@ function heapCeilingWarnings(input: ConfidenceInput): MeasurementWarning[] {
 }
 
 /**
+ * Share of the baseline that has to drain away before it looks like warm-up's
+ * memory rather than the app's resting size.
+ *
+ * Warm-up exists to load modules and warm the JIT — work that does not repeat.
+ * On an app whose caches key on the request it also fills those caches, and the
+ * baseline then measures the warm-up rather than the app. Measured on the
+ * vercel/next.js#97424 reproduction: baseline 861.7 MB against 129.4 MB on the
+ * very next cycle, so 85% of the baseline was warm-up. The healthy fixture
+ * drops 0.2 MB of 7.3 (3%), and the #96533 app 0.8 MB of 27.1 (3%).
+ */
+const WARM_UP_BASELINE_SHARE = 0.5;
+
+/**
+ * And an absolute floor, so a tiny app dropping most of a tiny baseline stays
+ * quiet. A run that sheds less than this between the baseline and the first
+ * cycle has nothing worth re-running for.
+ */
+const WARM_UP_BASELINE_FLOOR_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Whether the baseline carries memory the warm-up put there.
+ *
+ * Reported, never corrected: moving the baseline would hide the problem, and
+ * changing the default warm-up size would change every existing verdict. The
+ * user gets the fact and the knob (`--warmup`).
+ */
+function warmUpBaselineWarnings(input: ConfidenceInput): MeasurementWarning[] {
+  const samples = input.memorySamples;
+  const baseline = samples?.[0]?.heapUsed;
+  const firstCycle = samples?.[1]?.heapUsed;
+  if (baseline === undefined || firstCycle === undefined) {
+    return [];
+  }
+  const drained = baseline - firstCycle;
+  if (drained < WARM_UP_BASELINE_FLOOR_BYTES || drained < baseline * WARM_UP_BASELINE_SHARE) {
+    return [];
+  }
+  const warmup =
+    input.warmupRequests === undefined ? "" : ` (${input.warmupRequests} warm-up requests)`;
+  return [{
+    code: "warm-up-baseline",
+    detail:
+      `the baseline was ${mb(baseline)} and the first cycle ${mb(firstCycle)} — ` +
+      `${pct(drained, baseline)} of it drained away, so it carries warm-up's own ` +
+      `retention rather than the app's resting size${warmup}; every delta is ` +
+      `measured from that inflated start. Lower --warmup if the app caches per request`,
+  }];
+}
+
+/**
  * Invalidity, not noise: the measurement did not observe what it claims to.
  * Only a leak verdict is withdrawn — a stable one keeps its warnings, since
  * silently missing a leak costs the user less than a false accusation. And
@@ -378,6 +434,7 @@ export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
     ...noiseFloorWarnings(input.trend, minGrowth),
     ...thinEvidenceWarnings(input.trend, minGrowth),
     ...heapCeilingWarnings(input),
+    ...warmUpBaselineWarnings(input),
   ];
 
   return {

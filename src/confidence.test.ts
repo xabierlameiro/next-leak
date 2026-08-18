@@ -596,3 +596,71 @@ describe("warrantsIssueDraft", () => {
     ).toBe(false);
   });
 });
+
+// Warm-up loads modules and warms the JIT — work that does not repeat. On an
+// app whose caches key on the request it also fills those caches, and the
+// baseline then measures the warm-up instead of the app's resting size.
+describe("warm-up baseline contamination", () => {
+  const sample = (mb: number): HeapSample => ({
+    gcExposed: true,
+    heapUsed: mb * 1024 * 1024,
+    rss: 3 * mb * 1024 * 1024,
+    external: 0,
+    arrayBuffers: 0,
+  });
+
+  const warnings = (heapMb: number[], warmupRequests?: number) =>
+    assessConfidence({
+      trend: { verdict: "stable", growthPerCycle: 0, deltas: [] },
+      loadOutcomes: [],
+      settleOutcomes: [],
+      memorySamples: heapMb.map(sample),
+      ...(warmupRequests !== undefined && { warmupRequests }),
+    }).warnings.filter((warning) => warning.code === "warm-up-baseline");
+
+  it("flags the measured #97424 shape", () => {
+    // Baseline 861.7 MB against 129.4 MB on the very next cycle: 85% of the
+    // baseline was warm-up, and every delta was measured from that start.
+    const found = warnings([861.7, 129.4, 253.0, 179.1, 107.1, 184.1, 235.5], 200);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.detail).toContain("861.70 MB");
+    expect(found[0]?.detail).toContain("129.40 MB");
+    expect(found[0]?.detail).toContain("200 warm-up requests");
+    expect(found[0]?.detail).toContain("--warmup");
+  });
+
+  it("stays quiet on a healthy app", () => {
+    // 7.3 → 7.1 MB: 3% of the baseline, and 0.2 MB in absolute terms.
+    expect(warnings([7.3, 7.1, 7.1, 7.2, 7.2, 7.2, 7.3])).toHaveLength(0);
+  });
+
+  it("stays quiet on the #96533 app, which drops 3% of 27 MB", () => {
+    expect(warnings([27.1, 26.3, 27.3, 27.6, 27.8, 27.8, 27.9])).toHaveLength(0);
+  });
+
+  it("stays quiet when a small app sheds most of a small baseline", () => {
+    // 80% of 10 MB is still only 8 MB — nothing worth re-running for.
+    expect(warnings([10, 2, 2.1, 2.2, 2.3])).toHaveLength(0);
+  });
+
+  it("stays quiet when the baseline is below the first cycle", () => {
+    // The ordinary shape: warm-up costs a little and the app grows into it.
+    expect(warnings([29.4, 31.5, 32.3, 32.1])).toHaveLength(0);
+  });
+
+  it("does not weaken the verdict or block an issue draft", () => {
+    // It is a statement about where the baseline sat, not about whether the
+    // evidence supports the verdict.
+    const report = assessConfidence({
+      trend: { verdict: "leak", growthPerCycle: 40 * 1024 * 1024, deltas: [40e6, 41e6, 42e6, 43e6, 44e6] },
+      loadOutcomes: [],
+      settleOutcomes: [],
+      memorySamples: [861.7, 129.4, 253.0, 179.1, 107.1, 184.1, 235.5].map(sample),
+    });
+
+    expect(report.warnings.some((warning) => warning.code === "warm-up-baseline")).toBe(true);
+    expect(report.supersededVerdict).toBeUndefined();
+    expect(warrantsIssueDraft({ trend: { verdict: "leak", growthPerCycle: 0, deltas: [] }, confidence: report })).toBe(true);
+  });
+});
