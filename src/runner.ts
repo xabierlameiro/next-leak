@@ -426,6 +426,7 @@ async function measureRoute(
     minGrowthPerCycle: result.minGrowthPerCycle,
     memorySamples: result.memorySamples,
     maxOldSpaceMb: options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB,
+    warmupRequests: options.warmupRequests ?? RITUAL_DEFAULTS.warmupRequests,
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
     }),

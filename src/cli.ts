@@ -187,6 +187,7 @@ async function main(): Promise<void> {
     ...(options.requests !== null && { loadRequests: options.requests }),
     ...(options.connections !== null && { connections: options.connections }),
     ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),
+    ...(options.warmupRequests !== null && { warmupRequests: options.warmupRequests }),
     ...(options.maxOldSpaceMb !== null && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(options.diffAll && { diffAll: true }),
     ...(options.noResolve && { resolveInconclusive: false }),
