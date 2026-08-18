@@ -3,138 +3,217 @@ import {
   assessUnreclaimedRetention,
   describeUnreclaimedRetention,
 } from "./unreclaimed-retention.js";
-import type { TrendResult } from "./trend.js";
+import type { HeapSample } from "./control-server.js";
 
 const MB = 1024 * 1024;
 
-const growing = (source: "heap" | "external" = "heap"): TrendResult => ({
-  verdict: "leak",
-  growthPerCycle: 10 * MB,
-  deltas: [10 * MB, 10 * MB],
-  source,
-});
+type Series = { heap: number[]; external?: number[]; arrayBuffers?: number[] };
 
-const flat: TrendResult = {
-  verdict: "stable",
-  growthPerCycle: 0.05 * MB,
-  deltas: [-0.1 * MB, 0.2 * MB],
-  source: "heap",
+const samples = ({ heap, external, arrayBuffers }: Series): HeapSample[] =>
+  heap.map((mb, index) => ({
+    gcExposed: true,
+    heapUsed: mb * MB,
+    rss: 3 * mb * MB,
+    external: (external?.[index] ?? arrayBuffers?.[index] ?? 0) * MB,
+    arrayBuffers: (arrayBuffers?.[index] ?? 0) * MB,
+  }));
+
+// Every fixture below is a real measurement taken on 2026-08-18 and recorded in
+// the change's field-validation.md.
+
+/** vercel/next.js#96533: held between collections, flat after one. */
+const ISSUE_96533 = {
+  unreclaimed: samples({
+    heap: [46.5, 27.8, 48.0, 45.1, 39.2, 52.7],
+    external: [7.77, 5.62, 8.68, 8.09, 7.0, 9.37],
+    arrayBuffers: [4.11, 0.32, 5.03, 4.44, 3.35, 5.72],
+  }),
+  // Baseline first, then one per cycle.
+  postGc: samples({
+    heap: [27.1, 26.3, 27.3, 27.6, 27.8, 27.8, 27.9],
+    external: [3.98, 3.98, 3.98, 3.97, 3.98, 3.98, 3.97],
+    arrayBuffers: [0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32],
+  }),
+};
+
+/** The healthy fixture route: median gap 0.77 MB, 0.11x what it retains. */
+const HEALTHY = {
+  unreclaimed: samples({ heap: [9.0, 7.7, 7.7, 7.9, 8.4, 8.1] }),
+  postGc: samples({ heap: [7.3, 7.1, 7.1, 7.2, 7.2, 7.2, 7.3] }),
 };
 
 describe("assessUnreclaimedRetention", () => {
-  it("reports memory held before collection that a GC takes back", () => {
-    // The vercel/next.js#96533 shape: climbs before collection, flat after it.
+  it("finds the #96533 gap that the old slope rule missed entirely", () => {
+    // That pre-collection series classifies as `inconclusive` on its own — it
+    // oscillates rather than climbs. The gap is what carries the finding.
     const retention = assessUnreclaimedRetention({
-      unreclaimedTrend: growing(),
+      unreclaimedSamples: ISSUE_96533.unreclaimed,
+      memorySamples: ISSUE_96533.postGc,
       verdict: "stable",
-      requestsPerCycle: 2000,
+      verdictIsWellSupported: true,
     });
 
     expect(retention).not.toBeNull();
-    expect(retention?.class).toBe("heap");
-    expect(retention?.growthPer1000Requests).toBe(5 * MB);
+    expect(retention?.class).toBe("arrayBuffers");
+    expect((retention?.medianGapBytes ?? 0) / MB).toBeCloseTo(3.96, 1);
   });
 
-  it("names external memory when that is the class that grew", () => {
+  it("names the class where holding is most out of proportion, not the biggest", () => {
+    // Measured ratios: heap 0.68x, external 0.99x, arrayBuffers 3.96x. The
+    // heap gap is far larger in megabytes (18.8 vs 3.96), but arrayBuffers is
+    // where the process holds many times what it keeps — that names the
+    // mechanism the issue describes.
     const retention = assessUnreclaimedRetention({
-      unreclaimedTrend: growing("external"),
+      unreclaimedSamples: ISSUE_96533.unreclaimed,
+      memorySamples: ISSUE_96533.postGc,
       verdict: "stable",
-      requestsPerCycle: 2000,
+      verdictIsWellSupported: true,
     });
 
-    expect(retention?.class).toBe("external");
+    expect(retention?.class).toBe("arrayBuffers");
+    expect(retention?.ratio ?? 0).toBeGreaterThan(3);
+  });
+
+  it("stays quiet on a healthy route", () => {
+    expect(
+      assessUnreclaimedRetention({
+        unreclaimedSamples: HEALTHY.unreclaimed,
+        memorySamples: HEALTHY.postGc,
+        verdict: "stable",
+        verdictIsWellSupported: true,
+      })
+    ).toBeNull();
+  });
+
+  it("is not fooled by one cycle that collected on its own", () => {
+    // Cycle 2 of the real #96533 run fell back to the post-GC level because V8
+    // collected just before the reading. A mean would let that drag the
+    // finding down; the median holds.
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: ISSUE_96533.unreclaimed,
+      memorySamples: ISSUE_96533.postGc,
+      verdict: "stable",
+      verdictIsWellSupported: true,
+    });
+
+    expect(retention).not.toBeNull();
   });
 
   it("stays quiet when the route already leaks", () => {
-    // The retention is the headline there; a weaker restatement is noise.
     expect(
       assessUnreclaimedRetention({
-        unreclaimedTrend: growing(),
+        unreclaimedSamples: ISSUE_96533.unreclaimed,
+        memorySamples: ISSUE_96533.postGc,
         verdict: "leak",
-        requestsPerCycle: 2000,
+        verdictIsWellSupported: true,
       })
     ).toBeNull();
   });
 
-  it("stays quiet when nothing accumulates before collection", () => {
-    expect(
-      assessUnreclaimedRetention({
-        unreclaimedTrend: flat,
-        verdict: "stable",
-        requestsPerCycle: 2000,
-      })
-    ).toBeNull();
+  it("is not silenced by a marginal leak carrying low-confidence warnings", () => {
+    // Measured on #96533 2026-08-18: the post-GC verdict came back `leak` at
+    // +0.15 MB/1000 req with two low-confidence warnings — noise grazing the
+    // threshold — while the gap was 3.96 MB of arrayBuffers at 4x what the
+    // route retains. Silencing on any `leak` let the weaker finding hide the
+    // stronger one, and the note never appeared on the app it exists for.
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: ISSUE_96533.unreclaimed,
+      memorySamples: ISSUE_96533.postGc,
+      verdict: "leak",
+      verdictIsWellSupported: false,
+    });
+
+    expect(retention).not.toBeNull();
+    expect(retention?.class).toBe("arrayBuffers");
   });
 
-  it("stays quiet when the pre-collection series is merely undecided", () => {
-    // That series is noisy by nature — nothing has been collected — so only a
-    // series that grows every cycle is worth interrupting a run for.
+  it("still reports on an undecided route", () => {
     expect(
       assessUnreclaimedRetention({
-        unreclaimedTrend: { ...growing(), verdict: "inconclusive" },
-        verdict: "stable",
-        requestsPerCycle: 2000,
-      })
-    ).toBeNull();
-  });
-
-  it("stays quiet when the series was dropped and carries no growth", () => {
-    expect(
-      assessUnreclaimedRetention({
-        unreclaimedTrend: { verdict: "leak", growthPerCycle: 0, deltas: [] },
-        verdict: "stable",
-        requestsPerCycle: 2000,
-      })
-    ).toBeNull();
-  });
-
-  it("does not divide by a cycle that served no requests", () => {
-    expect(
-      assessUnreclaimedRetention({
-        unreclaimedTrend: growing(),
-        verdict: "stable",
-        requestsPerCycle: 0,
-      })
-    ).toBeNull();
-  });
-
-  it("reports the same finding for an inconclusive verdict", () => {
-    // Only `leak` silences it: an undecided route can still be sitting on
-    // memory nothing has collected.
-    expect(
-      assessUnreclaimedRetention({
-        unreclaimedTrend: growing(),
+        unreclaimedSamples: ISSUE_96533.unreclaimed,
+        memorySamples: ISSUE_96533.postGc,
         verdict: "inconclusive",
-        requestsPerCycle: 2000,
+        verdictIsWellSupported: true,
       })
     ).not.toBeNull();
+  });
+
+  it("stays quiet when a large gap is small next to what is retained", () => {
+    // The deliberately leaky fixture: 5.13 MB held over 24.4 MB retained, a
+    // 0.21x ratio. Its memory really is retained after a GC — that is a leak,
+    // not this. Clears the absolute floor, fails the ratio.
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: samples({ heap: [30.3, 45.2, 60.0, 76.0, 91.0, 105.9] }),
+      memorySamples: samples({ heap: [8.8, 24.4, 40.1, 54.9, 70.5, 86.3, 102.0] }),
+      verdict: "stable",
+      verdictIsWellSupported: true,
+    });
+
+    expect(retention).toBeNull();
+  });
+
+  it("stays quiet when there is no pre-collection series", () => {
+    expect(
+      assessUnreclaimedRetention({
+        unreclaimedSamples: [],
+        memorySamples: HEALTHY.postGc,
+        verdict: "stable",
+        verdictIsWellSupported: true,
+      })
+    ).toBeNull();
+  });
+
+  it("pairs each cycle with its own post-GC reading, not with the baseline", () => {
+    // A series that only looks like a gap when misaligned by one must not fire.
+    const rising = samples({ heap: [20, 30, 40, 50, 60, 70] });
+    const postGc = samples({ heap: [10, 20, 30, 40, 50, 60, 70] });
+
+    expect(
+      assessUnreclaimedRetention({
+        unreclaimedSamples: rising,
+        memorySamples: postGc,
+        verdict: "stable",
+        verdictIsWellSupported: true,
+      })
+    ).toBeNull();
+  });
+
+  it("ignores cycles with no matching post-GC reading", () => {
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: ISSUE_96533.unreclaimed,
+      memorySamples: samples({ heap: [27.1, 26.3, 27.3] }),
+      verdict: "stable",
+      verdictIsWellSupported: true,
+    });
+
+    // Only two cycles pair up; the rule still runs on what it has.
+    expect(retention === null || retention.medianGapBytes > 0).toBe(true);
   });
 });
 
 describe("describeUnreclaimedRetention", () => {
-  it("states the rate, the class and its own limits", () => {
+  it("states the gap, the class and its own limits", () => {
+    const line = describeUnreclaimedRetention({
+      class: "arrayBuffers",
+      medianGapBytes: 3.96 * MB,
+      retainedBytes: 0.32 * MB,
+      ratio: 3.96,
+    });
+
+    expect(line).toContain("3.96 MB of arrayBuffers");
+    expect(line).toContain("4.0x what it retains");
+    expect(line).toContain("a forced GC reclaims this");
+    expect(line).toContain("seconds after load");
+  });
+
+  it("labels external memory readably", () => {
     const line = describeUnreclaimedRetention({
       class: "external",
-      growthPerCycle: 10 * MB,
-      growthPer1000Requests: 5 * MB,
+      medianGapBytes: 5 * MB,
+      retainedBytes: 2 * MB,
+      ratio: 2.5,
     });
 
     expect(line).toContain("external memory");
-    expect(line).toContain("5.00 MB/1000 req");
-    // Never contradicts the verdict beside it, and never overstates itself.
-    expect(line).toContain("a forced GC reclaims this");
-    expect(line).toContain("seconds after load");
-    expect(line).toContain("while staying flat after it");
-  });
-
-  it("names the heap when the heap is what grew", () => {
-    const line = describeUnreclaimedRetention({
-      class: "heap",
-      growthPerCycle: 4 * MB,
-      growthPer1000Requests: 2 * MB,
-    });
-
-    expect(line).toContain("heap grew 2.00 MB/1000 req");
-    expect(line).not.toContain("external memory");
   });
 });

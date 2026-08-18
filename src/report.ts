@@ -1,7 +1,7 @@
 import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendVerdict } from "./trend.js";
-import { effectiveVerdict, resolveCycles } from "./confidence.js";
+import { effectiveVerdict, resolveCycles, warrantsIssueDraft } from "./confidence.js";
 import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
 import {
   assessUnreclaimedRetention,
@@ -154,9 +154,10 @@ function peakPressureLines(route: MeasuredRouteView, parameters: RunParameters):
  */
 function unreclaimedLines(route: MeasuredRouteView, verdict: TrendVerdict): string[] {
   const retention = assessUnreclaimedRetention({
-    unreclaimedTrend: route.unreclaimedTrend,
+    unreclaimedSamples: route.unreclaimedSamples,
+    memorySamples: route.memorySamples,
     verdict,
-    requestsPerCycle: route.requestsPerCycle,
+    verdictIsWellSupported: warrantsIssueDraft(route),
   });
   return retention === null
     ? []
