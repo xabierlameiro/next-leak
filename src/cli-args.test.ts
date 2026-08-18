@@ -13,6 +13,7 @@ describe("parseCliArgs", () => {
         requests: null,
         connections: null,
         idleSeconds: null,
+        warmupRequests: null,
         maxOldSpaceMb: null,
         quick: false,
         noResolve: false,
@@ -26,7 +27,7 @@ describe("parseCliArgs", () => {
   it("parses every flag", () => {
     const parsed = parseCliArgs([
       "app", "--routes", "/api,/dashboard", "--cycles", "6", "--requests", "1000",
-      "--connections", "20", "--idle", "8", "--max-old-space", "2048", "--quick",
+      "--connections", "20", "--idle", "8", "--warmup", "50", "--max-old-space", "2048", "--quick",
       "--diff-all", "--no-resolve", "--write-config", "--output", "/tmp/out",
     ]);
     if (parsed.kind !== "run") {
@@ -39,6 +40,7 @@ describe("parseCliArgs", () => {
       requests: 1000,
       connections: 20,
       idleSeconds: 8,
+      warmupRequests: 50,
       maxOldSpaceMb: 2048,
       quick: true,
       noResolve: true,
@@ -306,5 +308,26 @@ describe("--write-config", () => {
 
   it("does not apply to the build command", () => {
     expect(parseCliArgs(["build", "/app", "--write-config"]).kind).toBe("error");
+  });
+});
+
+describe("--warmup", () => {
+  it("parses the size and documents its default", () => {
+    const parsed = parseCliArgs(["/app", "--warmup", "20"]);
+    if (parsed.kind !== "run") throw new Error("expected run");
+    expect(parsed.options.warmupRequests).toBe(20);
+    expect(helpText("0.0.0")).toContain("default 200");
+  });
+
+  it("says why someone would lower it", () => {
+    // The right amount is a property of the app's caches, not of the tool: on
+    // an app that caches per request, warm-up fills the cache the baseline
+    // then measures.
+    expect(helpText("0.0.0")).toContain("cache per request");
+  });
+
+  it("rejects nonsense like every other numeric flag", () => {
+    expect(parseCliArgs(["/app", "--warmup", "0"]).kind).toBe("error");
+    expect(parseCliArgs(["/app", "--warmup", "abc"]).kind).toBe("error");
   });
 });
