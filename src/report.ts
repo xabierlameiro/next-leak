@@ -3,6 +3,7 @@ import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendVerdict } from "./trend.js";
 import { effectiveVerdict, resolveCycles, warrantsIssueDraft } from "./confidence.js";
 import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
+import { hasPlaceholders, renderConfigSkeleton } from "./route-guidance.js";
 import {
   assessUnreclaimedRetention,
   describeUnreclaimedRetention,
@@ -214,11 +215,39 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
 }
 
 /** Renders the terminal report. Pure: no I/O, no colors, stable output. */
+/**
+ * The config that would measure the routes this run had to skip.
+ *
+ * Naming a file and leaving the reader to work out its shape is the difference
+ * between a run they fix in ten seconds and one they abandon. Values come from
+ * the build's own prerendered paths where it knows them, so the fragment often
+ * needs no editing at all.
+ */
+function skippedGuidanceLines(report: RunReport): string[] {
+  const needConfig = report.routes
+    .filter((route) => route.status === "skipped" && route.reason.includes("sample params"))
+    .map((route) => route.route);
+  const skeleton = renderConfigSkeleton(needConfig, report.prerender);
+  if (skeleton === null) {
+    return [];
+  }
+  const editing = hasPlaceholders(skeleton)
+    ? ` Replace each ${"REPLACE-ME"} with a value that exists in your app.`
+    : ` The values come from paths your build already prerendered.`;
+  return [
+    "",
+    `${needConfig.length} route(s) need sample params. Write this to ` +
+      `next-leak.config.json in the app directory:${editing}`,
+    ...skeleton.split("\n").map((line) => `  ${line}`),
+  ];
+}
+
 export function formatReport(report: RunReport): string {
   const lines = [`next-leak — ${report.appDir}`, ""];
   for (const route of report.routes) {
     lines.push(...routeLines(route, report.parameters));
   }
+  lines.push(...skippedGuidanceLines(report));
   // A verdict whose gate is not printed cannot be reproduced: the same route
   // judged against a different threshold is a different measurement.
   const { minGrowthPerCycle, loadRequests, cycles, maxOldSpaceMb } = report.parameters;

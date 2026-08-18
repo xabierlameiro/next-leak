@@ -156,10 +156,12 @@ describe("formatReport numeric fidelity", () => {
     expect(output).not.toContain("] D ");
   });
 
-  it("renders every non-measured route exactly once", () => {
-    const output = formatReport(makeRunReport());
-    expect(output.split("\n").filter((line) => line.includes("/products/[id]"))).toHaveLength(1);
-    expect(output.split("\n").filter((line) => line.includes("/broken"))).toHaveLength(1);
+  it("renders every non-measured route exactly once in the listing", () => {
+    // A skipped route also appears in the config skeleton below the listing;
+    // that is a second mention on purpose, not a duplicated row.
+    const lines = formatReport(makeRunReport()).split("\n");
+    expect(lines.filter((line) => line.includes("skipped:") && line.includes("/products/[id]"))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes("/broken"))).toHaveLength(1);
   });
 });
 
@@ -361,5 +363,36 @@ describe("formatReport for ISR routes driven through revalidation", () => {
 
   it("says nothing for a route that is not ISR", () => {
     expect(formatReport(makeRunReport())).not.toContain("ISR revalidation");
+  });
+});
+
+// Telling someone a config file exists and leaving them to work out its shape
+// is the difference between a run they fix in ten seconds and one they abandon.
+describe("formatReport guidance for skipped routes", () => {
+  it("prints the config that would measure them", () => {
+    const output = formatReport(makeRunReport());
+
+    expect(output).toContain("need sample params");
+    expect(output).toContain("next-leak.config.json");
+    expect(output).toContain('"/products/[id]"');
+    expect(output).toContain("REPLACE-ME");
+  });
+
+  it("uses values the build already prerendered when it knows them", () => {
+    const report = makeRunReport();
+    report.prerender = {
+      routes: { "/products/widget-1": { initialRevalidateSeconds: 60, srcRoute: "/products/[id]" } },
+    };
+    const output = formatReport(report);
+
+    expect(output).toContain("widget-1");
+    expect(output).toContain("already prerendered");
+    expect(output).not.toContain("REPLACE-ME");
+  });
+
+  it("says nothing when no route needs configuring", () => {
+    const report = makeRunReport();
+    report.routes = report.routes.filter((route) => route.status !== "skipped");
+    expect(formatReport(report)).not.toContain("need sample params");
   });
 });

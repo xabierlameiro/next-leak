@@ -14,7 +14,12 @@ import type { HeapSample } from "./control-server.js";
 import { captureEnvironment, type MeasurementEnvironment } from "./environment.js";
 import { diffSnapshotFiles, type HeapDiff } from "./heap-diff.js";
 import { DEFAULT_MAX_OLD_SPACE_MB } from "./launcher.js";
-import { discoverPagesRoutes, discoverRoutes, type DiscoveredRoute } from "./manifests.js";
+import {
+  discoverPagesRoutes,
+  discoverRoutes,
+  type DiscoveredRoute,
+  type PrerenderManifest,
+} from "./manifests.js";
 import { extractModuleRegistry } from "./module-registry.js";
 import { loadRouteConfig, resolveRoutePath, type RouteConfig } from "./route-config.js";
 import {
@@ -132,6 +137,8 @@ export type RunReport = {
   appDir: string;
   startedAt: string;
   workDir: string;
+  /** Carried so the report can suggest sample params the build already knows. */
+  prerender?: PrerenderManifest;
   environment: MeasurementEnvironment;
   parameters: RunParameters;
   routes: RouteReport[];
@@ -637,6 +644,7 @@ export async function runMeasurement(
     appDir: target.appDir,
     startedAt: startedAt.toISOString(),
     workDir,
+    ...(target.prerender !== undefined && { prerender: target.prerender }),
     environment: captureEnvironment(nextVersion),
     parameters,
     routes: reports,

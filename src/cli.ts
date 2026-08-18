@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatBuildReport } from "./build-report.js";
 import { runBuildMeasurement } from "./build-run.js";
@@ -9,8 +11,10 @@ import { checkRuntime } from "./guards.js";
 import { killActiveChildren } from "./launcher.js";
 import { formatReport } from "./report.js";
 import { RouteConfigError } from "./route-config.js";
+import { discoverPagesRoutes, discoverRoutes } from "./manifests.js";
+import { hasPlaceholders, renderConfigSkeleton } from "./route-guidance.js";
 import { runMeasurement } from "./runner.js";
-import { TargetError } from "./target.js";
+import { TargetError, validateTarget } from "./target.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -107,6 +111,40 @@ async function runBuildCommand(appDir: string): Promise<void> {
   }
 }
 
+/**
+ * Writes the config for routes that cannot be measured without sample params.
+ *
+ * Refuses to overwrite: someone who already has a config has values in it that
+ * this cannot reconstruct, and losing them to a convenience flag is worse than
+ * printing the fragment and letting them merge it.
+ */
+async function writeConfigSkeleton(appDir: string): Promise<void> {
+  const target = await validateTarget(appDir);
+  const routes = [...discoverRoutes(target.appPaths), ...discoverPagesRoutes(target.pages)]
+    .filter((route) => route.dynamic && route.unaddressableReason === undefined)
+    .map((route) => route.path);
+  const skeleton = renderConfigSkeleton(routes, target.prerender);
+  if (skeleton === null) {
+    console.log("no route needs sample params — nothing to write");
+    return;
+  }
+  const file = path.join(target.appDir, "next-leak.config.json");
+  try {
+    await writeFile(file, `${skeleton}\n`, { flag: "wx" });
+  } catch {
+    console.error(
+      `error: ${file} already exists — not overwriting. The fragment that would ` +
+        `measure the skipped routes:\n\n${skeleton}`
+    );
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`wrote ${file}`);
+  if (hasPlaceholders(skeleton)) {
+    console.log("replace each REPLACE-ME with a value that exists in your app");
+  }
+}
+
 async function main(): Promise<void> {
   const parsed = parseCliArgs(process.argv.slice(2));
   if (handleNonRunCommand(parsed)) {
@@ -117,6 +155,10 @@ async function main(): Promise<void> {
     return;
   }
   if (parsed.kind !== "run") {
+    return;
+  }
+  if (parsed.options.writeConfig) {
+    await writeConfigSkeleton(parsed.options.appDir);
     return;
   }
   if (!hasHeapHeadroom()) {
@@ -154,6 +196,13 @@ async function main(): Promise<void> {
   console.log(formatReport(report));
   if (aborter.signal.aborted) {
     process.exitCode = 130;
+    return;
+  }
+  // A run that measured nothing answered no question, however cleanly it
+  // finished. Exiting 0 there reads as "your app is fine" in CI.
+  if (!report.routes.some((route) => route.status === "measured")) {
+    console.error("error: no route was measured — nothing above is a verdict about your app");
+    process.exitCode = 1;
   }
 }
 
