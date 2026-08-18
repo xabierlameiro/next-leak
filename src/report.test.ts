@@ -321,3 +321,45 @@ describe("formatReport confidence", () => {
     expect(output).toContain("--routes /leaky");
   });
 });
+
+// An ISR route serves its cache unless the request carries the build's own
+// revalidation header. Measured on vercel/next.js#96533: the same app reports
+// `leak` with that header and `stable` without it — so a route the run could
+// not drive must never be presented as healthy.
+describe("formatReport for routes that were not exercised", () => {
+  it("says not exercised, never stable", () => {
+    const report = makeRunReport();
+    report.routes = [
+      {
+        route: "/posts/[slug]",
+        status: "not-exercised",
+        reason:
+          "revalidates every 3600s, but the build's prerender-manifest.json carries no previewModeId",
+      },
+    ];
+    const output = formatReport(report);
+
+    expect(output).toContain("/posts/[slug]  not exercised:");
+    expect(output).toContain("3600s");
+    expect(output).not.toContain("stable");
+  });
+});
+
+describe("formatReport for ISR routes driven through revalidation", () => {
+  it("says the route was driven, and how often it revalidates", () => {
+    // Without this line a reader cannot tell a curve measured against a
+    // re-render from one measured against a static cache.
+    const report = makeRunReport();
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("fixture broken");
+    route.revalidatedEverySeconds = 3600;
+    const output = formatReport(report);
+
+    expect(output).toContain("driven through ISR revalidation");
+    expect(output).toContain("revalidates every 3600s");
+  });
+
+  it("says nothing for a route that is not ISR", () => {
+    expect(formatReport(makeRunReport())).not.toContain("ISR revalidation");
+  });
+});
