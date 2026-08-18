@@ -1,5 +1,5 @@
 import autocannon from "autocannon";
-import { UNIQUE_MARKER } from "./route-config.js";
+import { boundedMarkerOf, UNIQUE_MARKER } from "./route-config.js";
 
 export type LoadPhaseOptions = {
   url: string;
@@ -52,6 +52,35 @@ async function describeRedirect(url: string): Promise<string | null> {
   }
 }
 
+/**
+ * Cycles a request path through exactly `bound` distinct values.
+ *
+ * The counter is shared across connections on purpose: what matters is how many
+ * distinct keys the app sees over the phase, not which connection sent which.
+ */
+function boundedRequestSequence(
+  fullUrl: string,
+  bounded: { marker: string; bound: number }
+): { origin: string; requests: Array<Record<string, unknown>> } {
+  // Deliberately not `parsed.pathname`: that returns the percent-encoded form,
+  // where `{n%5}` has become `%7Bn%255%7D` and the marker no longer matches.
+  const parsed = new URL(fullUrl);
+  const template = fullUrl.slice(parsed.origin.length);
+  let counter = 0;
+  return {
+    origin: parsed.origin,
+    requests: [
+      {
+        setupRequest: (request: Record<string, unknown>) => {
+          const value = String(counter % bounded.bound);
+          counter += 1;
+          return { ...request, path: template.split(bounded.marker).join(value) };
+        },
+      },
+    ],
+  };
+}
+
 /** Runs one bounded load phase and fails when the error budget is exceeded. */
 export async function runLoadPhase(options: LoadPhaseOptions): Promise<LoadPhaseResult> {
   // `{n}` in the path means "every request must be a distinct URL" — the only
@@ -60,12 +89,21 @@ export async function runLoadPhase(options: LoadPhaseOptions): Promise<LoadPhase
   const unique = options.url.includes(UNIQUE_MARKER);
   const url = unique ? options.url.split(UNIQUE_MARKER).join("[<id>]") : options.url;
 
+  // `{n%N}` needs a *bounded* set of distinct URLs, revisited across cycles —
+  // the shape a real ISR cache or a keyed LRU actually has. autocannon's
+  // idReplacement is unbounded by construction, so the sequence is generated
+  // here instead, one path per request.
+  const bounded = boundedMarkerOf(options.url);
+  const boundedRequests =
+    bounded === null ? undefined : boundedRequestSequence(options.url, bounded);
+
   const raw = await autocannon({
-    url,
+    url: boundedRequests === undefined ? url : boundedRequests.origin,
     amount: options.amount,
     connections: options.connections,
     ...(options.headers !== undefined && { headers: options.headers }),
     ...(unique && { idReplacement: true }),
+    ...(boundedRequests !== undefined && { requests: boundedRequests.requests }),
   });
 
   const result: LoadPhaseResult = {
