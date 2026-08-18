@@ -81,6 +81,35 @@ function boundedRequestSequence(
   };
 }
 
+/**
+ * What the failures look like, and which knob addresses them.
+ *
+ * A failed load phase says the run did not happen; it does not say whose fault
+ * that is, and the two causes need opposite responses. Measured on the
+ * vercel/next.js#97424 reproduction: 103 of 300 requests failed with 0 non-2xx
+ * and 70 timeouts — the app could not serve 5 concurrent renders that each fan
+ * out to 30 fetches. Reading that as "the route is broken" sends someone to
+ * file a bug against their own app; reading it as saturation sends them to
+ * lower the load, which is what actually gets a measurement.
+ */
+function diagnoseFailure(result: LoadPhaseResult, connections: number): string {
+  if (result.timeouts > result.non2xx) {
+    return (
+      ` — the failures are timeouts rather than error responses, so the load may ` +
+      `simply be more than the app or something it calls can serve; lower ` +
+      `--connections (currently ${connections}) and re-run before concluding ` +
+      `anything about memory`
+    );
+  }
+  if (result.non2xx > 0) {
+    return (
+      ` — the app answered with errors under load, which is a fault in the route ` +
+      `rather than too much traffic; fix that before measuring it`
+    );
+  }
+  return "";
+}
+
 /** Runs one bounded load phase and fails when the error budget is exceeded. */
 export async function runLoadPhase(options: LoadPhaseOptions): Promise<LoadPhaseResult> {
   // `{n}` in the path means "every request must be a distinct URL" — the only
@@ -135,7 +164,7 @@ export async function runLoadPhase(options: LoadPhaseOptions): Promise<LoadPhase
         `(${result.non2xx} non-2xx, ${result.errors} errors, ${result.timeouts} timeouts` +
         (unanswered > 0 ? `, ${unanswered} with no recorded response` : "") +
         ")" +
-        (redirect === null ? "" : ` — ${redirect}`),
+        (redirect === null ? diagnoseFailure(result, options.connections) : ` — ${redirect}`),
       result
     );
   }
