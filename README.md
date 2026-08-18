@@ -23,19 +23,31 @@ $ npx next-leak . --quick
 ```
 
 That first line is a real run against the reproduction for
-[vercel/next.js#95094](https://github.com/vercel/next.js/issues/95094), an open
-Next.js issue: the sandbox's `TimeoutsManager` never releases timeout ids from
-middleware. next-leak found the growth, the retaining object and the chain that
-holds it — without being told what to look for.
+[vercel/next.js#95094](https://github.com/vercel/next.js/issues/95094): the
+sandbox's `TimeoutsManager` never released timeout ids from middleware.
+next-leak found the growth, the retaining object and the chain that holds it —
+without being told what to look for. Next.js 16.3.0 has since fixed it.
 
-**Verified against real, open Next.js issues**, not synthetic fixtures:
+**Verified against real Next.js issues**, not synthetic fixtures. Issue states
+checked 2026-08-18:
 
-| Issue | What it is | Result |
-|---|---|---|
-| [#95094](https://github.com/vercel/next.js/issues/95094) | Middleware `setTimeout` ids retained by the sandbox | **Reproduced** · mechanism named · 112 MB retained |
-| [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | **Reproduced** · 26.7 → 71.9 MB |
-| [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | **Reproduced** · 32.8 → 369.9 MB |
-| [#94919](https://github.com/vercel/next.js/issues/94919) | RSC tree retained on client aborts | **Reproduced** · 39 → 139 MB · [with a caveat](#scope-and-limits-read-before-filing-issues) |
+| Issue | What it is | Measured | State today |
+|---|---|---|---|
+| [#96533](https://github.com/vercel/next.js/issues/96533) | ISR revalidation holds RSC buffers between collections | 4–5 MB of `arrayBuffers` held vs 0.32 MB retained | **open** |
+| [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | worker rss 1.07 → 2.96 GB, then OOM | **open** |
+| [#92287](https://github.com/vercel/next.js/issues/92287) | Cache Components: unbounded `arrayBuffers` under load | peaked 3.1 GB while retaining 36 MB | **open** |
+| [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | 32.8 → 369.9 MB | **open** |
+| [#89091](https://github.com/vercel/next.js/issues/89091) | zlib retention on mid-stream aborts | +42.5 MB per 1000 aborted requests | **open** |
+| [#95094](https://github.com/vercel/next.js/issues/95094) | Middleware `setTimeout` ids retained by the sandbox | 112 MB retained; flat after the fix | fixed in 16.3.0 |
+| [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | 26.7 → 71.9 MB | fixed in 16.3.0 |
+| [#94919](https://github.com/vercel/next.js/issues/94919) | Retention on client aborts | 39 → 139 MB · [with a caveat](#scope-and-limits-read-before-filing-issues) | fixed in 16.3.0 |
+
+The three fixed ones are kept deliberately: a tool that only lists open bugs
+looks impressive until the bugs close, and what those rows show is that the
+measurements matched what the fixes turned out to be. #94919 is the sharpest —
+the PR that closed it discarded the RSC-WeakMap hypothesis in the title and
+attributed the leak to native zlib retention instead, which is the same
+mechanism the #89091 measurement had already isolated.
 
 The full causal chain, measured on that same issue: leak found (28.7 -> 138.9 MB
 across 8 cycles), the workaround from the thread applied (`clearTimeout(id)`
@@ -102,11 +114,26 @@ Every report prints the gate it used.
 | `--requests <n>` | 5000 | Requests per cycle. Raises sensitivity as well as duration: the growth gate scales with it, down to a noise floor around 5000 |
 | `--connections <n>` | 100 | Concurrent connections |
 | `--idle <seconds>` | 30 | **Maximum** wait before each sample; the run continues as soon as the heap settles |
+| `--warmup <n>` | 200 | Requests before the baseline snapshot. Lower it on apps that cache per request: warm-up fills those caches and the baseline then measures the warm-up, not the app. The run says so when it happens |
 | `--max-old-space <mb>` | 512 | Heap cap of each measured process. Raise it for apps whose legitimate working set is larger, or they die under measurement |
 | `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Same cycle count as the default; what it trades away is traffic per cycle, so it sits on the noise floor and is less sensitive to slow leaks. Explicit flags override it |
 | `--no-resolve` | off | Skip the second pass on inconclusive routes |
 | `--diff-all` | off | Diff snapshots for stable routes too |
 | `--output <dir>` | `<app>/.next-leak` | Where runs are written |
+| `--write-config` | off | Write `next-leak.config.json` for the routes that need sample params, then exit. Never overwrites an existing file |
+
+There is a second command for the other half of the problem:
+
+```bash
+# Measure the build itself, not a built server
+npx next-leak build .
+```
+
+A large site can run out of heap while prerendering, before any server exists to
+measure ([#97464](https://github.com/vercel/next.js/issues/97464)). That command
+runs your build unmodified and samples the resident memory of each
+static-generation worker. It needs neither a previous build nor standalone
+output, and takes `--output` only.
 
 Dynamic routes need sample params in `next-leak.config.json` in your app dir:
 
@@ -116,6 +143,13 @@ Dynamic routes need sample params in `next-leak.config.json` in your app dir:
   "routes": { "/products/[id]": { "id": "42" } },
   "headers": { "accept-encoding": "gzip, br", "cookie": "session=..." }
 }
+```
+
+`--write-config` generates that file for you, filling in values from paths your
+build already prerendered where it knows them, so it usually resolves on the
+first try. When a run skips a route it prints the same fragment.
+
+```json
 ```
 
 - **`headers`** are sent with every request. Real traffic is not header-less:
@@ -168,7 +202,7 @@ separates them, because each one has a different fix:
   with the traffic, so the longer run decides the same thing. If the heap is
   flat but RSS keeps climbing, the report says so explicitly: that is an
   allocator, external-buffer or fragmentation problem, not a JS-heap leak.
-- **`leak`** — the report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. An `ISSUE-<route>.md` draft is generated; if the leak is app-owned, the draft tells you **not** to file it upstream.
+- **`leak`** — the report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. An `ISSUE-<route>.md` draft is generated **when the evidence plainly supports the verdict** — a `leak` carrying low-confidence warnings (growth barely over the threshold, one cycle dominating the mean, too few cycles for its size) gets the verdict but no draft, because a draft is written to be pasted into someone else's tracker. If the leak is app-owned, the draft tells you **not** to file it upstream.
 - **`inconclusive`** — the evidence does not decide. The run does not stop there: any inconclusive route is **measured again automatically**, with twice the cycles, and the second pass is what you see (`resolved at 8 cycles` next to the verdict). On the reproduction for [#95094](https://github.com/vercel/next.js/issues/95094), `--quick` alone reports `inconclusive` on three deltas and then comes back with the leak. `--no-resolve` turns the second pass off; when even that is undecided, the re-run command is still printed.
 - **`failed`** — the route errored under load (auth redirects, POST-only endpoints). >1% non-2xx aborts measurement instead of measuring garbage. That's by design.
 
@@ -198,6 +232,49 @@ value *sampled* (every 250 ms), so it is a lower bound.
 If the measured process dies at the limit instead of merely approaching it,
 the route fails saying exactly that, with the limit in force and how to raise
 it.
+
+### Memory a GC reclaims that production never reclaims
+
+There is a third question again, and it is the shape of most of the leaks
+reported in August: memory the process *holds between collections*, which a
+forced GC takes back and a long-running server may never run one to take back.
+Every verdict above is post-GC, so that class is invisible to it by
+construction.
+
+Each cycle is therefore read twice — once before any forced collection, once
+after — and the gap between them is reported when it is large:
+
+```
+✖ /posts/[slug]  leak  (+0.16 MB/1000 req)  heap 27.1 → 26.3 → … → 27.9 MB
+    driven through ISR revalidation (revalidates every 3600s; without it the load
+    would serve the cache)
+    ▲ unreclaimed: held 4.72 MB of arrayBuffers between collections that a GC took
+      back (4.7x what it retains) — a forced GC reclaims this, a long-running
+      process may not run one often enough to
+```
+
+A real measurement of the reproduction in
+[#96533](https://github.com/vercel/next.js/issues/96533), whose reporter
+accumulated 1.16 GB of `arrayBuffers` over four days against a flat JS heap.
+The note fires on the **gap**, not on a trend: that pre-collection series
+oscillates rather than climbs, and a rule keyed on it climbing reported nothing
+at all. It needs both a floor (2 MB) and a ratio (0.35× what the route retains),
+because the absolute size alone does not separate this from an ordinary leak.
+
+Its limit, stated on the line itself: the reading is taken seconds after load,
+not the hours a production process runs between full collections, so it
+includes memory that had not been collected yet. It never changes the verdict.
+
+### ISR routes are driven, not served from cache
+
+A route with a revalidation period serves its cache unless the request carries
+the build's own `x-prerender-revalidate` header. Measured on that same app: the
+identical run reports `leak` with the header and `stable` without it. next-leak
+reads `previewModeId` from `.next/prerender-manifest.json` and drives those
+routes itself; a header you set in `next-leak.config.json` wins untouched. When
+the manifest cannot supply one, the route is reported `not exercised` with no
+verdict, because a flat curve measured against a static cache says nothing about
+the app.
 
 ## The tool grades its own measurement
 
@@ -280,7 +357,7 @@ through the build's source maps.
   reporting a number that would be measuring the parent.
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
-- Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against real reproductions from open issues. The contracts it relies on are stable since Next 13–14, but older versions are untested.
+- Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.0/16.3.1 and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). Most recent measurements, 2026-08-17/18: the runtime path on 16.2.12 and 16.3.1-canary.18, the build path on 16.2.12 and 16.3.1. The contracts it relies on are stable since Next 13–14, but older versions are untested.
 - **Each measured process runs under a 512 MB heap cap** by default, so a leak
   reaches a ceiling in minutes instead of the hours a production container
   takes. An app whose legitimate working set is larger needs
