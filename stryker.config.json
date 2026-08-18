@@ -40,7 +40,15 @@
     "src/load.ts",
     "src/control-server.ts",
     "src/launcher.ts",
-    "src/control-client.ts"
+    "src/control-client.ts",
+    "src/isr.ts",
+    "src/route-guidance.ts",
+    "src/unreclaimed-retention.ts",
+    "src/process-tree.ts",
+    "src/build-verdict.ts",
+    "src/build-target.ts",
+    "src/build-run.ts",
+    "src/build-report.ts"
   ],
   "thresholds": {
     "high": 90,

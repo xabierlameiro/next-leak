@@ -279,6 +279,7 @@ const PROBE_BYTES = 512;
  */
 export async function assertReadableSnapshot(file: string): Promise<void> {
   const { open, stat } = await import("node:fs/promises");
+  const { constants } = await import("node:buffer");
   let size: number;
   try {
     size = (await stat(file)).size;
@@ -287,6 +288,22 @@ export async function assertReadableSnapshot(file: string): Promise<void> {
   }
   if (size === 0) {
     throw new SnapshotError(`heap snapshot is empty: ${file}`);
+  }
+  // A snapshot is parsed by reading it into one string, and V8 caps a string
+  // at 512 MB. Past that the read dies with `RangeError: Invalid string
+  // length` from inside node:fs, which no amount of care in this file
+  // prevents — so refuse before the attempt and say what happened. Measured
+  // 2026-08-18 on the vercel/next.js#97424 reproduction: the second pass
+  // wrote a 1.7 GB baseline and the whole run died at the diff, taking a
+  // completed measurement with it.
+  if (size > constants.MAX_STRING_LENGTH) {
+    throw new SnapshotError(
+      `heap snapshot is ${(size / (1024 * 1024)).toFixed(0)} MB, past the ` +
+        `${(constants.MAX_STRING_LENGTH / (1024 * 1024)).toFixed(0)} MB a single string can ` +
+        `hold, so it cannot be parsed: ${file}. The measurement itself is unaffected — ` +
+        `only the snapshot diff, which names the retaining object, is unavailable. ` +
+        `Lower --requests or --cycles to keep the heap smaller if you need it`
+    );
   }
 
   const handle = await open(file, "r");

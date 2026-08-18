@@ -1,6 +1,10 @@
+import { mkdtemp, open } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertReadableSnapshot,
+  SnapshotError,
   diffAgainstBaseline,
   diffSnapshotFiles,
   retainerChain,
@@ -591,5 +595,43 @@ describe("assertReadableSnapshot", () => {
     await expect(
       assertReadableSnapshot(await write("pad.heapsnapshot", `\n  ${body}\n`))
     ).resolves.toBeUndefined();
+  });
+});
+
+// A snapshot is parsed by reading it into one string, and V8 caps a string at
+// 512 MB. Measured 2026-08-18 on the vercel/next.js#97424 reproduction: the
+// second pass wrote a 1.7 GB baseline, node:fs died with `RangeError: Invalid
+// string length`, and a finished measurement went with it.
+describe("snapshots too large to parse", () => {
+  it("refuses a snapshot past the maximum string length, naming the size", async () => {
+    const { constants } = await import("node:buffer");
+    const dir = await mkdtemp(path.join(tmpdir(), "next-leak-huge-"));
+    const file = path.join(dir, "baseline.heapsnapshot");
+    // Sparse file: the size is what matters, not the bytes.
+    const handle = await open(file, "w");
+    await handle.write('{"snapshot":{', 0);
+    await handle.truncate(constants.MAX_STRING_LENGTH + 1024);
+    await handle.close();
+
+    await expect(assertReadableSnapshot(file)).rejects.toThrow(SnapshotError);
+    await expect(assertReadableSnapshot(file)).rejects.toThrow(/cannot be parsed/);
+    await expect(assertReadableSnapshot(file)).rejects.toThrow(
+      /measurement itself is unaffected/
+    );
+  });
+
+  it("does not blame size for a file just under the limit", async () => {
+    // Still rejected — it is a sparse file, so the truncation guard catches
+    // it — but the size guard must not be the one to fire, or every large
+    // healthy snapshot would be refused.
+    const { constants } = await import("node:buffer");
+    const dir = await mkdtemp(path.join(tmpdir(), "next-leak-big-"));
+    const file = path.join(dir, "baseline.heapsnapshot");
+    const handle = await open(file, "w");
+    await handle.write('{"snapshot":{', 0);
+    await handle.truncate(constants.MAX_STRING_LENGTH - 1024);
+    await handle.close();
+
+    await expect(assertReadableSnapshot(file)).rejects.not.toThrow(/cannot be parsed/);
   });
 });

@@ -248,3 +248,50 @@ describe("a run where most cycles happened to be collected", () => {
     expect((retention?.largestGapBytes ?? 0) / MB).toBeCloseTo(3.79, 1);
   });
 });
+
+// Boundaries the mutation run found unfixed: each of these is a calibrated
+// value whose exact edge nothing pinned down.
+describe("threshold boundaries", () => {
+  it("fires on a gap sitting exactly on the floor", () => {
+    // 3 MB held against 1 MB retained: a gap of exactly 2 MB. `<` lets the
+    // equal case through and `<=` would not, and the difference decides
+    // whether a route on the line is reported at all.
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: samples({ heap: [3, 3, 3, 3] }),
+      memorySamples: samples({ heap: [1, 1, 1, 1, 1] }),
+      verdict: "stable",
+      verdictIsWellSupported: true,
+    });
+
+    expect(retention).not.toBeNull();
+    expect((retention?.largestGapBytes ?? 0) / MB).toBeCloseTo(2, 2);
+  });
+
+  it("measures what is retained from the cycles, not from the baseline", () => {
+    // The baseline is warm-up's level, not the app's. Folding it into the
+    // denominator here would make a 20 MB gap over 10 MB retained (2.0x) read
+    // as 20 over 100 (0.2x) and silence the note.
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: samples({ heap: [30, 30, 30, 30] }),
+      memorySamples: samples({ heap: [100, 10, 10, 10, 10] }),
+      verdict: "stable",
+      verdictIsWellSupported: true,
+    });
+
+    expect(retention).not.toBeNull();
+    expect(retention?.retainedBytes ?? 0).toBe(10 * MB);
+    expect(retention?.ratio ?? 0).toBeCloseTo(2, 1);
+  });
+
+  it("names external memory when that is the class out of proportion", () => {
+    // arrayBuffers flat, external holding: the label has to follow the data.
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: samples({ heap: [10, 10, 10, 10], external: [9, 9, 9, 9] }),
+      memorySamples: samples({ heap: [9, 9, 9, 9, 9], external: [1, 1, 1, 1, 1] }),
+      verdict: "stable",
+      verdictIsWellSupported: true,
+    });
+
+    expect(retention?.class).toBe("external");
+  });
+});

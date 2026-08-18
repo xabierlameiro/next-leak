@@ -1151,3 +1151,37 @@ describe("routeSlug", () => {
     expect(routeSlug("/ñ")).toBe(routeSlug("/ñ"));
   });
 });
+
+// The diff names the retaining object; the verdict does not depend on it.
+// Measured 2026-08-18 on the vercel/next.js#97424 reproduction: a 1.7 GB
+// snapshot cannot be read into a single string, node:fs threw, and a finished
+// measurement went down with the whole run.
+describe("a failed snapshot diff does not lose the measurement", () => {
+  it("keeps the verdict and says the diff is unavailable", async () => {
+    const events: string[] = [];
+    const appDir = await makeAppDir({ "/leaky/page": "app/leaky/page.js" });
+    const messages: string[] = [];
+    const report = await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        onProgress: (message) => messages.push(message),
+      },
+      {
+        ...makeDeps(events),
+        diff: async () => {
+          throw new Error("heap snapshot is 1740 MB, past the 512 MB a single string can hold");
+        },
+      }
+    );
+
+    const route = report.routes.find((entry) => entry.route === "/leaky");
+    if (route?.status !== "measured") {
+      throw new Error("the measurement must survive a failed diff");
+    }
+    expect(route.trend.verdict).toBe("leak");
+    expect(route.diff).toBeNull();
+    expect(messages.some((message) => message.includes("snapshot diff unavailable"))).toBe(true);
+    expect(messages.some((message) => message.includes("1740 MB"))).toBe(true);
+  });
+});
