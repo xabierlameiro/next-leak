@@ -72,18 +72,12 @@ export type BuildTrend = {
  * moves tens of megabytes between readings through allocator behaviour alone,
  * with nothing retained.
  *
- * Anchored on the two builds measured on 2026-08-17, same project and same
- * heap cap:
- *
- * | next    | worker RSS across the generation phase | largest healthy segment delta |
- * |---------|----------------------------------------|-------------------------------|
- * | 16.2.12 | flat, 428 → 530 MB                     | 17 MB                         |
- * | 16.3.1  | 1070 → 2960 MB, then OOM               | ~315 MB per segment           |
- *
- * 32 MB sits at roughly twice the largest delta a healthy build produced and an
- * order of magnitude below the leaking one. The consequence to be honest about:
- * a build retaining less than this per segment reads as stable — and a build
- * retaining less than this per segment is not one that OOMs.
+ * Anchored on two builds of the same project, same heap cap, 2026-08-17:
+ * 16.2.12 stayed flat (428 → 530 MB, largest segment delta 17 MB) while 16.3.1
+ * climbed 1070 → 2960 MB and then OOMed, ~315 MB per segment. 32 MB is roughly
+ * twice the largest healthy delta and an order of magnitude below the leaking
+ * one. The consequence to be honest about: a build retaining less than this per
+ * segment reads as stable — and one retaining less than this does not OOM.
  */
 export const BUILD_GROWTH_GATE_BYTES = 32 * 1024 * 1024;
 

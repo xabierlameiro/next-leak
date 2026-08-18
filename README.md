@@ -35,9 +35,9 @@ checked 2026-08-18:
 |---|---|---|---|
 | [#96533](https://github.com/vercel/next.js/issues/96533) | ISR revalidation holds RSC buffers between collections | 4–5 MB of `arrayBuffers` held vs 0.32 MB retained | **open** |
 | [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | worker rss 1.07 → 2.96 GB, then OOM | **open** |
-| [#92287](https://github.com/vercel/next.js/issues/92287) | Cache Components: unbounded `arrayBuffers` under load | peaked 3.1 GB while retaining 36 MB | **open** |
+| [#92287](https://github.com/vercel/next.js/issues/92287) | Cache Components: unbounded `arrayBuffers` under load | 37.5 MB of arrayBuffers held between collections, 37x what it retains (16.3.1) | **open** |
 | [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | 32.8 → 369.9 MB | **open** |
-| [#89091](https://github.com/vercel/next.js/issues/89091) | zlib retention on mid-stream aborts | +42.5 MB per 1000 aborted requests | **open** |
+| [#89091](https://github.com/vercel/next.js/issues/89091) | zlib retention on mid-stream aborts | +42.5 MB/1000 aborted req on 16.1.5; **+0.03 on 16.3.1** | open, no longer reproduces |
 | [#95094](https://github.com/vercel/next.js/issues/95094) | Middleware `setTimeout` ids retained by the sandbox | 112 MB retained; flat after the fix | fixed in 16.3.0 |
 | [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | 26.7 → 71.9 MB | fixed in 16.3.0 |
 | [#94919](https://github.com/vercel/next.js/issues/94919) | Retention on client aborts | 39 → 139 MB · [with a caveat](#scope-and-limits-read-before-filing-issues) | fixed in 16.3.0 |
@@ -47,7 +47,9 @@ looks impressive until the bugs close, and what those rows show is that the
 measurements matched what the fixes turned out to be. #94919 is the sharpest —
 the PR that closed it discarded the RSC-WeakMap hypothesis in the title and
 attributed the leak to native zlib retention instead, which is the same
-mechanism the #89091 measurement had already isolated.
+mechanism the #89091 measurement had already isolated — and re-measuring #89091
+on 16.3.1 (2026-08-18) shows it gone, from +42.5 MB per 1000 aborted requests
+down to +0.03, which is the same fix arriving from the other direction.
 
 The full causal chain, measured on that same issue: leak found (28.7 -> 138.9 MB
 across 8 cycles), the workaround from the thread applied (`clearTimeout(id)`
@@ -222,8 +224,10 @@ the verdict:
 ```
 
 That is a real measurement of the reproduction in
-[vercel/next.js#92287](https://github.com/vercel/next.js/issues/92287): no
-retention, and 3 GB reached. The note fires when the peak heap comes within
+[vercel/next.js#92287](https://github.com/vercel/next.js/issues/92287) on
+16.2.2: no retention, and 3 GB reached under its own sustained load. The same
+app on 16.3.1 under a shorter profile still reaches 544 MB against 33.8 MB
+retained, so the shape has not gone anywhere. The note fires when the peak heap comes within
 75% of `--max-old-space`, or when peak RSS is at least 8× the retained heap
 and above 512 MB. It never changes the verdict — retention and peak are
 different questions, and only one of them is a leak. A peak is the highest
