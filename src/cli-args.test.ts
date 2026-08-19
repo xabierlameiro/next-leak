@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { helpText, parseCliArgs } from "./cli-args.js";
 
+describe("parseCliArgs build command", () => {
+  // Signalling a worker for a heap snapshot can stall the build being measured,
+  // so the curve-and-verdict path has to stay the one you get by default.
+  it("leaves build attribution off unless it is asked for", () => {
+    const plain = parseCliArgs(["build", "./app"]);
+    const asked = parseCliArgs(["build", "./app", "--attribute"]);
+
+    expect(plain).toEqual({
+      kind: "build",
+      options: { appDir: "./app", output: null, attributeBuild: false },
+    });
+    expect(asked.kind === "build" && asked.options.attributeBuild).toBe(true);
+  });
+});
+
 describe("parseCliArgs", () => {
   it("parses a bare app dir with defaults", () => {
     const parsed = parseCliArgs(["./my-app"]);
@@ -18,6 +33,7 @@ describe("parseCliArgs", () => {
         quick: false,
         noResolve: false,
         diffAll: false,
+      attributeBuild: false,
         writeConfig: false,
         output: null,
       },
@@ -45,6 +61,7 @@ describe("parseCliArgs", () => {
       quick: true,
       noResolve: true,
       diffAll: true,
+      attributeBuild: false,
       writeConfig: true,
       output: "/tmp/out",
     });
