@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { attributeBuildCapture } from "./build-attribution.js";
 import { formatBuildReport } from "./build-report.js";
 import { runBuildMeasurement } from "./build-run.js";
+import { discardPendingSnapshotsSync } from "./build-snapshot.js";
 import { helpText, parseCliArgs, type ParsedCli } from "./cli-args.js";
 import { checkRuntime } from "./guards.js";
 import { killActiveChildren } from "./launcher.js";
@@ -59,6 +61,9 @@ function installInterruptHandlers(): AbortController {
     process.on(signalName, () => {
       interrupts += 1;
       if (interrupts > 1) {
+        // A build capture may have left a snapshot in the project; this is the
+        // last point where anything can remove it.
+        discardPendingSnapshotsSync();
         process.exit(130);
       }
       console.error("\n· interrupted — stopping the measured process and writing a partial run.json");
@@ -95,17 +100,38 @@ function handleNonRunCommand(parsed: ParsedCli): boolean {
 }
 
 /**
- * Measuring a build needs no heap headroom of its own: nothing is diffed here,
- * and the memory that matters belongs to the build's own processes.
+ * A build measurement diffs at most one snapshot pair, and the parse limit
+ * keeps that pair below a gigabyte of worker memory, so this needs far less
+ * headroom than a route run. The memory that matters still belongs to the
+ * build's own processes.
  */
-async function runBuildCommand(appDir: string): Promise<void> {
+async function runBuildCommand(
+  appDir: string,
+  outputDir: string | null,
+  attribute: boolean
+): Promise<void> {
   const aborter = installInterruptHandlers();
+  const workDir = path.join(
+    outputDir ?? path.join(appDir, ".next-leak"),
+    new Date().toISOString().replace(/[:.]/g, "-")
+  );
+  await mkdir(workDir, { recursive: true });
   const result = await runBuildMeasurement({
     appDir,
+    // Capture is opt-in because signalling a worker for a heap snapshot can
+    // stall the build it is measuring. Observed on the #97464 reproduction:
+    // the second signal landed and the worker sat frozen for fourteen minutes
+    // with an empty snapshot file on disk, and on an earlier run for ninety.
+    // A curve and a verdict are what this command promises; naming the objects
+    // is worth asking for, not worth risking every run for.
+    ...(attribute && { workDir }),
     signal: aborter.signal,
     onProgress: (message) => console.error(`· ${message}`),
   });
-  console.log(formatBuildReport(result));
+  const attribution = await attributeBuildCapture(result, appDir, (message) =>
+    console.error(`· ${message}`)
+  );
+  console.log(formatBuildReport(result, attribution));
   if (aborter.signal.aborted) {
     process.exitCode = 130;
   }
@@ -151,7 +177,11 @@ async function main(): Promise<void> {
     return;
   }
   if (parsed.kind === "build") {
-    await runBuildCommand(parsed.options.appDir);
+    await runBuildCommand(
+      parsed.options.appDir,
+      parsed.options.output,
+      parsed.options.attributeBuild
+    );
     return;
   }
   if (parsed.kind !== "run") {

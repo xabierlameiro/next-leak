@@ -53,6 +53,9 @@ function makeDeps(
     exitCode?: number | null;
     parentMb?: number[];
     noWorker?: boolean;
+    onSignal?: (pid: number) => void;
+    /** From this poll on, the worker pid is reported outside the build tree. */
+    detachAfterPoll?: number;
   } = {}
 ): BuildRunDeps {
   let poll = 0;
@@ -64,6 +67,7 @@ function makeDeps(
       child = fakeChild(options.output ?? "");
       return child as never;
     },
+    signalWorker: (pid) => options.onSignal?.(pid),
     sampleTable: async (): Promise<ProcessTableSample> => {
       if (poll >= workerMb.length) {
         setImmediate(() => child?.emit("exit", exitCode));
@@ -73,12 +77,17 @@ function makeDeps(
       const parentRss = options.parentMb?.[Math.min(poll, (options.parentMb?.length ?? 1) - 1)] ?? 300;
       poll += 1;
       const parentRow = `${BUILD_PID} 1 ${parentRss * 1024} next-build\n`;
+      // Pids get recycled: past `detachAfterPoll` the same number belongs to
+      // something that is not the build's child any more.
+      const detached =
+        options.detachAfterPoll !== undefined && poll > options.detachAfterPoll;
+      const workerRow = detached
+        ? `${WORKER_PID} 1 ${workerRss * 1024} /usr/bin/unrelated\n`
+        : `${WORKER_PID} ${BUILD_PID} ${workerRss * 1024} ${WORKER_COMMAND}\n`;
       return {
         ok: true,
         rows: parseProcessTable(
-          options.noWorker === true
-            ? parentRow
-            : `${parentRow}${WORKER_PID} ${BUILD_PID} ${workerRss * 1024} ${WORKER_COMMAND}\n`
+          options.noWorker === true ? parentRow : `${parentRow}${workerRow}`
         ),
       };
     },
@@ -305,5 +314,81 @@ describe("per-page retention when the build crashed", () => {
     expect(result.pagesGenerated).toBe(1252);
     expect(result.peakWorkerRssBytes).toBe(2479 * MB);
     expect(result.retentionPerPageBytes).toBeNull();
+  });
+});
+
+// Capture is an addition to the report. Every one of these asserts that the
+// verdict and the curve survive a capture that did not work out.
+describe("runBuildMeasurement capture", () => {
+  it("does not signal at all when no work directory was given", async () => {
+    const signalled: number[] = [];
+    const result = await runBuildMeasurement(
+      { appDir: await makeProject() },
+      makeDeps([200, 400, 700], { onSignal: (pid) => signalled.push(pid) })
+    );
+
+    expect(signalled).toEqual([]);
+    expect(result.capture).toBeNull();
+    expect(result.status).toBe("measured");
+  });
+
+  it("still reports a verdict when the worker dies before the second snapshot", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-capture-"));
+    const signalled: number[] = [];
+    const result = await runBuildMeasurement(
+      { appDir: await makeProject(), workDir },
+      makeDeps([200, 260], {
+        output: "JavaScript heap out of memory",
+        exitCode: 1,
+        onSignal: (pid) => signalled.push(pid),
+      })
+    );
+
+    // The baseline was taken and the worker never grew enough for a second.
+    expect(signalled).toEqual([WORKER_PID]);
+    expect(result.capture).toBeNull();
+    expect(result.verdict).toBe("leak");
+    expect(result.heapExhausted).toBe(true);
+  });
+
+  it("signals twice once the worker reaches the capture target", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-capture-"));
+    const signalled: number[] = [];
+    await runBuildMeasurement(
+      { appDir: await makeProject(), workDir },
+      makeDeps([200, 400, 1000], { onSignal: (pid) => signalled.push(pid) })
+    );
+
+    expect(signalled).toEqual([WORKER_PID, WORKER_PID]);
+  });
+
+  // A remembered pid looked up across the whole process table would follow a
+  // stranger, and this code signals what it finds — SIGUSR2 with no handler
+  // kills a process.
+  it("stops following a pid once it leaves the build tree", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-capture-"));
+    const signalled: number[] = [];
+    await runBuildMeasurement(
+      { appDir: await makeProject(), workDir },
+      makeDeps([200, 1000, 1000], {
+        detachAfterPoll: 1,
+        onSignal: (pid) => signalled.push(pid),
+      })
+    );
+
+    // Only the baseline, taken while the pid really was the build's worker.
+    expect(signalled).toEqual([WORKER_PID]);
+  });
+
+  it("never signals a worker already past the parse limit", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-capture-"));
+    const signalled: number[] = [];
+    await runBuildMeasurement(
+      { appDir: await makeProject(), workDir },
+      makeDeps([2000, 2600, 3000], { onSignal: (pid) => signalled.push(pid) })
+    );
+
+    // A snapshot up there is written, costs the disk, and cannot be read back.
+    expect(signalled).toEqual([]);
   });
 });
