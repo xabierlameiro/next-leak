@@ -271,6 +271,41 @@ export async function runBuildMeasurement(
   let captureStage: CaptureStage = "waiting";
   let captureBaselineRss: number | null = null;
   let captureAfterRss: number | null = null;
+  /**
+   * Advances the capture state machine for one poll.
+   *
+   * Split out of the polling loop because the loop's job is sampling: capture
+   * is a passenger on it, and reading them interleaved hid which `continue`
+   * belonged to which concern.
+   */
+  const stepCapture = (rows: readonly ProcessRow[], rootPid: number): void => {
+    const followed: ProcessRow | undefined =
+      capturePid === null
+        ? descendantsOf(rows, rootPid).find(isStaticGenWorker)
+        : rows.find((row) => row.pid === capturePid);
+    if (followed === undefined) {
+      return;
+    }
+    capturePid ??= followed.pid;
+    switch (decideCapture(followed.rssBytes, captureStage, captureBaselineRss)) {
+      case "take-baseline":
+        deps.signalWorker(followed.pid);
+        captureStage = "baseline-taken";
+        captureBaselineRss = followed.rssBytes;
+        return;
+      case "take-after":
+        deps.signalWorker(followed.pid);
+        captureStage = "pair-taken";
+        captureAfterRss = followed.rssBytes;
+        return;
+      case "give-up":
+        captureStage = "missed";
+        return;
+      case "wait":
+        return;
+    }
+  };
+
   const polling = (async (): Promise<void> => {
     while (!finished) {
       await deps.sleep(POLL_MS);
@@ -285,33 +320,8 @@ export async function runBuildMeasurement(
         return;
       }
       recordSample(sample.rows, child.pid, deps.now() - startedAt, workerSamples, parentSamples);
-      if (!capturing) {
-        continue;
-      }
-      // Annotated because `capturePid` is assigned from this value below, which
-      // makes the inferred type circular.
-      const followed: ProcessRow | undefined =
-        capturePid === null
-          ? descendantsOf(sample.rows, child.pid).find(isStaticGenWorker)
-          : sample.rows.find((row) => row.pid === capturePid);
-      if (followed === undefined) {
-        continue;
-      }
-      capturePid ??= followed.pid;
-      if (followed.pid !== capturePid) {
-        continue;
-      }
-      const decision = decideCapture(followed.rssBytes, captureStage, captureBaselineRss);
-      if (decision === "take-baseline") {
-        deps.signalWorker(followed.pid);
-        captureStage = "baseline-taken";
-        captureBaselineRss = followed.rssBytes;
-      } else if (decision === "take-after") {
-        deps.signalWorker(followed.pid);
-        captureStage = "pair-taken";
-        captureAfterRss = followed.rssBytes;
-      } else if (decision === "give-up") {
-        captureStage = "missed";
+      if (capturing) {
+        stepCapture(sample.rows, child.pid);
       }
     }
   })();

@@ -153,9 +153,8 @@ export function formatBuildReport(
     lines.push(`      ${result.workers.length} workers ran; the verdict is the worst of them`);
   }
 
-  lines.push(...attributionLines(attribution));
-
   lines.push(
+    ...attributionLines(attribution),
     "",
     `  peak worker rss ${mb(result.peakWorkerRssBytes)} · sampled from the process tree, so a`,
     `  spike shorter than the polling interval is not observed`

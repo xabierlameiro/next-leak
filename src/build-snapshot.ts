@@ -54,7 +54,7 @@ export type CaptureDecision = "wait" | "take-baseline" | "take-after" | "give-up
 export function decideCapture(
   rssBytes: number,
   stage: CaptureStage,
-  baselineRssBytes: number | null
+  baselineRssBytes: number | null = null
 ): CaptureDecision {
   if (stage === "pair-taken" || stage === "missed") {
     return "wait";
@@ -68,8 +68,7 @@ export function decideCapture(
     }
     return rssBytes >= START_UP_FLOOR_BYTES ? "take-baseline" : "wait";
   }
-  const baseline = baselineRssBytes ?? 0;
-  const grown = rssBytes - baseline;
+  const grown = rssBytes - (baselineRssBytes ?? 0);
   if (rssBytes > PARSEABLE_WORKER_RSS_BYTES) {
     // Last chance: the worker jumped from below the target to past the limit
     // between two polls. A snapshot at the edge beats no pair at all, provided
@@ -92,13 +91,26 @@ export function decideCapture(
  */
 const SNAPSHOT_NAME = /^Heap\.\d{8}\.\d{6}\.(\d+)\.\d+\.(\d+)\.heapsnapshot$/;
 
+/**
+ * Ordered by code unit, deliberately not by `localeCompare`: these names are
+ * fixed-width ASCII, so byte order is capture order, and a locale-aware
+ * collation could reorder digits or punctuation differently per machine. The
+ * baseline has to come first on every machine that runs this.
+ */
+const byCodeUnit = (left: string, right: string): number => {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+};
+
 export function snapshotsWrittenBy(pid: number, filenames: readonly string[]): string[] {
   return filenames
     .filter((name) => {
       const match = SNAPSHOT_NAME.exec(name);
       return match !== null && Number(match[1]) === pid;
     })
-    .sort();
+    .sort(byCodeUnit);
 }
 
 export type CollectedPair = {
