@@ -67,10 +67,13 @@ export async function attributeBuildCapture(
     diff,
     attributed: attributeDiff(diff, registry),
     registrySize: registry.size,
+    // Against the captured worker's own peak. `result.peakWorkerRssBytes` is
+    // the highest of every worker, which on a multi-worker build can belong to
+    // a process these findings say nothing about.
     bracketed: bracketedShare(
       capture.baselineRssBytes,
       capture.afterRssBytes,
-      result.peakWorkerRssBytes
+      capture.peakRssBytes
     ),
     baselineRssBytes: capture.baselineRssBytes,
     afterRssBytes: capture.afterRssBytes,

@@ -1,12 +1,15 @@
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   bracketedShare,
+  clearPendingCapture,
   collectSnapshotPair,
   decideCapture,
+  discardPendingSnapshotsSync,
   discardSnapshots,
+  registerPendingCapture,
   snapshotsWrittenBy,
   PARSEABLE_WORKER_RSS_BYTES,
 } from "./build-snapshot.js";
@@ -44,15 +47,13 @@ describe("decideCapture", () => {
     expect(decideCapture(nearLimit, "baseline-taken", nearLimit - 1 * MB)).toBe("wait");
   });
 
-  it("still takes the second when the worker jumped past the limit", () => {
-    // Better a snapshot at the edge than no pair at all: the alternative is a
-    // build that grew 900 MB between two polls and reports nothing.
+  // Taking it anyway produced a 1.49 GB file on the #97464 repro and stalled
+  // the build for ninety minutes writing it. Past the limit there is nothing
+  // worth capturing, however much the pair would have spanned.
+  it("gives up rather than capture past the parse limit", () => {
     expect(decideCapture(PARSEABLE_WORKER_RSS_BYTES + 1, "baseline-taken", 200 * MB)).toBe(
-      "take-after"
+      "give-up"
     );
-  });
-
-  it("gives up when the worker passed the limit without growing enough", () => {
     expect(
       decideCapture(PARSEABLE_WORKER_RSS_BYTES + 1, "baseline-taken", PARSEABLE_WORKER_RSS_BYTES)
     ).toBe("give-up");
@@ -108,6 +109,23 @@ describe("collectSnapshotPair", () => {
     ]);
   });
 
+  // The first rename can succeed and the second fail. Whatever moved is then
+  // outside the directory `discardSnapshots` sweeps, so this is the only
+  // chance to take it back.
+  it("takes back a half-moved pair when the second move fails", async () => {
+    const appDir = await tempDir();
+    const outDir = await tempDir();
+    await writeFile(path.join(appDir, "Heap.20260819.013329.500.0.001.heapsnapshot"), "a");
+    await writeFile(path.join(appDir, "Heap.20260819.013512.500.0.002.heapsnapshot"), "b");
+    // A directory where the second file should go makes that rename fail while
+    // the first has already happened.
+    await mkdir(path.join(outDir, "worker-500-after.heapsnapshot"), { recursive: true });
+
+    expect(await collectSnapshotPair(appDir, outDir, 500)).toBeNull();
+
+    expect((await readdir(outDir)).filter((n) => n.endsWith("baseline.heapsnapshot"))).toEqual([]);
+  });
+
   it("returns null when only one snapshot ever landed", async () => {
     const appDir = await tempDir();
     const outDir = await tempDir();
@@ -143,5 +161,41 @@ describe("bracketedShare", () => {
 
   it("treats a flat worker as fully bracketed rather than dividing by zero", () => {
     expect(bracketedShare(200 * MB, 200 * MB, 200 * MB)).toBe(1);
+  });
+});
+
+// A second Ctrl+C exits the process outright, skipping every await that would
+// have removed these files.
+describe("discardPendingSnapshotsSync", () => {
+  it("sweeps the registered worker's snapshots and nothing else", async () => {
+    const appDir = await tempDir();
+    await writeFile(path.join(appDir, "Heap.20260819.013329.500.0.001.heapsnapshot"), "a");
+    await writeFile(path.join(appDir, "Heap.20260819.013400.999.0.001.heapsnapshot"), "b");
+    await writeFile(path.join(appDir, "keep.txt"), "keep");
+    registerPendingCapture(appDir, 500);
+
+    discardPendingSnapshotsSync();
+
+    expect((await readdir(appDir)).sort()).toEqual([
+      "Heap.20260819.013400.999.0.001.heapsnapshot",
+      "keep.txt",
+    ]);
+  });
+
+  it("does nothing when the capture already finished", async () => {
+    const appDir = await tempDir();
+    await writeFile(path.join(appDir, "Heap.20260819.013329.500.0.001.heapsnapshot"), "a");
+    registerPendingCapture(appDir, 500);
+    clearPendingCapture();
+
+    discardPendingSnapshotsSync();
+
+    expect((await readdir(appDir)).length).toBe(1);
+  });
+
+  it("survives a directory it cannot read", () => {
+    registerPendingCapture("/definitely/not/a/directory", 500);
+
+    expect(() => discardPendingSnapshotsSync()).not.toThrow();
   });
 });

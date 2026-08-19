@@ -1,4 +1,5 @@
-import { readdir, rename } from "node:fs/promises";
+import { readdirSync, unlinkSync } from "node:fs";
+import { readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -70,10 +71,14 @@ export function decideCapture(
   }
   const grown = rssBytes - (baselineRssBytes ?? 0);
   if (rssBytes > PARSEABLE_WORKER_RSS_BYTES) {
-    // Last chance: the worker jumped from below the target to past the limit
-    // between two polls. A snapshot at the edge beats no pair at all, provided
-    // the pair spans enough to be about the workload rather than start-up.
-    return grown >= MIN_PAIR_GROWTH_BYTES ? "take-after" : "give-up";
+    // No last chance here, deliberately. An earlier version took the snapshot
+    // anyway when the worker jumped past the limit between two polls, on the
+    // grounds that a pair at the edge beats no pair. Measured against the
+    // #97464 reproduction, that produced a 1.49 GB file — unparseable, as the
+    // limit says — and writing it stalled the build for ninety minutes with
+    // the worker frozen mid-render. A missing attribution costs the report one
+    // section; this costs the measurement.
+    return "give-up";
   }
   if (rssBytes < AFTER_TARGET_RSS_BYTES) {
     return "wait";
@@ -146,6 +151,11 @@ export async function collectSnapshotPair(
     await rename(path.join(appDir, baseline), baselineFile);
     await rename(path.join(appDir, after), afterFile);
   } catch {
+    // The first rename may have succeeded. Whatever it moved is now outside
+    // the directory `discardSnapshots` sweeps, so this is the only chance to
+    // take it back before it becomes half a gigabyte nothing refers to.
+    await unlink(baselineFile).catch(() => {});
+    await unlink(afterFile).catch(() => {});
     return null;
   }
   return { baselineFile, afterFile };
@@ -163,7 +173,6 @@ export async function discardSnapshots(appDir: string, pid: number): Promise<voi
   } catch {
     return;
   }
-  const { unlink } = await import("node:fs/promises");
   for (const name of snapshotsWrittenBy(pid, entries)) {
     try {
       await unlink(path.join(appDir, name));
@@ -192,4 +201,43 @@ export function bracketedShare(
     return 1;
   }
   return Math.min(1, Math.max(0, (afterRssBytes - baselineRssBytes) / total));
+}
+
+/**
+ * The capture in flight, if any, so an interrupt can clean up after it.
+ *
+ * A second Ctrl+C exits the process outright — deliberately, for the case
+ * where teardown itself is stuck — which skips every `await` that would have
+ * removed these files. Before this command wrote anything to the project that
+ * cost nothing; now it can strand hundreds of megabytes in a user's source
+ * tree, so the hard exit gets a synchronous sweep of its own.
+ */
+let pendingCapture: { appDir: string; pid: number } | null = null;
+
+export function registerPendingCapture(appDir: string, pid: number): void {
+  pendingCapture = { appDir, pid };
+}
+
+export function clearPendingCapture(): void {
+  pendingCapture = null;
+}
+
+/** Best effort, synchronous, and never throws: it runs on the way out. */
+export function discardPendingSnapshotsSync(): void {
+  if (pendingCapture === null) {
+    return;
+  }
+  const { appDir, pid } = pendingCapture;
+  pendingCapture = null;
+  try {
+    for (const name of snapshotsWrittenBy(pid, readdirSync(appDir))) {
+      try {
+        unlinkSync(path.join(appDir, name));
+      } catch {
+        // Nothing useful to do about one file on the way out.
+      }
+    }
+  } catch {
+    // An unreadable directory is not worth delaying the exit for.
+  }
 }

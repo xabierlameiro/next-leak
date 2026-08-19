@@ -1,9 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import {
+  clearPendingCapture,
   collectSnapshotPair,
   decideCapture,
   discardSnapshots,
+  registerPendingCapture,
   type CaptureStage,
   type CollectedPair,
 } from "./build-snapshot.js";
@@ -40,6 +42,13 @@ export type BuildCapture = {
   files: CollectedPair;
   baselineRssBytes: number;
   afterRssBytes: number;
+  /**
+   * Peak resident memory of *this* worker, not of the build. The share of
+   * growth the pair covers is quoted against the curve the findings came
+   * from, and on a multi-worker build the highest peak can belong to a worker
+   * nothing was captured from.
+   */
+  peakRssBytes: number;
 };
 
 export type BuildRunResult = {
@@ -163,6 +172,7 @@ type CollectOptions = {
   stage: CaptureStage;
   baselineRssBytes: number | null;
   afterRssBytes: number | null;
+  peakRssBytes: number;
 };
 
 /**
@@ -184,7 +194,7 @@ async function collectCapture(options: CollectOptions): Promise<BuildCapture | n
     await discardSnapshots(appDir, pid);
     return null;
   }
-  return { pid, files, baselineRssBytes, afterRssBytes };
+  return { pid, files, baselineRssBytes, afterRssBytes, peakRssBytes: options.peakRssBytes };
 }
 
 /** The worker that grew the most: a verdict from the average would hide it. */
@@ -279,10 +289,16 @@ export async function runBuildMeasurement(
    * belonged to which concern.
    */
   const stepCapture = (rows: readonly ProcessRow[], rootPid: number): void => {
+    // Both lookups are scoped to the build's own tree. Searching the whole
+    // table for a remembered pid would follow it off the end of the worker's
+    // life: pids get recycled, and this function signals what it finds, so a
+    // stranger inheriting the number would take a SIGUSR2 it has no handler
+    // for — which on POSIX kills it.
+    const descendants = descendantsOf(rows, rootPid);
     const followed: ProcessRow | undefined =
       capturePid === null
-        ? descendantsOf(rows, rootPid).find(isStaticGenWorker)
-        : rows.find((row) => row.pid === capturePid);
+        ? descendants.find(isStaticGenWorker)
+        : descendants.find((row) => row.pid === capturePid);
     if (followed === undefined) {
       return;
     }
@@ -292,6 +308,9 @@ export async function runBuildMeasurement(
         deps.signalWorker(followed.pid);
         captureStage = "baseline-taken";
         captureBaselineRss = followed.rssBytes;
+        // From here on there is a file in the project that only this run knows
+        // about, so an interrupt has to be able to find it.
+        registerPendingCapture(target.appDir, followed.pid);
         return;
       case "take-after":
         deps.signalWorker(followed.pid);
@@ -333,6 +352,7 @@ export async function runBuildMeasurement(
 
   const workers: WorkerSeries[] = [...workerSamples].map(([pid, samples]) => ({ pid, samples }));
   const heapExhausted = diedOfHeapExhaustion(output);
+  const capturedSamples = capturePid === null ? undefined : workerSamples.get(capturePid);
   const workerCapture = await collectCapture({
     appDir: target.appDir,
     workDir: options.workDir,
@@ -340,7 +360,11 @@ export async function runBuildMeasurement(
     stage: captureStage,
     baselineRssBytes: captureBaselineRss,
     afterRssBytes: captureAfterRss,
+    peakRssBytes: capturedSamples === undefined ? 0 : peakOf(capturedSamples),
   });
+  // Either the pair moved into the run directory or it was discarded; nothing
+  // is left in the project for an interrupt to sweep.
+  clearPendingCapture();
   const pagesGenerated = pagesGeneratedFrom(output);
 
   if (workers.length === 0) {

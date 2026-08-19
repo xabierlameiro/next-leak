@@ -54,6 +54,8 @@ function makeDeps(
     parentMb?: number[];
     noWorker?: boolean;
     onSignal?: (pid: number) => void;
+    /** From this poll on, the worker pid is reported outside the build tree. */
+    detachAfterPoll?: number;
   } = {}
 ): BuildRunDeps {
   let poll = 0;
@@ -75,12 +77,17 @@ function makeDeps(
       const parentRss = options.parentMb?.[Math.min(poll, (options.parentMb?.length ?? 1) - 1)] ?? 300;
       poll += 1;
       const parentRow = `${BUILD_PID} 1 ${parentRss * 1024} next-build\n`;
+      // Pids get recycled: past `detachAfterPoll` the same number belongs to
+      // something that is not the build's child any more.
+      const detached =
+        options.detachAfterPoll !== undefined && poll > options.detachAfterPoll;
+      const workerRow = detached
+        ? `${WORKER_PID} 1 ${workerRss * 1024} /usr/bin/unrelated\n`
+        : `${WORKER_PID} ${BUILD_PID} ${workerRss * 1024} ${WORKER_COMMAND}\n`;
       return {
         ok: true,
         rows: parseProcessTable(
-          options.noWorker === true
-            ? parentRow
-            : `${parentRow}${WORKER_PID} ${BUILD_PID} ${workerRss * 1024} ${WORKER_COMMAND}\n`
+          options.noWorker === true ? parentRow : `${parentRow}${workerRow}`
         ),
       };
     },
@@ -353,6 +360,24 @@ describe("runBuildMeasurement capture", () => {
     );
 
     expect(signalled).toEqual([WORKER_PID, WORKER_PID]);
+  });
+
+  // A remembered pid looked up across the whole process table would follow a
+  // stranger, and this code signals what it finds — SIGUSR2 with no handler
+  // kills a process.
+  it("stops following a pid once it leaves the build tree", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-capture-"));
+    const signalled: number[] = [];
+    await runBuildMeasurement(
+      { appDir: await makeProject(), workDir },
+      makeDeps([200, 1000, 1000], {
+        detachAfterPoll: 1,
+        onSignal: (pid) => signalled.push(pid),
+      })
+    );
+
+    // Only the baseline, taken while the pid really was the build's worker.
+    expect(signalled).toEqual([WORKER_PID]);
   });
 
   it("never signals a worker already past the parse limit", async () => {

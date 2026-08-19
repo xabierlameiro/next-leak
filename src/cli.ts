@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { attributeBuildCapture } from "./build-attribution.js";
 import { formatBuildReport } from "./build-report.js";
 import { runBuildMeasurement } from "./build-run.js";
+import { discardPendingSnapshotsSync } from "./build-snapshot.js";
 import { helpText, parseCliArgs, type ParsedCli } from "./cli-args.js";
 import { checkRuntime } from "./guards.js";
 import { killActiveChildren } from "./launcher.js";
@@ -60,6 +61,9 @@ function installInterruptHandlers(): AbortController {
     process.on(signalName, () => {
       interrupts += 1;
       if (interrupts > 1) {
+        // A build capture may have left a snapshot in the project; this is the
+        // last point where anything can remove it.
+        discardPendingSnapshotsSync();
         process.exit(130);
       }
       console.error("\n· interrupted — stopping the measured process and writing a partial run.json");
@@ -101,7 +105,11 @@ function handleNonRunCommand(parsed: ParsedCli): boolean {
  * headroom than a route run. The memory that matters still belongs to the
  * build's own processes.
  */
-async function runBuildCommand(appDir: string, outputDir: string | null): Promise<void> {
+async function runBuildCommand(
+  appDir: string,
+  outputDir: string | null,
+  attribute: boolean
+): Promise<void> {
   const aborter = installInterruptHandlers();
   const workDir = path.join(
     outputDir ?? path.join(appDir, ".next-leak"),
@@ -110,7 +118,13 @@ async function runBuildCommand(appDir: string, outputDir: string | null): Promis
   await mkdir(workDir, { recursive: true });
   const result = await runBuildMeasurement({
     appDir,
-    workDir,
+    // Capture is opt-in because signalling a worker for a heap snapshot can
+    // stall the build it is measuring. Observed on the #97464 reproduction:
+    // the second signal landed and the worker sat frozen for fourteen minutes
+    // with an empty snapshot file on disk, and on an earlier run for ninety.
+    // A curve and a verdict are what this command promises; naming the objects
+    // is worth asking for, not worth risking every run for.
+    ...(attribute && { workDir }),
     signal: aborter.signal,
     onProgress: (message) => console.error(`· ${message}`),
   });
@@ -163,7 +177,11 @@ async function main(): Promise<void> {
     return;
   }
   if (parsed.kind === "build") {
-    await runBuildCommand(parsed.options.appDir, parsed.options.output);
+    await runBuildCommand(
+      parsed.options.appDir,
+      parsed.options.output,
+      parsed.options.attributeBuild
+    );
     return;
   }
   if (parsed.kind !== "run") {

@@ -36,6 +36,7 @@ const capture: NonNullable<BuildRunResult["capture"]> = {
   files: { baselineFile: "/run/a.heapsnapshot", afterFile: "/run/b.heapsnapshot" },
   baselineRssBytes: 200 * MB,
   afterRssBytes: 1000 * MB,
+  peakRssBytes: 3400 * MB,
 };
 
 const deps = (overrides: Partial<BuildAttributionDeps> = {}): BuildAttributionDeps => ({
@@ -88,6 +89,20 @@ describe("attributeBuildCapture", () => {
 
     // 200 MB to 1000 MB out of a 3400 MB peak: a quarter of the growth.
     expect(result?.bracketed).toBeCloseTo(0.25, 2);
+  });
+
+  // On a multi-worker build the highest peak can belong to a worker nothing
+  // was captured from, and quoting the share against it would describe a curve
+  // these findings say nothing about.
+  it("quotes the share against the captured worker, not the loudest one", async () => {
+    const result = measured({ ...capture, peakRssBytes: 1000 * MB });
+    // Another worker of the same build reached far higher.
+    result.peakWorkerRssBytes = 9000 * MB;
+
+    const attribution = await attributeBuildCapture(result, "/apps/docs", () => {}, deps());
+
+    // 200 MB to 1000 MB of a worker that peaked at 1000 MB: all of its growth.
+    expect(attribution?.bracketed).toBe(1);
   });
 
   it("reads the registry from the finished build, never mid-flight", async () => {

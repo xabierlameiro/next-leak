@@ -10,6 +10,7 @@ export type CliRunOptions = {
   quick: boolean;
   noResolve: boolean;
   diffAll: boolean;
+  attributeBuild: boolean;
   writeConfig: boolean;
   output: string | null;
 };
@@ -17,6 +18,8 @@ export type CliRunOptions = {
 export type CliBuildOptions = {
   appDir: string;
   output: string | null;
+  /** Opt-in: signal the worker for snapshots and name what it retains. */
+  attributeBuild: boolean;
 };
 
 export type ParsedCli =
@@ -96,6 +99,11 @@ const FLAGS: FlagSpec[] = [
     help: "Fast preset: 2000 requests x 4 cycles, 8s idle — same cycle count as the default, less traffic per cycle",
   },
   { flag: "--diff-all", value: "none", help: "Diff snapshots for stable routes too (slow)" },
+  {
+    flag: "--attribute",
+    value: "none",
+    help: "build only: also name what the worker retains — signals it for heap snapshots, which can stall the build",
+  },
   {
     flag: "--no-resolve",
     value: "none",
@@ -228,6 +236,9 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--diff-all":
       options.diffAll = true;
       return FLAG_OK;
+    case "--attribute":
+      options.attributeBuild = true;
+      return FLAG_OK;
     case "--write-config":
       options.writeConfig = true;
       return FLAG_OK;
@@ -300,6 +311,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     quick: false,
     noResolve: false,
     diffAll: false,
+    attributeBuild: false,
     writeConfig: false,
     output: null,
   };
@@ -331,7 +343,14 @@ export function parseCliArgs(argv: string[]): ParsedCli {
         message: `option "${misplaced}" shapes HTTP load and does not apply to "next-leak build" — see --help`,
       };
     }
-    return { kind: "build", options: { appDir: options.appDir, output: options.output } };
+    return {
+      kind: "build",
+      options: {
+        appDir: options.appDir,
+        output: options.output,
+        attributeBuild: options.attributeBuild,
+      },
+    };
   }
   return { kind: "run", options };
 }

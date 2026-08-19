@@ -367,14 +367,18 @@ through the build's source maps.
   ([#97464](https://github.com/vercel/next.js/issues/97464)). It does not apply
   to projects using `experimental.workerThreads: true`: a worker thread has no
   resident memory of its own to sample, and the run says so instead of
-  reporting a number that would be measuring the parent. It also names *what*
-  the worker retained, from a snapshot pair taken by signalling the worker —
-  but only over a low slice of the curve, and it says which slice. A snapshot
-  is written to disk at roughly 0.4x to 0.8x the worker's resident size, so
-  past about a gigabyte of worker memory it exceeds the 512 MB a V8 string can
-  hold and cannot be read back. Both captures therefore happen below that, and
-  the report states what share of the observed growth they span (19% on the
-  #97464 reproduction, whose worker peaks near 4 GB).
+  reporting a number that would be measuring the parent.
+- **`next-leak build <dir> --attribute`** additionally names *what* the worker
+  retained, by signalling it for a pair of heap snapshots. **Opt-in, and slow
+  by nature:** the signal makes the worker write its whole heap to disk, which
+  on the #97464 reproduction has stalled a build for minutes at a time and
+  once for an hour and a half. Use it on a reproduction you are investigating,
+  not on a build you need to finish. It also covers only a low slice of the
+  curve, and says which: a snapshot weighs roughly 0.4x to 0.8x the worker's
+  resident size, so past about a gigabyte it exceeds the 512 MB a V8 string can
+  hold and cannot be read back — both captures happen below that, and the
+  report states what share of the observed growth they span (19% on that
+  reproduction, whose worker peaks near 4 GB).
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
 - Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.0/16.3.1 and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). Most recent measurements, 2026-08-17/18: the runtime path on 16.2.12 and 16.3.1-canary.18, the build path on 16.2.12 and 16.3.1. The contracts it relies on are stable since Next 13–14, but older versions are untested.
