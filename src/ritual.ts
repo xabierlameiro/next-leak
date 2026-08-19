@@ -2,7 +2,11 @@ import { mkdir } from "node:fs/promises";
 import { requestGc, requestMemory, requestSnapshot } from "./control-client.js";
 import type { HeapSample } from "./control-server.js";
 import { launchInstrumented } from "./launcher.js";
-import { runAbandonPhase, type AbandonPhaseResult } from "./abandon-load.js";
+import {
+  runAbandonPhase,
+  type AbandonOrigin,
+  type AbandonPhaseResult,
+} from "./abandon-load.js";
 import { runLoadPhase } from "./load.js";
 import { classifyMemoryTrend, minGrowthFor, type TrendResult } from "./trend.js";
 
@@ -27,6 +31,8 @@ export type RitualOptions = {
   headers?: Record<string, string>;
   /** Emulate clients that disconnect before the response arrives. */
   abandonAfterMs?: number;
+  /** Where that deadline starts. Defaults to `first-byte`. */
+  abandonFrom?: AbandonOrigin;
 };
 
 export type PhaseTiming = {
@@ -357,6 +363,7 @@ export async function runRitual(
       amount,
       connections,
       abandonAfterMs,
+      ...(options.abandonFrom !== undefined && { abandonFrom: options.abandonFrom }),
       ...(options.headers !== undefined && { headers: options.headers }),
     });
     loadOutcomes.push({

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+import type { AbandonOrigin } from "./abandon-load.js";
 import { attributeDiff, type AttributedDiff } from "./attribution.js";
 import {
   assessConfidence,
@@ -79,6 +80,13 @@ export type RouteReport =
       unreclaimedTrend: TrendResult;
       /** Requests each cycle served — what the growth rates normalize by. */
       requestsPerCycle: number;
+      /**
+       * The early-disconnect regime, when the route asked for one. Recorded
+       * because a curve measured with cuts landing mid-stream and one measured
+       * with cuts landing before the response are different experiments, and
+       * the counters alone do not say which was intended.
+       */
+      abandon?: { afterMs: number; from: AbandonOrigin };
       /**
        * Distinct keys the load cycled through, when the route asked for a
        * bounded set. A verdict about a cache depends on how many keys it saw,
@@ -412,6 +420,9 @@ async function measureRoute(
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
     }),
+    ...(routeConfig.abandonFrom !== undefined && {
+      abandonFrom: routeConfig.abandonFrom,
+    }),
   });
 
   // Audited before anything is derived from the verdict: a measurement that
@@ -429,6 +440,9 @@ async function measureRoute(
     warmupRequests: options.warmupRequests ?? RITUAL_DEFAULTS.warmupRequests,
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
+    }),
+    ...(routeConfig.abandonFrom !== undefined && {
+      abandonFrom: routeConfig.abandonFrom,
     }),
   });
   const verdict = confidence.supersededVerdict ?? result.trend.verdict;
@@ -466,6 +480,12 @@ async function measureRoute(
     unreclaimedSamples: result.unreclaimedSamples,
     unreclaimedTrend: result.unreclaimedTrend,
     requestsPerCycle: result.requestsPerCycle,
+    ...(routeConfig.abandonAfterMs !== undefined && {
+      abandon: {
+        afterMs: routeConfig.abandonAfterMs,
+        from: routeConfig.abandonFrom ?? "first-byte",
+      },
+    }),
     timings: result.timings,
     loadOutcomes: result.loadOutcomes,
     settleOutcomes: result.settleOutcomes,

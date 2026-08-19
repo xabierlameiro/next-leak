@@ -44,8 +44,29 @@ const routeConfigSchema = z
      * tests the wrong path entirely.
      */
     abandonAfterMs: z.number().int().positive().optional(),
+    /**
+     * Where the abandon deadline starts. `first-byte` is the default and the
+     * semantics everything else assumes.
+     *
+     * `request` starts it when the request is written, which is the only way
+     * to reach leaks that need the client already gone before the server
+     * produces anything: against a route whose time-to-first-byte exceeds the
+     * deadline, a first-byte clock never cuts early. Measured on the
+     * vercel/next.js#84648 repro, whose upstream answers in 400 ms while its
+     * own load generator cuts at 60 ms — the first-byte clock reached 7% of
+     * requests there, none of them on the path the issue describes.
+     *
+     * Opt-in per route, never a default: armed on connect, the deadline loses
+     * the race to the first byte on fast routes, which is how the earlier
+     * version of this measured 2 mid-stream cuts out of ~1500 on #94919.
+     */
+    abandonFrom: z.enum(["first-byte", "request"]).optional(),
   })
-  .strict();
+  .strict()
+  .refine((config) => config.abandonFrom === undefined || config.abandonAfterMs !== undefined, {
+    message: '"abandonFrom" configures nothing without "abandonAfterMs"',
+    path: ["abandonFrom"],
+  });
 
 export type RouteConfig = z.infer<typeof routeConfigSchema>;
 
