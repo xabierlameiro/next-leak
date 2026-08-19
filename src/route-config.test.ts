@@ -131,6 +131,35 @@ describe("query strings and client abandonment", () => {
     await writeFile(path.join(dir, ROUTE_CONFIG_FILE), JSON.stringify({ abandonAfterMs: -5 }));
     await expect(loadRouteConfig(dir)).rejects.toBeInstanceOf(RouteConfigError);
   });
+
+  it("reads abandonFrom and defaults it to nothing", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "next-leak-config-"));
+    await writeFile(
+      path.join(dir, ROUTE_CONFIG_FILE),
+      JSON.stringify({ abandonAfterMs: 60, abandonFrom: "request" })
+    );
+    expect((await loadRouteConfig(dir)).abandonFrom).toBe("request");
+
+    await writeFile(path.join(dir, ROUTE_CONFIG_FILE), JSON.stringify({ abandonAfterMs: 60 }));
+    expect((await loadRouteConfig(dir)).abandonFrom).toBeUndefined();
+  });
+
+  it("rejects an unknown origin and one with no deadline to anchor", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "next-leak-config-"));
+    await writeFile(
+      path.join(dir, ROUTE_CONFIG_FILE),
+      JSON.stringify({ abandonAfterMs: 60, abandonFrom: "connect" })
+    );
+    await expect(loadRouteConfig(dir)).rejects.toBeInstanceOf(RouteConfigError);
+
+    // An origin with no deadline configures nothing, so it is a mistake worth
+    // naming rather than a no-op to swallow.
+    await writeFile(
+      path.join(dir, ROUTE_CONFIG_FILE),
+      JSON.stringify({ abandonFrom: "request" })
+    );
+    await expect(loadRouteConfig(dir)).rejects.toBeInstanceOf(RouteConfigError);
+  });
 });
 
 // `{n}` is unbounded by construction; the reported leaks turn on a fixed set of

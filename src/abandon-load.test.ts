@@ -335,4 +335,91 @@ describe("mid-stream abandonment", () => {
     expect(result.completed).toBe(20);
     expect(result.abandoned).toBe(0);
   }, 60_000);
+
+  // The pair below is the whole point of the request origin: same server, same
+  // deadline, opposite outcomes. Modelled on the vercel/next.js#84648 repro,
+  // whose upstream answers well after the window its own load generator uses.
+  describe("abandonFrom: request", () => {
+    const slowFirstByte: http.RequestListener = (_req, res) => {
+      setTimeout(() => res.end("late"), 2000).unref();
+    };
+
+    it("cuts before the first byte on a route that has not started answering", async () => {
+      const port = await listen(slowFirstByte);
+
+      const result = await runAbandonPhase({
+        url: `http://127.0.0.1:${port}/slow`,
+        amount: 6,
+        connections: 3,
+        abandonAfterMs: 40,
+        abandonFrom: "request",
+      });
+
+      expect(result.abandoned).toBe(6);
+      expect(result.abandonedBeforeResponse).toBe(6);
+      expect(result.abandonedMidStream).toBe(0);
+      expect(result.completed).toBe(0);
+    }, 60_000);
+
+    it("leaves that same route untouched under the default origin", async () => {
+      const port = await listen(slowFirstByte);
+
+      const result = await runAbandonPhase({
+        url: `http://127.0.0.1:${port}/slow`,
+        amount: 6,
+        connections: 3,
+        abandonAfterMs: 40,
+      });
+
+      // The deadline never arms: the first byte arrives at 2s, inside the
+      // first-byte budget, and the response completes immediately after.
+      expect(result.abandoned).toBe(0);
+      expect(result.completed).toBe(6);
+    }, 60_000);
+
+    it("still counts a cut as mid-stream when bytes had arrived", async () => {
+      const port = await listen((_req, res) => {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.write("chunk");
+        setTimeout(() => res.end("late"), 30_000).unref();
+      });
+
+      const result = await runAbandonPhase({
+        url: `http://127.0.0.1:${port}/streaming`,
+        amount: 6,
+        connections: 3,
+        abandonAfterMs: 60,
+        abandonFrom: "request",
+      });
+
+      expect(result.abandoned).toBe(6);
+      expect(result.abandonedMidStream).toBe(6);
+      expect(result.abandonedBeforeResponse).toBe(0);
+    }, 60_000);
+
+    it("does not restart the deadline when the first byte arrives", async () => {
+      // Answers at 60ms with a body it never finishes. Under the first-byte
+      // origin the cut would land 400ms after that byte; under this one it
+      // must land 100ms after the request, so ~40ms after the byte.
+      const port = await listen((_req, res) => {
+        setTimeout(() => {
+          res.writeHead(200, { "content-type": "text/plain" });
+          res.write("chunk");
+        }, 60).unref();
+        setTimeout(() => res.end("late"), 30_000).unref();
+      });
+
+      const started = Date.now();
+      const result = await runAbandonPhase({
+        url: `http://127.0.0.1:${port}/streaming`,
+        amount: 3,
+        connections: 3,
+        abandonAfterMs: 100,
+        abandonFrom: "request",
+      });
+
+      expect(result.abandoned).toBe(3);
+      expect(Date.now() - started).toBeLessThan(400);
+    }, 60_000);
+  });
 });

@@ -167,10 +167,19 @@ first try. When a run skips a route it prints the same fragment.
   load-balancer timeouts and bots do. Some leaks only exist on that path
   (`ServerResponse` retained after an early disconnect; the RSC tee branch in
   [#94919](https://github.com/vercel/next.js/issues/94919)). The clock starts
-  at the **first byte of the response**, not at the request — under load a
-  request-relative window cuts before the stream begins and tests a different
-  path. Small values are the point: `4` means "read the first chunk, then
-  vanish". Requests abandoned on purpose are not counted as failures.
+  at the **first byte of the response**, so the cut lands mid-stream however
+  long the route takes to answer. Small values are the point: `4` means "read
+  the first chunk, then vanish". Requests abandoned on purpose are not counted
+  as failures.
+- **`abandonFrom`** moves that clock to the request itself
+  (`"abandonFrom": "request"`). Use it for the opposite experiment: a client
+  that is already gone before the server produces anything. On a route slower
+  than the deadline the default never cuts early — against the reproduction
+  for [#84648](https://github.com/vercel/next.js/issues/84648), whose upstream
+  answers in 400 ms while its load generator cuts at 60 ms, first-byte reached
+  7% of requests and `request` reached all of them. It stays opt-in because a
+  deadline armed on connect loses the race to the first byte on fast routes,
+  which measures the wrong path silently.
 
 `run.json` records what every load phase actually did — requests sent,
 2xx, abandoned — so a run can be audited instead of trusted.

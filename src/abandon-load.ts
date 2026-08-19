@@ -1,11 +1,20 @@
 import net from "node:net";
 
+/**
+ * Where the abandon deadline starts. `first-byte` puts the cut mid-stream
+ * whatever the route's latency; `request` puts it before the response exists,
+ * which is a different leak path and not reachable from the other origin.
+ */
+export type AbandonOrigin = "first-byte" | "request";
+
 export type AbandonPhaseOptions = {
   url: string;
   amount: number;
   connections: number;
-  /** Destroy the socket this many ms after the first byte of the response. */
+  /** Destroy the socket this many ms after the origin below. */
   abandonAfterMs: number;
+  /** Defaults to `first-byte`. */
+  abandonFrom?: AbandonOrigin;
   headers?: Record<string, string>;
 };
 
@@ -44,13 +53,16 @@ const FIRST_BYTE_BUDGET_MS = 5000;
  * a client goes away mid-flight (closed tabs, load-balancer timeouts, bots).
  *
  * Raw sockets keep this honest: write the request, wait for the response to
- * start, then wait `abandonAfterMs` and destroy the socket mid-stream.
+ * start, then wait `abandonAfterMs` and destroy the socket mid-stream. With
+ * `abandonFrom: "request"` the wait starts at the write instead, which is the
+ * only way to cut a route that has not begun answering yet.
  */
 export async function runAbandonPhase(
   options: AbandonPhaseOptions
 ): Promise<AbandonPhaseResult> {
   const target = new URL(options.url);
   const port = Number(target.port || 80);
+  const fromRequest = options.abandonFrom === "request";
   const headerLines = Object.entries(options.headers ?? {})
     .map(([name, value]) => `${name}: ${value}\r\n`)
     .join("");
@@ -97,15 +109,20 @@ export async function runAbandonPhase(
         finish();
       };
 
-      // Only the first-byte budget is armed here. An earlier version started
-      // the abandon window on connect, which raced the server's first byte —
-      // and under load the server lost that race almost every time: measured
-      // against the vercel/next.js#94919 repro, 2 of ~1500 cuts per cycle
-      // landed mid-stream. The window has to start where the stream does.
+      // Under the default origin only the first-byte budget is armed here. An
+      // earlier version always started the abandon window on connect, which
+      // raced the server's first byte — and under load the server lost that
+      // race almost every time: measured against the vercel/next.js#94919
+      // repro, 2 of ~1500 cuts per cycle landed mid-stream. That is why the
+      // window starts where the stream does unless a route asks otherwise,
+      // and why asking is per route rather than a default.
       socket.once("connect", () => {
         result.sent += 1;
         socket.write(request);
-        timer = setTimeout(giveUp, FIRST_BYTE_BUDGET_MS);
+        timer = setTimeout(
+          giveUp,
+          fromRequest ? options.abandonAfterMs : FIRST_BYTE_BUDGET_MS
+        );
         timer.unref();
       });
       // Receiving bytes is not the end of the experiment, it is the start of
@@ -117,6 +134,12 @@ export async function runAbandonPhase(
           return;
         }
         responseStarted = true;
+        // Under the request origin the deadline is already running from the
+        // write and must not be restarted here, or a route that answers just
+        // inside it would get a second full window and never be cut.
+        if (fromRequest) {
+          return;
+        }
         clearTimeout(timer);
         timer = setTimeout(giveUp, options.abandonAfterMs);
         timer.unref();

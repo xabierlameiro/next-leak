@@ -72,6 +72,25 @@ function revalidationLines(route: MeasuredRouteView): string[] {
       ];
 }
 
+/**
+ * Which early-disconnect experiment ran. The counters below say what the cuts
+ * hit; this says what they were aiming at, and the two origins aim at
+ * different leaks — mid-stream teardown against a client that was never there
+ * at all.
+ */
+function abandonLines(route: MeasuredRouteView): string[] {
+  if (route.abandon === undefined) {
+    return [];
+  }
+  return [
+    route.abandon.from === "request"
+      ? `      cut ${route.abandon.afterMs}ms after the request was sent, so the ` +
+        `client is gone before the response starts`
+      : `      cut ${route.abandon.afterMs}ms after the first byte, so the cut ` +
+        `lands mid-stream`,
+  ];
+}
+
 function confidenceLines(route: MeasuredRouteView): string[] {
   const lines: string[] = [];
   // What the instrument thinks of its own reading. Silence here would be the
@@ -206,6 +225,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
       route.growthPer1000Requests
     )})  heap ${curve}${resolved}`,
     ...revalidationLines(route),
+    ...abandonLines(route),
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),
     ...peakPressureLines(route, parameters),
