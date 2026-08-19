@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/xabierlameiro/next-leak/compare/v0.6.0...v0.7.0) (2026-08-19)
+
+
+### Features
+
+* let a route cut its clients before the response starts ([#52](https://github.com/xabierlameiro/next-leak/issues/52)) ([76f6c97](https://github.com/xabierlameiro/next-leak/commit/76f6c97fd0842b01d8a2854c98cbabfc48df0b77))
+
 ## [0.6.0](https://github.com/xabierlameiro/next-leak/compare/v0.5.1...v0.6.0) (2026-08-18)
 
 
