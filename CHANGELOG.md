@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/xabierlameiro/next-leak/compare/v0.7.0...v0.8.0) (2026-08-19)
+
+
+### Features
+
+* say what a build's worker retains, not only that it retains ([7e6cd0a](https://github.com/xabierlameiro/next-leak/commit/7e6cd0a6e486cdef03a9137991df56cbe32b2c6a))
+
 ## [0.7.0](https://github.com/xabierlameiro/next-leak/compare/v0.6.0...v0.7.0) (2026-08-19)
 
 
