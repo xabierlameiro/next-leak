@@ -1,3 +1,4 @@
+import type { AbandonOrigin } from "./abandon-load.js";
 import type { HeapSample } from "./control-server.js";
 import type { LoadOutcome, SettleOutcome } from "./ritual.js";
 import { MIN_GROWTH_NOISE_FLOOR, type TrendResult, type TrendVerdict } from "./trend.js";
@@ -55,6 +56,8 @@ export type ConfidenceInput = {
   settleOutcomes: readonly SettleOutcome[];
   /** Set when the run asked for early disconnects. */
   abandonAfterMs?: number;
+  /** Which deadline origin those disconnects used. Defaults to `first-byte`. */
+  abandonFrom?: AbandonOrigin;
   /** Threshold the verdict used, for the noise-floor check. */
   minGrowthPerCycle?: number;
   /** Post-GC samples, for the heap-ceiling check. */
@@ -161,7 +164,10 @@ function settleWarnings(outcomes: readonly SettleOutcome[]): MeasurementWarning[
   return warnings;
 }
 
-function abandonmentWarnings(outcome: LoadOutcome): MeasurementWarning[] {
+function abandonmentWarnings(
+  outcome: LoadOutcome,
+  abandonFrom: AbandonOrigin | undefined
+): MeasurementWarning[] {
   const abandoned = outcome.abandoned ?? 0;
   if (outcome.sent > 0 && abandoned < outcome.sent * ABANDON_EFFECTIVE_FLOOR) {
     return [{
@@ -181,6 +187,13 @@ function abandonmentWarnings(outcome: LoadOutcome): MeasurementWarning[] {
   // That advice was unfollowable — under load there is no such value — and it
   // is now moot: the deadline starts at the first byte. Landing here means the
   // route sent nothing at all within the first-byte budget.
+  // Under the request origin the cut is meant to land before the response
+  // exists — that is the whole reason a route selects it. Reporting the
+  // intended outcome as a shortfall would train the reader to ignore the one
+  // warning that still matters here, which is the effectiveness check above.
+  if (abandonFrom === "request") {
+    return [];
+  }
   const midStream = outcome.abandonedMidStream ?? 0;
   if (abandoned > 0 && midStream < abandoned * MID_STREAM_FLOOR) {
     return [{
@@ -197,12 +210,13 @@ function abandonmentWarnings(outcome: LoadOutcome): MeasurementWarning[] {
 
 function loadWarnings(
   outcomes: readonly LoadOutcome[],
-  abandonAfterMs: number | undefined
+  abandonAfterMs: number | undefined,
+  abandonFrom: AbandonOrigin | undefined
 ): MeasurementWarning[] {
   const warnings: MeasurementWarning[] = [];
   for (const outcome of outcomes) {
     if (abandonAfterMs !== undefined) {
-      warnings.push(...abandonmentWarnings(outcome));
+      warnings.push(...abandonmentWarnings(outcome, abandonFrom));
       continue;
     }
     const landed = outcome.ok2xx ?? 0;
@@ -429,7 +443,7 @@ export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
   const minGrowth = input.minGrowthPerCycle ?? MIN_GROWTH_NOISE_FLOOR;
   const warnings = [
     ...settleWarnings(input.settleOutcomes),
-    ...loadWarnings(input.loadOutcomes, input.abandonAfterMs),
+    ...loadWarnings(input.loadOutcomes, input.abandonAfterMs, input.abandonFrom),
     ...growthShapeWarnings(input.trend),
     ...noiseFloorWarnings(input.trend, minGrowth),
     ...thinEvidenceWarnings(input.trend, minGrowth),

@@ -228,6 +228,43 @@ describe("abandonment auditing", () => {
     expect(result.supersededVerdict).toBeUndefined();
     expect(codesOf(result)).toEqual(["abandon-ineffective"]);
   });
+
+  // Under the request origin a cut that lands before the response is the
+  // experiment, not a miss. Reporting it would teach the reader to skip the
+  // one warning here that still means something.
+  it("stays quiet on pre-response cuts when the route asked for them", () => {
+    const outcomes = [
+      {
+        phase: "cycle 1",
+        sent: 1000,
+        abandoned: 1000,
+        abandonedMidStream: 0,
+        abandonedBeforeResponse: 1000,
+      },
+    ];
+
+    const requested = assessConfidence(
+      input({ abandonAfterMs: 15, abandonFrom: "request" as const, loadOutcomes: outcomes })
+    );
+    const byDefault = assessConfidence(input({ abandonAfterMs: 15, loadOutcomes: outcomes }));
+
+    expect(codesOf(requested)).toEqual([]);
+    expect(codesOf(byDefault)).toEqual(["abandon-before-response"]);
+  });
+
+  it("still reports a shortfall under the request origin", () => {
+    const result = assessConfidence(
+      input({
+        abandonAfterMs: 15,
+        abandonFrom: "request" as const,
+        loadOutcomes: [
+          { phase: "cycle 1", sent: 1000, abandoned: 140, abandonedBeforeResponse: 140 },
+        ],
+      })
+    );
+
+    expect(codesOf(result)).toEqual(["abandon-ineffective"]);
+  });
 });
 
 describe("growth shape auditing", () => {
