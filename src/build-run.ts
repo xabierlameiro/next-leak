@@ -1,5 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import {
+  collectSnapshotPair,
+  decideCapture,
+  discardSnapshots,
+  type CaptureStage,
+  type CollectedPair,
+} from "./build-snapshot.js";
 import { validateBuildTarget } from "./build-target.js";
 import {
   classifyBuildSamples,
@@ -28,6 +35,13 @@ export type WorkerSeries = {
   samples: BuildSample[];
 };
 
+export type BuildCapture = {
+  pid: number;
+  files: CollectedPair;
+  baselineRssBytes: number;
+  afterRssBytes: number;
+};
+
 export type BuildRunResult = {
   appDir: string;
   /**
@@ -53,6 +67,12 @@ export type BuildRunResult = {
   retentionPerPageBytes: number | null;
   /** True when a worker hit the V8 heap limit — the finding, not a failure. */
   heapExhausted: boolean;
+  /**
+   * The snapshot pair captured from a worker, when one was. Attribution is an
+   * addition to this report, never a precondition for it: every field above is
+   * produced whether or not capture worked.
+   */
+  capture: BuildCapture | null;
   strippedCapWarning: string | null;
   exitCode: number | null;
   output: string;
@@ -60,6 +80,8 @@ export type BuildRunResult = {
 
 export type BuildRunOptions = {
   appDir: string;
+  /** Where a captured snapshot pair is moved to. Capture is skipped without it. */
+  workDir?: string;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
   /** Overrides `process.env` for the build. */
@@ -68,6 +90,7 @@ export type BuildRunOptions = {
 
 export type BuildRunDeps = {
   spawnBuild: (appDir: string, env: NodeJS.ProcessEnv) => ChildProcess;
+  signalWorker: (pid: number) => void;
   sampleTable: () => Promise<ProcessTableSample>;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -89,8 +112,23 @@ function spawnNextBuild(appDir: string, env: NodeJS.ProcessEnv): ChildProcess {
   });
 }
 
+/**
+ * SIGUSR2 is what `--heapsnapshot-signal` listens for. Verified on a live
+ * static-generation worker: signalled at 73% of its heap cap it still finished
+ * the build, so this does not have to be done timidly.
+ */
+const signalWorker = (pid: number): void => {
+  try {
+    process.kill(pid, "SIGUSR2");
+  } catch {
+    // The worker finished between the poll and the signal. Not a failure:
+    // capture is optional and the run says so when no pair arrives.
+  }
+};
+
 const defaultDeps: BuildRunDeps = {
   spawnBuild: spawnNextBuild,
+  signalWorker,
   sampleTable: sampleProcessTable,
   now: () => Date.now(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -116,6 +154,37 @@ function recordSample(
     series.push({ atMs, rssBytes: row.rssBytes });
     workers.set(row.pid, series);
   }
+}
+
+type CollectOptions = {
+  appDir: string;
+  workDir: string | undefined;
+  pid: number | null;
+  stage: CaptureStage;
+  baselineRssBytes: number | null;
+  afterRssBytes: number | null;
+};
+
+/**
+ * Turns a finished capture into a usable pair, or cleans up after one that did
+ * not finish. A half-captured worker leaves a snapshot behind in the user's
+ * project, and nothing in the report would ever refer to it.
+ */
+async function collectCapture(options: CollectOptions): Promise<BuildCapture | null> {
+  const { appDir, workDir, pid, stage, baselineRssBytes, afterRssBytes } = options;
+  if (workDir === undefined || pid === null) {
+    return null;
+  }
+  if (stage !== "pair-taken" || baselineRssBytes === null || afterRssBytes === null) {
+    await discardSnapshots(appDir, pid);
+    return null;
+  }
+  const files = await collectSnapshotPair(appDir, workDir, pid);
+  if (files === null) {
+    await discardSnapshots(appDir, pid);
+    return null;
+  }
+  return { pid, files, baselineRssBytes, afterRssBytes };
 }
 
 /** The worker that grew the most: a verdict from the average would hide it. */
@@ -154,8 +223,20 @@ export async function runBuildMeasurement(
     progress(strippedCapWarning);
   }
 
+  // The worker inherits NODE_OPTIONS, which is how the signal handler gets
+  // installed without touching the build. Appending rather than replacing:
+  // a user's own NODE_OPTIONS carries their heap cap, and dropping it would
+  // silently change what is being measured.
+  const capturing = options.workDir !== undefined;
+  const buildEnv = capturing
+    ? {
+        ...env,
+        NODE_OPTIONS: `${env["NODE_OPTIONS"] ?? ""} --heapsnapshot-signal=SIGUSR2`.trim(),
+      }
+    : env;
+
   progress(`building ${target.appDir}`);
-  const child = deps.spawnBuild(target.appDir, env);
+  const child = deps.spawnBuild(target.appDir, buildEnv);
   registerChild(child);
 
   let output = "";
@@ -182,6 +263,14 @@ export async function runBuildMeasurement(
   options.signal?.addEventListener("abort", abort, { once: true });
 
   let samplingFailure: string | null = null;
+  // Capture follows one worker. Signalling every worker of a nine-worker build
+  // would write gigabytes for readings that say the same thing, so the first
+  // one seen is followed and its pid is reported, and attribution is withheld
+  // when the worker that ends up judged is a different one.
+  let capturePid: number | null = null;
+  let captureStage: CaptureStage = "waiting";
+  let captureBaselineRss: number | null = null;
+  let captureAfterRss: number | null = null;
   const polling = (async (): Promise<void> => {
     while (!finished) {
       await deps.sleep(POLL_MS);
@@ -196,6 +285,34 @@ export async function runBuildMeasurement(
         return;
       }
       recordSample(sample.rows, child.pid, deps.now() - startedAt, workerSamples, parentSamples);
+      if (!capturing) {
+        continue;
+      }
+      // Annotated because `capturePid` is assigned from this value below, which
+      // makes the inferred type circular.
+      const followed: ProcessRow | undefined =
+        capturePid === null
+          ? descendantsOf(sample.rows, child.pid).find(isStaticGenWorker)
+          : sample.rows.find((row) => row.pid === capturePid);
+      if (followed === undefined) {
+        continue;
+      }
+      capturePid ??= followed.pid;
+      if (followed.pid !== capturePid) {
+        continue;
+      }
+      const decision = decideCapture(followed.rssBytes, captureStage, captureBaselineRss);
+      if (decision === "take-baseline") {
+        deps.signalWorker(followed.pid);
+        captureStage = "baseline-taken";
+        captureBaselineRss = followed.rssBytes;
+      } else if (decision === "take-after") {
+        deps.signalWorker(followed.pid);
+        captureStage = "pair-taken";
+        captureAfterRss = followed.rssBytes;
+      } else if (decision === "give-up") {
+        captureStage = "missed";
+      }
     }
   })();
 
@@ -206,6 +323,14 @@ export async function runBuildMeasurement(
 
   const workers: WorkerSeries[] = [...workerSamples].map(([pid, samples]) => ({ pid, samples }));
   const heapExhausted = diedOfHeapExhaustion(output);
+  const workerCapture = await collectCapture({
+    appDir: target.appDir,
+    workDir: options.workDir,
+    pid: capturePid,
+    stage: captureStage,
+    baselineRssBytes: captureBaselineRss,
+    afterRssBytes: captureAfterRss,
+  });
   const pagesGenerated = pagesGeneratedFrom(output);
 
   if (workers.length === 0) {
@@ -230,6 +355,7 @@ export async function runBuildMeasurement(
       pagesGenerated,
       retentionPerPageBytes: null,
       heapExhausted,
+      capture: workerCapture,
       strippedCapWarning,
       exitCode,
       output,
@@ -278,6 +404,9 @@ export async function runBuildMeasurement(
         ? growthBytes / pagesGenerated
         : null,
     heapExhausted,
+    // A pair belonging to a worker other than the one judged supports no claim
+    // about the verdict above, so it is dropped rather than reported next to it.
+    capture: workerCapture !== null && workerCapture.pid === worst?.pid ? workerCapture : null,
     strippedCapWarning,
     exitCode,
     output,

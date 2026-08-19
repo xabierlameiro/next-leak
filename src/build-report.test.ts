@@ -18,6 +18,7 @@ const baseResult: BuildRunResult = {
   pagesGenerated: 1700,
   retentionPerPageBytes: 0.97 * MB,
   heapExhausted: true,
+  capture: null,
   strippedCapWarning: null,
   exitCode: 1,
   output: "",
@@ -73,6 +74,7 @@ describe("formatBuildReport", () => {
       trend: null,
       levels: [],
       heapExhausted: false,
+  capture: null,
       output: "Type error: Property 'x' does not exist",
     });
 
@@ -149,5 +151,76 @@ describe("formatBuildReport when the table cannot be read", () => {
     expect(output).toContain("spawn ps EPERM");
     expect(output).toContain("not a clean run");
     expect(output).not.toContain("nothing to measure");
+  });
+});
+
+// The bracketed share is the load-bearing number here: the parse limit keeps
+// both snapshots low, so the findings explain a minority of the curve and the
+// report must not let a reader assume otherwise.
+describe("formatBuildReport attribution", () => {
+  const attribution = {
+    diff: {
+      grownNodes: [
+        {
+          name: "IncrementalCache",
+          retainedBytes: 180 * MB,
+          retainerChain: "Object[.cache] <- Module[.exports]",
+          moduleIds: [1],
+        },
+      ],
+      newNodes: [],
+      typeDeltas: [],
+    },
+    attributed: {
+      findings: [{ owner: "framework" as const, source: null, packageName: "next" }],
+      route: {
+        owner: "framework" as const,
+        source: null,
+        packageName: "next",
+        dominance: 1,
+      },
+    },
+    registrySize: 198,
+    bracketed: 0.25,
+    baselineRssBytes: 200 * MB,
+    afterRssBytes: 1000 * MB,
+    baselineFile: "/run/worker-500-baseline.heapsnapshot",
+    afterFile: "/run/worker-500-after.heapsnapshot",
+  };
+
+  it("says what was retained, and over how much of the curve", () => {
+    const output = formatBuildReport(baseResult, attribution as never);
+
+    expect(output).toContain("IncrementalCache");
+    expect(output).toContain("25% of the growth");
+    expect(output).toContain("200.0 MB");
+  });
+
+  it("says when no owner could be resolved instead of naming one", () => {
+    const output = formatBuildReport(
+      baseResult,
+      {
+        ...attribution,
+        registrySize: 0,
+        attributed: {
+          findings: [{ owner: "unattributed" as const, source: null, packageName: null }],
+          route: {
+            owner: "unattributed" as const,
+            source: null,
+            packageName: null,
+            dominance: 0,
+          },
+        },
+      } as never
+    );
+
+    expect(output).toContain("no module registry resolved");
+    expect(output).toContain("unattributed");
+  });
+
+  it("is silent when there is no attribution at all", () => {
+    const output = formatBuildReport(baseResult);
+
+    expect(output).not.toContain("what it retained");
   });
 });

@@ -53,6 +53,7 @@ function makeDeps(
     exitCode?: number | null;
     parentMb?: number[];
     noWorker?: boolean;
+    onSignal?: (pid: number) => void;
   } = {}
 ): BuildRunDeps {
   let poll = 0;
@@ -64,6 +65,7 @@ function makeDeps(
       child = fakeChild(options.output ?? "");
       return child as never;
     },
+    signalWorker: (pid) => options.onSignal?.(pid),
     sampleTable: async (): Promise<ProcessTableSample> => {
       if (poll >= workerMb.length) {
         setImmediate(() => child?.emit("exit", exitCode));
@@ -305,5 +307,63 @@ describe("per-page retention when the build crashed", () => {
     expect(result.pagesGenerated).toBe(1252);
     expect(result.peakWorkerRssBytes).toBe(2479 * MB);
     expect(result.retentionPerPageBytes).toBeNull();
+  });
+});
+
+// Capture is an addition to the report. Every one of these asserts that the
+// verdict and the curve survive a capture that did not work out.
+describe("runBuildMeasurement capture", () => {
+  it("does not signal at all when no work directory was given", async () => {
+    const signalled: number[] = [];
+    const result = await runBuildMeasurement(
+      { appDir: await makeProject() },
+      makeDeps([200, 400, 700], { onSignal: (pid) => signalled.push(pid) })
+    );
+
+    expect(signalled).toEqual([]);
+    expect(result.capture).toBeNull();
+    expect(result.status).toBe("measured");
+  });
+
+  it("still reports a verdict when the worker dies before the second snapshot", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-capture-"));
+    const signalled: number[] = [];
+    const result = await runBuildMeasurement(
+      { appDir: await makeProject(), workDir },
+      makeDeps([200, 260], {
+        output: "JavaScript heap out of memory",
+        exitCode: 1,
+        onSignal: (pid) => signalled.push(pid),
+      })
+    );
+
+    // The baseline was taken and the worker never grew enough for a second.
+    expect(signalled).toEqual([WORKER_PID]);
+    expect(result.capture).toBeNull();
+    expect(result.verdict).toBe("leak");
+    expect(result.heapExhausted).toBe(true);
+  });
+
+  it("signals twice once the worker reaches the capture target", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-capture-"));
+    const signalled: number[] = [];
+    await runBuildMeasurement(
+      { appDir: await makeProject(), workDir },
+      makeDeps([200, 400, 1000], { onSignal: (pid) => signalled.push(pid) })
+    );
+
+    expect(signalled).toEqual([WORKER_PID, WORKER_PID]);
+  });
+
+  it("never signals a worker already past the parse limit", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-capture-"));
+    const signalled: number[] = [];
+    await runBuildMeasurement(
+      { appDir: await makeProject(), workDir },
+      makeDeps([2000, 2600, 3000], { onSignal: (pid) => signalled.push(pid) })
+    );
+
+    // A snapshot up there is written, costs the disk, and cannot be read back.
+    expect(signalled).toEqual([]);
   });
 });

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { attributeBuildCapture } from "./build-attribution.js";
 import { formatBuildReport } from "./build-report.js";
 import { runBuildMeasurement } from "./build-run.js";
 import { helpText, parseCliArgs, type ParsedCli } from "./cli-args.js";
@@ -95,17 +96,28 @@ function handleNonRunCommand(parsed: ParsedCli): boolean {
 }
 
 /**
- * Measuring a build needs no heap headroom of its own: nothing is diffed here,
- * and the memory that matters belongs to the build's own processes.
+ * A build measurement diffs at most one snapshot pair, and the parse limit
+ * keeps that pair below a gigabyte of worker memory, so this needs far less
+ * headroom than a route run. The memory that matters still belongs to the
+ * build's own processes.
  */
-async function runBuildCommand(appDir: string): Promise<void> {
+async function runBuildCommand(appDir: string, outputDir: string | null): Promise<void> {
   const aborter = installInterruptHandlers();
+  const workDir = path.join(
+    outputDir ?? path.join(appDir, ".next-leak"),
+    new Date().toISOString().replace(/[:.]/g, "-")
+  );
+  await mkdir(workDir, { recursive: true });
   const result = await runBuildMeasurement({
     appDir,
+    workDir,
     signal: aborter.signal,
     onProgress: (message) => console.error(`· ${message}`),
   });
-  console.log(formatBuildReport(result));
+  const attribution = await attributeBuildCapture(result, appDir, (message) =>
+    console.error(`· ${message}`)
+  );
+  console.log(formatBuildReport(result, attribution));
   if (aborter.signal.aborted) {
     process.exitCode = 130;
   }
@@ -151,7 +163,7 @@ async function main(): Promise<void> {
     return;
   }
   if (parsed.kind === "build") {
-    await runBuildCommand(parsed.options.appDir);
+    await runBuildCommand(parsed.options.appDir, parsed.options.output);
     return;
   }
   if (parsed.kind !== "run") {

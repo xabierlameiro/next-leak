@@ -1,3 +1,4 @@
+import type { BuildAttribution } from "./build-attribution.js";
 import type { BuildRunResult } from "./build-run.js";
 
 const MB = 1024 * 1024;
@@ -29,6 +30,55 @@ function growthLine(result: BuildRunResult): string {
   return `      grew ${mb(result.netGrowthBytes)} across the generation phase${perPage}`;
 }
 
+const MAX_REPORTED_FINDINGS = 3;
+
+/**
+ * Names what the worker retained between the two snapshots.
+ *
+ * The bracketed share leads, because it bounds everything below it. The parse
+ * limit forces both snapshots low on the curve — a snapshot past roughly a
+ * gigabyte of worker memory cannot be read back — so on a build that peaks at
+ * several gigabytes the pair explains a minority of the growth. Printing the
+ * findings without that number invites the reader to treat them as the whole
+ * story.
+ */
+function attributionLines(attribution: BuildAttribution | null): string[] {
+  if (attribution === null) {
+    return [];
+  }
+  const { diff, attributed, bracketed } = attribution;
+  const findings = [...diff.grownNodes, ...diff.newNodes];
+  if (findings.length === 0) {
+    return ["", `  nothing grew between the two snapshots`];
+  }
+  const lines = [
+    "",
+    `  what it retained, between ${mb(attribution.baselineRssBytes)} and ` +
+      `${mb(attribution.afterRssBytes)} of worker rss —`,
+    `  ${(bracketed * 100).toFixed(0)}% of the growth this run observed. The rest is not`,
+    `  attributed: a snapshot taken higher up cannot be parsed back.`,
+  ];
+  if (attribution.registrySize === 0) {
+    lines.push(
+      `      no module registry resolved, so no owner is named below — only`,
+      `      where the bytes hang`
+    );
+  }
+  lines.push(
+    `      snapshots: ${attribution.baselineFile} / ${attribution.afterFile}`
+  );
+  for (const [index, finding] of findings.slice(0, MAX_REPORTED_FINDINGS).entries()) {
+    const owner = attributed.findings[index];
+    const name = owner?.source ?? owner?.packageName ?? owner?.owner ?? "unattributed";
+    lines.push(
+      `      ↳ ${finding.name === "" ? "(anonymous)" : finding.name} ` +
+        `${mb(finding.retainedBytes)} · ${name}`,
+      `          ${finding.retainerChain}`
+    );
+  }
+  return lines;
+}
+
 /**
  * Renders the build report.
  *
@@ -38,7 +88,10 @@ function growthLine(result: BuildRunResult): string {
  * still the honest axis here — it is what a CI runner's limit is enforced
  * against and what the OOM killer reads.
  */
-export function formatBuildReport(result: BuildRunResult): string {
+export function formatBuildReport(
+  result: BuildRunResult,
+  attribution: BuildAttribution | null = null
+): string {
   const lines: string[] = [`next-leak build · ${result.appDir}`, ""];
 
   if (result.strippedCapWarning !== null) {
@@ -99,6 +152,8 @@ export function formatBuildReport(result: BuildRunResult): string {
   if (result.workers.length > 1) {
     lines.push(`      ${result.workers.length} workers ran; the verdict is the worst of them`);
   }
+
+  lines.push(...attributionLines(attribution));
 
   lines.push(
     "",
