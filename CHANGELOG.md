@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/xabierlameiro/next-leak/compare/v0.8.0...v0.9.0) (2026-08-27)
+
+
+### Features
+
+* report what the build's own process reached ([9408302](https://github.com/xabierlameiro/next-leak/commit/94083021b00c780454d3587b734d3a172833397d))
+
+
+### Bug Fixes
+
+* never propose a sample value the build already prerendered ([18605bd](https://github.com/xabierlameiro/next-leak/commit/18605bde3ccac2b9971421021f36bc5dc02f0a1b))
+* report a route that ran out of heap as a leak, not as a failed run ([15101b3](https://github.com/xabierlameiro/next-leak/commit/15101b39f0289f60f8266aa8509fcc3e9f896511))
+* tell a closed param set apart from a broken route ([6c5c6c6](https://github.com/xabierlameiro/next-leak/commit/6c5c6c650240096bf21df1e99d309d4eb894f166))
+
 ## [0.8.0](https://github.com/xabierlameiro/next-leak/compare/v0.7.0...v0.8.0) (2026-08-19)
 
 
