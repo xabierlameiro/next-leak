@@ -70,7 +70,7 @@ async function describeRedirect(url: string): Promise<string | null> {
  * `dynamicParams` at build time when it is enabled, so those apps always render
  * on demand.
  */
-async function describeUnprerenderedParams(url: string): Promise<string | null> {
+export async function describeUnprerenderedParams(url: string): Promise<string | null> {
   const bounded = boundedMarkerOf(url);
   const marker = bounded === null ? UNIQUE_MARKER : bounded.marker;
   if (!url.includes(marker)) {
