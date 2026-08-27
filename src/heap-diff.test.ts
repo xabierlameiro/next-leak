@@ -741,3 +741,45 @@ describe("parsedSectionBytes", () => {
     expect(parsed ?? size).toBeLessThan(size / 5);
   });
 });
+
+// The scan reads in 8 MB chunks, and the first one has to be enough to decide
+// the file is a snapshot at all. `edges` cannot be part of that decision: it
+// comes after the whole nodes array, which is hundreds of MB on exactly the
+// captures this scan exists for. Requiring it aborted every large scan, found
+// on a real 769.9 MB capture that fell back to the file-size check and was
+// refused over 2.3 MB of JSON.
+describe("parsedSectionBytes on a snapshot larger than one chunk", () => {
+  it("keeps scanning when edges lands beyond the first chunk", async () => {
+    const { mkdtemp, open, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const nodePath = await import("node:path");
+
+    const dir = await mkdtemp(nodePath.join(tmpdir(), "next-leak-bigscan-"));
+    const file = nodePath.join(dir, "s.heapsnapshot");
+    // 12 MB of node ids: past the 8 MB read granularity, so `edges` cannot
+    // appear until the second chunk.
+    const filler = `${Array.from({ length: 1_500_000 }, (_, i) => i % 10).join(",")}`;
+    const handle = await open(file, "w");
+    try {
+      await handle.write(
+        `{"snapshot":{"meta":{}},"nodes":[${filler}],"edges":[1,2,3],` +
+          `"trace_function_infos":[],"trace_tree":[],"samples":[],` +
+          `"locations":[],"strings":["a"]}`
+      );
+    } finally {
+      await handle.close();
+    }
+
+    try {
+      const { stat } = await import("node:fs/promises");
+      const size = (await stat(file)).size;
+      const parsed = await parsedSectionBytes(file, size);
+
+      expect(parsed).not.toBeNull();
+      // Everything outside the nodes array is a hundred bytes or so.
+      expect(parsed ?? size).toBeLessThan(size / 100);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
