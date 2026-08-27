@@ -1,6 +1,6 @@
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { LoadError, runLoadPhase } from "./load.js";
+import { describeUnprerenderedParams, LoadError, runLoadPhase } from "./load.js";
 
 let server: http.Server | undefined;
 
@@ -463,5 +463,54 @@ describe("the closed-param-set probe stays quiet without evidence", () => {
     }).catch((cause: unknown) => cause);
 
     expect((failure as LoadError).message).toContain("requests failed");
+  });
+});
+
+describe("describeUnprerenderedParams", () => {
+  it("says nothing about a path with no varying marker", async () => {
+    expect(await describeUnprerenderedParams("http://127.0.0.1:1/post-3")).toBeNull();
+  });
+
+  it("says nothing when the probe cannot reach the app", async () => {
+    // Port 1 refuses: both probes throw, so there is nothing to compare and the
+    // route diagnosis must keep its say.
+    expect(await describeUnprerenderedParams("http://127.0.0.1:1/post-{n}")).toBeNull();
+  });
+
+  it("blames the value when a novel param 404s and a prerendered one does not", async () => {
+    const port = await listen((req, res) => {
+      if ((req.url ?? "").includes("999999")) {
+        res.statusCode = 404;
+        res.end("not found");
+        return;
+      }
+      res.end("ok");
+    });
+    const message = await describeUnprerenderedParams(`http://127.0.0.1:${port}/post-{n}`);
+
+    expect(message).toContain("never prerendered");
+    expect(message).toContain("{n%N}");
+  });
+
+  it("says nothing when both probes 404 — that is a broken route", async () => {
+    const port = await listen((_req, res) => {
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    expect(await describeUnprerenderedParams(`http://127.0.0.1:${port}/post-{n}`)).toBeNull();
+  });
+
+  it("reads the bounded marker as well as the unique one", async () => {
+    const port = await listen((req, res) => {
+      if ((req.url ?? "").includes("999999")) {
+        res.statusCode = 404;
+        res.end("not found");
+        return;
+      }
+      res.end("ok");
+    });
+    const message = await describeUnprerenderedParams(`http://127.0.0.1:${port}/post-{n%5}`);
+
+    expect(message).toContain("never prerendered");
   });
 });
