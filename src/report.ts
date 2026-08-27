@@ -21,7 +21,12 @@ const formatGrowth = (bytes: number): string => {
   return `${sign}${(bytes / MB).toFixed(2)} MB/1000 req`;
 };
 
-const VERDICT_ICON = { leak: "✖", stable: "✔", inconclusive: "?" } as const;
+const VERDICT_ICON = {
+  leak: "✖",
+  stable: "✔",
+  inconclusive: "?",
+  saturating: "~",
+} as const satisfies Record<TrendVerdict, string>;
 
 /** RSS is noisier than the heap, so it needs both a trend and a real size. */
 const RSS_MIN_GROWTH_PER_CYCLE = 16 * MB;
@@ -70,6 +75,32 @@ function revalidationLines(route: MeasuredRouteView): string[] {
         `      driven through ISR revalidation (revalidates every ` +
           `${route.revalidatedEverySeconds}s; without it the load would serve the cache)`,
       ];
+}
+
+/**
+ * What a bending curve means, and what a growing cache does to a verdict.
+ *
+ * Both lines answer the same question from opposite sides: how much of this
+ * growth is the route storing what it was asked to store. A `use cache` route
+ * driven with a fresh key per request measured +603 MB/1000 requests on
+ * Next 16.3.3, all of it the cache; the same route with the payload removed
+ * measured +88 MB. Without saying so, the first number reads as a leak.
+ */
+function cacheLines(route: MeasuredRouteView): string[] {
+  const lines: string[] = [];
+  if (route.trend.verdict === "saturating") {
+    lines.push(
+      `      growth is decelerating, not linear — the shape of a bounded store ` +
+        `filling up rather than memory going missing`
+    );
+  }
+  if (route.trend.cacheDriven === true && route.trend.growthPerCycle > 0) {
+    lines.push(
+      `      the load served keys this route had never cached, so some of this ` +
+        `growth is cache residency; bound it with {n%N} in next-leak.config.json`
+    );
+  }
+  return lines;
 }
 
 /**
@@ -237,6 +268,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
       route.growthPer1000Requests
     )})  heap ${curve}${resolved}`,
     ...revalidationLines(route),
+    ...cacheLines(route),
     ...abandonLines(route),
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),

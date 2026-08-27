@@ -314,3 +314,83 @@ describe("withdrawn acquittal on large oscillating series", () => {
     expect(result.source).toBe("external");
   });
 });
+
+describe("saturating growth", () => {
+  // Shape taken from the `use cache` route measured on 2026-08-27 against
+  // Next 16.3.3: a fresh cache key per request grows every cycle, so `allGrow`
+  // alone called it a leak at +603 MB/1000 requests while nothing was leaking.
+  it("calls a decelerating series saturating rather than a leak", () => {
+    const samples = [28 * MB, 30 * MB, 38 * MB, 42 * MB, 43.5 * MB];
+    const result = classifyTrend(samples);
+    expect(result.verdict).toBe("saturating");
+    expect(result.deltas).toEqual([8 * MB, 4 * MB, 1.5 * MB]);
+  });
+
+  it("keeps a linear series a leak", () => {
+    const samples = [28 * MB, 30 * MB, 34 * MB, 38 * MB, 42 * MB];
+    expect(classifyTrend(samples).verdict).toBe("leak");
+  });
+
+  it("keeps a stepwise series a leak, which saturation cannot reach", () => {
+    // Cycles below the gate keep this out of `allGrow` entirely.
+    const samples = [28 * MB, 30 * MB, 40 * MB, 40 * MB, 50 * MB];
+    expect(classifyTrend(samples).verdict).toBe("leak");
+  });
+
+  it("keeps a series that stops dead a leak, not saturating", () => {
+    // [8, 3, 0] MB. Growth that halts without handing anything back is a
+    // staircase, and stepwise detection owns it: a cache that stops is
+    // indistinguishable from a leak pausing. Saturation is for curves that
+    // bend, not for ones that hit a wall.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 41 * MB, 41 * MB];
+    expect(classifyTrend(samples).verdict).toBe("leak");
+  });
+
+  it("stays a leak when deltas decrease but the last stays above half the first", () => {
+    // [8, 6, 5] MB: decelerating, but nowhere near running out.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 44 * MB, 49 * MB];
+    expect(classifyTrend(samples).verdict).toBe("leak");
+  });
+
+  it("needs three cycles before calling a bend", () => {
+    // [8, 2] MB decelerates hard, but two deltas are a pair, not a trend.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 40 * MB];
+    expect(classifyTrend(samples).verdict).toBe("leak");
+  });
+
+  it("ranks saturating between inconclusive and stable across memory sources", () => {
+    const saturatingSamples = [28 * MB, 30 * MB, 38 * MB, 42 * MB, 43.5 * MB];
+    const stableSamples = [10 * MB, 11 * MB, 11.1 * MB, 11.0 * MB, 11.2 * MB];
+    const result = classifyMemoryTrend(stableSamples, saturatingSamples);
+    expect(result.verdict).toBe("saturating");
+    expect(result.source).toBe("external");
+  });
+});
+
+describe("cache-driven context", () => {
+  it("records the context without moving the verdict", () => {
+    // Same series, both ways round: the flag is disclosure, not a threshold.
+    const samples = [28 * MB, 30 * MB, 34 * MB, 38 * MB, 42 * MB];
+    const plain = classifyTrend(samples);
+    const driven = classifyTrend(samples, { cacheDriven: true });
+
+    expect(driven.verdict).toBe(plain.verdict);
+    expect(driven.growthPerCycle).toBe(plain.growthPerCycle);
+    expect(driven.cacheDriven).toBe(true);
+    expect(plain.cacheDriven).toBeUndefined();
+  });
+
+  it("leaves a healthy series stable when the cache was driven", () => {
+    const samples = [29.4 * MB, 31.5 * MB, 32.3 * MB, 32.1 * MB];
+    expect(classifyTrend(samples, { cacheDriven: true }).verdict).toBe("stable");
+  });
+
+  it("carries the context through the two-source verdict", () => {
+    const heap = [28 * MB, 30 * MB, 34 * MB, 38 * MB, 42 * MB];
+    const external = [1 * MB, 1.1 * MB, 1.1 * MB, 1.0 * MB, 1.1 * MB];
+    const result = classifyMemoryTrend(heap, external, { cacheDriven: true });
+
+    expect(result.verdict).toBe("leak");
+    expect(result.cacheDriven).toBe(true);
+  });
+});

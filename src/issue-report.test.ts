@@ -212,3 +212,27 @@ describe("renderIssueMarkdown measurement caveats", () => {
     );
   });
 });
+
+// A cache being filled by the measurement explains the whole curve, so a draft
+// that omits it invites a maintainer to chase a leak that is not there.
+describe("cache-driven disclosure", () => {
+  function cacheDrivenRoute(): MeasuredRoute {
+    const route = leakyRoute();
+    return { ...route, trend: { ...route.trend, cacheDriven: true } };
+  }
+
+  it("discloses cache residency above the report body", () => {
+    const markdown = renderIssueMarkdown(cacheDrivenRoute(), makeRunReport());
+    const disclosure = markdown.indexOf("cache keys it had never served");
+    const heading = markdown.indexOf("# Memory leak on route");
+
+    expect(disclosure).toBeGreaterThanOrEqual(0);
+    expect(disclosure).toBeLessThan(heading);
+    expect(markdown).toContain("{n%N}");
+  });
+
+  it("says nothing about caches on a route that was not cache-driven", () => {
+    const markdown = renderIssueMarkdown(leakyRoute(), makeRunReport());
+    expect(markdown).not.toContain("cache keys it had never served");
+  });
+});

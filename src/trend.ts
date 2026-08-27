@@ -1,4 +1,4 @@
-export type TrendVerdict = "leak" | "stable" | "inconclusive";
+export type TrendVerdict = "leak" | "stable" | "inconclusive" | "saturating";
 
 export type TrendResult = {
   verdict: TrendVerdict;
@@ -15,6 +15,15 @@ export type TrendResult = {
    * "stable".
    */
   source?: "heap" | "external";
+  /**
+   * Whether the load was driving a cache with keys it had never seen.
+   *
+   * Present so consumers can say what a verdict rests on: growth measured
+   * while forcing a route to re-render for every request has an explanation
+   * that growth on an uncached route does not. It never moves a threshold —
+   * the same samples produce the same verdict either way.
+   */
+  cacheDriven?: true;
 };
 
 export type TrendOptions = {
@@ -24,6 +33,14 @@ export type TrendOptions = {
    * `minGrowthFor(requestsPerCycle)` instead.
    */
   minGrowthPerCycle?: number;
+  /**
+   * The route is a cache being driven with keys it has not served before, so
+   * part of any growth is the store filling up rather than memory going
+   * missing. Carried into the result for disclosure; deliberately not used to
+   * move any threshold, because lowering the gate for cached routes would
+   * hide the real leaks that live in them.
+   */
+  cacheDriven?: boolean;
 };
 
 /**
@@ -83,6 +100,24 @@ const STEPWISE_MAX_DRAWDOWN_RATIO = 0.1;
 const ACQUITTAL_MAX_GROWTH_MULTIPLE = 8;
 
 /**
+ * Cycles a series needs before its shape can be called decelerating.
+ *
+ * Two deltas going down is a pair, not a trend: the minimum window that can
+ * tell a bend from a wobble is three.
+ */
+const SATURATION_MIN_CYCLES = 3;
+
+/**
+ * Share of the first cycle's growth the last one must fall below.
+ *
+ * Decreasing deltas alone would excuse a leak that eases off for a couple of
+ * cycles. Requiring the deceleration to actually arrive somewhere — half the
+ * opening rate or less — is what separates a store running out of new keys
+ * from a leak having a quiet spell.
+ */
+const SATURATION_MAX_FINAL_RATIO = 0.5;
+
+/**
  * Largest give-back from a running peak, over the post-warm-up window.
  *
  * This is what separates a plateau from a pause. A healthy route oscillates
@@ -129,6 +164,38 @@ function isStepwiseGrowth(
 }
 
 /**
+ * Growth that is running out rather than running away.
+ *
+ * A bounded store filling up grows by less each cycle, because the keys it has
+ * not seen yet keep getting rarer; a leak does not decelerate, it accumulates.
+ * Without this distinction every cache driven with a fresh key per request
+ * clears `allGrow` and is called a leak — measured at +603 MB/1000 requests on
+ * a `use cache` route that was storing exactly what it was asked to store,
+ * against +88 MB/1000 for the same route once the payload was removed.
+ *
+ * Only reachable from the `allGrow` branch, so it cannot take cases from
+ * stepwise detection: a staircase has cycles below the gate by definition.
+ */
+function isSaturating(deltas: readonly number[]): boolean {
+  if (deltas.length < SATURATION_MIN_CYCLES) {
+    return false;
+  }
+  const first = deltas[0];
+  const last = deltas[deltas.length - 1];
+  if (first === undefined || last === undefined || first <= 0) {
+    return false;
+  }
+  for (let i = 1; i < deltas.length; i += 1) {
+    const current = deltas[i];
+    const previous = deltas[i - 1];
+    if (current === undefined || previous === undefined || current >= previous) {
+      return false;
+    }
+  }
+  return last <= first * SATURATION_MAX_FINAL_RATIO;
+}
+
+/**
  * Whether a series is growing too much to be excused by a flat cycle.
  *
  * Both terms are load-bearing. The mean alone would flag a route that spikes
@@ -146,16 +213,8 @@ function isTooLargeToAcquit(
   return mean >= minGrowth * ACQUITTAL_MAX_GROWTH_MULTIPLE && netGrowth > 0;
 }
 
-/**
- * Classifies a series of post-GC retained-heap samples — baseline first, then
- * one sample per load cycle — as leaking or stable.
- *
- * The baseline→cycle-1 delta is excluded from the verdict: measurements on
- * healthy routes show it is dominated by one-time engine warm-up (JIT code,
- * lazy caches) even after an HTTP-level warm-up phase. A leak must keep
- * growing across the remaining cycles; warm-up flattens out.
- */
-export function classifyTrend(samples: readonly number[], options: TrendOptions = {}): TrendResult {
+/** The verdict itself, decided from the shape of the series and nothing else. */
+function classifyShape(samples: readonly number[], options: TrendOptions): TrendResult {
   const minGrowth = options.minGrowthPerCycle ?? MIN_GROWTH_NOISE_FLOOR;
 
   if (samples.length < 4) {
@@ -181,6 +240,8 @@ export function classifyTrend(samples: readonly number[], options: TrendOptions 
   // oscillates around its plateau, so at least one delta goes flat or
   // negative (observed on every healthy phase-0 run). Four outcomes:
   //   leak         — every cycle grows by at least the threshold
+  //   saturating   — every cycle grows, but by less each time: a bounded store
+  //                  filling up, not memory going missing
   //   stable       — some cycle went flat/down while the growth around it was
   //                  small, or the mean is below the threshold (small
   //                  consistent drift is measurement noise)
@@ -190,6 +251,9 @@ export function classifyTrend(samples: readonly number[], options: TrendOptions 
   //                  acquittal is withdrawn, but a magnitude is not a shape
   //                  and will not carry an accusation.
   if (allGrow) {
+    if (isSaturating(deltas)) {
+      return { verdict: "saturating", growthPerCycle: mean, deltas, source: "heap" };
+    }
     return { verdict: "leak", growthPerCycle: mean, deltas, source: "heap" };
   }
   if (isStepwiseGrowth(samples, deltas, growingCycles, mean, minGrowth)) {
@@ -205,6 +269,24 @@ export function classifyTrend(samples: readonly number[], options: TrendOptions 
 }
 
 /**
+ * Classifies a series of post-GC retained-heap samples — baseline first, then
+ * one sample per load cycle — as leaking or stable.
+ *
+ * The baseline→cycle-1 delta is excluded from the verdict: measurements on
+ * healthy routes show it is dominated by one-time engine warm-up (JIT code,
+ * lazy caches) even after an HTTP-level warm-up phase. A leak must keep
+ * growing across the remaining cycles; warm-up flattens out.
+ *
+ * Measurement context travels with the result but never into the decision:
+ * the same samples must produce the same verdict whether or not the route was
+ * a cache being driven.
+ */
+export function classifyTrend(samples: readonly number[], options: TrendOptions = {}): TrendResult {
+  const result = classifyShape(samples, options);
+  return options.cacheDriven === true ? { ...result, cacheDriven: true } : result;
+}
+
+/**
  * Verdict over both the JS heap and external memory, taking the worse of the
  * two. External memory (`external`, which includes `arrayBuffers`) holds
  * fetch bodies, streams and Buffers; a process can be killed by OOM with a
@@ -217,7 +299,14 @@ export function classifyMemoryTrend(
 ): TrendResult {
   const heap = classifyTrend(heapSamples, options);
   const external = classifyTrend(externalSamples, options);
-  const severity: Record<TrendVerdict, number> = { leak: 0, inconclusive: 1, stable: 2 };
+  // Knowing a curve bends is better news than not knowing, and worse news
+  // than flat.
+  const severity: Record<TrendVerdict, number> = {
+    leak: 0,
+    inconclusive: 1,
+    saturating: 2,
+    stable: 3,
+  };
 
   if (severity[external.verdict] < severity[heap.verdict]) {
     return { ...external, source: "external" };

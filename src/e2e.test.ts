@@ -24,6 +24,7 @@ describe("next-leak end to end", () => {
       connections: 10,
       cycles: 3,
       idleMs: 300,
+      routeFilter: ["/", "/leaky"],
     });
 
     const byRoute = new Map(report.routes.map((route) => [route.route, route]));
@@ -70,4 +71,43 @@ describe("next-leak end to end", () => {
     expect(markdown).toContain("warm-up 50 requests");
     expect(markdown).toContain("3 × [300 requests at 10 connections");
   }, 180_000);
+});
+
+// The fixture's /cached route is a bounded store on an exponential approach to
+// its capacity: it grows every cycle, by 40% of the previous cycle each time.
+// That clears `allGrow`, so before saturation detection the whole pipeline
+// called it a leak — the same mistake a `use cache` route drew out of a real
+// run on Next 16.3.3.
+describe("a filling cache is not a leak", () => {
+  it("reports decelerating growth as saturating, and still calls the leaky route a leak", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-e2e-cache-"));
+    const report = await runMeasurement({
+      appDir,
+      bootstrapPath: path.join(rootDir, "dist", "bootstrap.js"),
+      outputDir,
+      warmupRequests: 50,
+      loadRequests: 300,
+      connections: 10,
+      // Four cycles leave three post-warm-up deltas, the minimum a bend needs.
+      cycles: 4,
+      idleMs: 300,
+      routeFilter: ["/cached", "/leaky"],
+      // The second pass would double an already slow e2e; the shape is the
+      // point here, and it is settled on the first.
+      resolveInconclusive: false,
+    });
+
+    const byRoute = new Map(report.routes.map((route) => [route.route, route]));
+    const cached = byRoute.get("/cached");
+    const leaky = byRoute.get("/leaky");
+    if (cached?.status !== "measured" || leaky?.status !== "measured") {
+      throw new Error(`both routes should be measured: ${JSON.stringify(report.routes)}`);
+    }
+
+    expect(cached.trend.verdict).toBe("saturating");
+    // Not a quiet verdict: it grew, and by enough to have been called a leak.
+    expect(cached.trend.growthPerCycle).toBeGreaterThan(256 * 1024);
+    // The control: real retention is still reported as what it is.
+    expect(leaky.trend.verdict).toBe("leak");
+  }, 240_000);
 });

@@ -40,7 +40,7 @@ import {
 import { matchSignatures, readNextVersion, type MatchedSignature } from "./signatures.js";
 import { validateTarget, type ValidatedTarget } from "./target.js";
 import { planRevalidation, revalidateSecondsFor } from "./isr.js";
-import { minGrowthFor, type TrendResult } from "./trend.js";
+import { minGrowthFor, type TrendResult, type TrendVerdict } from "./trend.js";
 
 export type RouteReport =
   | { route: string; status: "skipped"; reason: string }
@@ -420,6 +420,11 @@ async function measureRoute(
   const revalidateSeconds = revalidateSecondsFor(target.prerender, route.path);
   const bounded = boundedMarkerOf(requestPath);
   const driven = plan.kind === "drive" ? plan.headers : {};
+  // Forcing a cached route to re-render for keys it has never served fills its
+  // store as a side effect of measuring. With `{n%N}` the key set is bounded
+  // and the store settles; with `{n}` it never repeats, so growth is expected
+  // and the verdict has to say so.
+  const cacheDriven = plan.kind === "drive" && bounded === null;
   const merged = { ...driven, ...(routeConfig.headers ?? {}) };
   const headers = Object.keys(merged).length === 0 ? undefined : merged;
   const result = await deps.ritual({
@@ -431,6 +436,7 @@ async function measureRoute(
     ),
     bootstrapPath: options.bootstrapPath,
     appPort: await deps.freePort(),
+    ...(cacheDriven && { cacheDriven: true }),
     ...(options.warmupRequests !== undefined && { warmupRequests: options.warmupRequests }),
     ...(options.loadRequests !== undefined && { loadRequests: options.loadRequests }),
     ...(options.connections !== undefined && { connections: options.connections }),
@@ -561,15 +567,49 @@ async function routeReportFor(
     progress(`not measuring ${label}: ${plan.reason}`);
     return { route: route.path, status: "not-exercised", reason: plan.reason };
   }
+  return measureWithResolution(context, route, requestPath, index, label);
+}
+
+/**
+ * Why a route earns a second, longer pass — or null when the first one settles it.
+ *
+ * `inconclusive` means the evidence does not decide, and the report knows what
+ * would: the same route, twice the cycles. Printing that command and stopping
+ * asks someone whose pods are restarting to run the tool twice.
+ *
+ * `saturating` is the same problem wearing a verdict. Its shape requires every
+ * cycle to clear the growth gate, so a decelerating curve always ends the
+ * window still growing measurably — the bend is real, but where it settles is
+ * outside what was measured. A longer window is the only thing that tells a
+ * store that runs out from a leak that merely eased off.
+ */
+function reasonToResolve(verdict: TrendVerdict): string | null {
+  switch (verdict) {
+    case "inconclusive":
+      return "the first pass could not call it";
+    case "saturating":
+      return "growth was still decelerating when the window ran out";
+    case "leak":
+    case "stable":
+      return null;
+  }
+}
+
+/** Measures a route, and goes back for a longer look when the verdict earns one. */
+async function measureWithResolution(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  requestPath: string,
+  index: number,
+  label: string
+): Promise<RouteReport> {
+  const { progress } = context;
   try {
     const asPath = requestPath === route.path ? "" : ` as ${requestPath}`;
     progress(`measuring ${label}${asPath}`);
     const first = await measureRoute(context, route, requestPath, index);
-    if (
-      first.status !== "measured" ||
-      context.options.resolveInconclusive === false ||
-      effectiveVerdict(first) !== "inconclusive"
-    ) {
+    const reason = first.status === "measured" ? reasonToResolve(effectiveVerdict(first)) : null;
+    if (first.status !== "measured" || context.options.resolveInconclusive === false || reason === null) {
       return first;
     }
     // A Ctrl+C that lands after the first pass must not start a second one:
@@ -578,12 +618,8 @@ async function routeReportFor(
     if (context.options.signal?.aborted === true) {
       return first;
     }
-    // `inconclusive` means "the evidence does not decide" and the report knows
-    // exactly what would: the same route, twice the cycles. Printing that
-    // command and stopping asks someone whose pods are restarting to run the
-    // tool twice; going and getting the evidence is the answer they came for.
     const cycles = resolveCycles(context.options.cycles ?? RITUAL_DEFAULTS.cycles);
-    progress(`re-measuring ${route.path} with ${cycles} cycles: the first pass could not call it`);
+    progress(`re-measuring ${route.path} with ${cycles} cycles: ${reason}`);
     try {
       return await measureRoute(context, route, requestPath, index, {
         cycles,
@@ -677,7 +713,7 @@ async function planRun(
       ` · estimated ${formatEstimate(estimate)}` +
       (options.resolveInconclusive === false
         ? ""
-        : " (inconclusive routes are measured again)") +
+        : " (undecided and still-decelerating routes are measured again)") +
       // Long default runs are where first-time users give up; point at the two
       // ways out. Suppressed once load parameters were tuned by hand (or by
       // --quick, which arrives here as explicit loadRequests/idleMs).
