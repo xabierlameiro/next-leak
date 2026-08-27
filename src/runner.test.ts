@@ -1349,3 +1349,55 @@ describe("saturating routes are measured again", () => {
   });
 });
 
+// An absent diff and an unreadable snapshot both leave `diff: null`. One says
+// nothing grew enough to name; the other says the evidence could not be read.
+// A report that conflates them turns a hole in the evidence into a finding.
+describe("attribution gaps are distinguishable", () => {
+  async function runWithDiff(diff: RunnerDeps["diff"]) {
+    const appDir = await makeAppDir({ "/leaky/page": "app/leaky/page.js" });
+    return runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      { ...makeDeps([]), diff }
+    );
+  }
+
+  it("records an unreadable snapshot as a gap, with advice sized to the run", async () => {
+    const { constants } = await import("node:buffer");
+    const { SnapshotError } = await import("./heap-diff.js");
+    const report = await runWithDiff(async () => {
+      throw new SnapshotError("heap snapshot parses 1024 MB", constants.MAX_STRING_LENGTH * 2);
+    });
+
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.diff).toBeNull();
+    expect(route.attributionGap?.reason).toBe("snapshot-unreadable");
+    // 5000 requests produced twice the ceiling, so a fifth of that is the
+    // advice: 5000 × (1/2) × 0.8 = 2000.
+    expect(route.attributionGap?.detail).toContain("--requests 2000");
+  });
+
+  it("leaves no gap when the diff ran and simply found nothing", async () => {
+    const report = await runWithDiff(async () => ({
+      typeDeltas: [],
+      grownNodes: [],
+      newNodes: [],
+    }));
+
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.attributionGap).toBeUndefined();
+  });
+
+  it("persists the gap to run.json", async () => {
+    const { SnapshotError } = await import("./heap-diff.js");
+    const report = await runWithDiff(async () => {
+      throw new SnapshotError("heap snapshot parses 900 MB");
+    });
+    const persisted = JSON.parse(
+      await readFile(path.join(report.workDir, "run.json"), "utf8")
+    ) as { routes: { attributionGap?: { reason: string } }[] };
+
+    expect(persisted.routes[0]?.attributionGap?.reason).toBe("snapshot-unreadable");
+  });
+});

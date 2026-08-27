@@ -1,3 +1,4 @@
+import { constants as bufferConstants } from "node:buffer";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -13,7 +14,7 @@ import {
 } from "./confidence.js";
 import type { HeapSample } from "./control-server.js";
 import { captureEnvironment, type MeasurementEnvironment } from "./environment.js";
-import { diffSnapshotFiles, type HeapDiff } from "./heap-diff.js";
+import { diffSnapshotFiles, SnapshotError, type HeapDiff } from "./heap-diff.js";
 import { DEFAULT_MAX_OLD_SPACE_MB } from "./launcher.js";
 import {
   discoverPagesRoutes,
@@ -143,6 +144,20 @@ export type RouteReport =
       afterSnapshot: string;
       /** Null when the verdict is stable and diffAll was not requested. */
       diff: HeapDiff | null;
+      /**
+       * Why this route has no attribution, when the diff was attempted and
+       * could not run.
+       *
+       * An absent diff and an unreadable snapshot both surface as `diff: null`,
+       * and they are opposite findings: one says nothing grew enough to name,
+       * the other says the evidence could not be read. A report that conflates
+       * them lets a leak with no attribution pass for a leak with nothing to
+       * attribute.
+       */
+      attributionGap?: {
+        reason: "snapshot-unreadable";
+        detail: string;
+      };
       /** Null when there is no diff or no module registry. */
       attribution: AttributedDiff | null;
       signatures: MatchedSignature[];
@@ -480,6 +495,7 @@ async function measureRoute(
   }
 
   let diff: HeapDiff | null = null;
+  let attributionGap: MeasuredRoute["attributionGap"];
   if (verdict !== "stable" || options.diffAll === true) {
     progress(`diffing snapshots for ${route.path}`);
     try {
@@ -489,10 +505,13 @@ async function measureRoute(
       // it. Losing a finished measurement because the extra step failed is
       // the worse outcome by far — measured on the #97424 reproduction, where
       // a 1.7 GB snapshot took the whole run down with it.
-      progress(
-        `snapshot diff unavailable for ${route.path}: ` +
-          `${cause instanceof Error ? cause.message : String(cause)}`
-      );
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const advice = smallerRunAdvice(cause, result.requestsPerCycle);
+      attributionGap = {
+        reason: "snapshot-unreadable",
+        detail: `${message}${advice}`,
+      };
+      progress(`snapshot diff unavailable for ${route.path}: ${message}${advice}`);
     }
   }
 
@@ -525,6 +544,7 @@ async function measureRoute(
     baselineSnapshot: result.baselineSnapshot,
     afterSnapshot: result.afterSnapshot,
     diff,
+    ...(attributionGap !== undefined && { attributionGap }),
     attribution: diff === null || registry.size === 0 ? null : attributeDiff(diff, registry),
     signatures: diff === null ? [] : matchSignatures(diff, nextVersion),
   };
@@ -545,6 +565,34 @@ async function writeEvidenceBundle(report: RunReport, workDir: string): Promise<
     }
   }
   await writeFile(report.bundle.htmlReport, renderHtmlReport(report));
+}
+
+/**
+ * The `--requests` that would have produced a diffable snapshot.
+ *
+ * Naming a number beats naming the size that failed: someone reading "1343 MB,
+ * past 512 MB" still has to guess what to try next. The estimate assumes the
+ * parsed sections scale with the traffic served, which is the same assumption
+ * behind the growth gate, and it is rounded down to a round number so nobody
+ * reads four significant figures as a promise.
+ *
+ * Empty string when the failure was not about size, so the caller can append
+ * it unconditionally.
+ */
+function smallerRunAdvice(cause: unknown, requestsPerCycle: number): string {
+  const parsedBytes = cause instanceof SnapshotError ? cause.parsedBytes : undefined;
+  if (parsedBytes === undefined || parsedBytes <= 0) {
+    return "";
+  }
+  const ceiling = bufferConstants.MAX_STRING_LENGTH;
+  // Aim under the ceiling rather than at it: a snapshot that lands on the line
+  // is one noisy cycle away from being refused again.
+  const suggested = Math.floor(((requestsPerCycle * ceiling) / parsedBytes) * 0.8);
+  if (suggested < 1 || suggested >= requestsPerCycle) {
+    return "";
+  }
+  const rounded = suggested >= 100 ? Math.floor(suggested / 100) * 100 : suggested;
+  return `. Around --requests ${rounded} should keep it diffable`;
 }
 
 /** Skip, measure or record the failure for one route — never throws. */
