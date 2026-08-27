@@ -456,3 +456,55 @@ describe("formatReport coverage", () => {
     expect(output).not.toContain("not a verdict");
   });
 });
+
+// Death inside the first cycle leaves only the baseline, and once even that is
+// missing there is no curve to print — the verdict still has to survive.
+describe("a route that ran out of heap", () => {
+  const withDeath = (samples: number[]) => {
+    const report = makeRunReport();
+    report.routes = [
+      {
+        route: "/heavy",
+        status: "died-of-heap",
+        requestPath: "/heavy",
+        reason: "the measured process ran out of heap",
+        memorySamples: samples.map((heapUsed) => ({
+          gcExposed: true,
+          heapUsed,
+          rss: heapUsed * 2,
+          external: 0,
+          arrayBuffers: 0,
+        })),
+        peaks: [],
+        cyclesCompleted: 2,
+        cyclesRequested: 4,
+        requestsPerCycle: 400,
+      },
+    ];
+    return report;
+  };
+
+  it("calls it a leak and says how far it got", () => {
+    const output = formatReport(withDeath([180 * 1024 * 1024]));
+
+    expect(output).toContain("leak");
+    expect(output).toContain("ran out of heap after 2 of 4 cycles");
+  });
+
+  it("prints the curve when there is one", () => {
+    expect(formatReport(withDeath([100 * 1024 * 1024, 400 * 1024 * 1024]))).toContain("heap ");
+  });
+
+  it("omits the curve rather than printing an empty one", () => {
+    const output = formatReport(withDeath([]));
+
+    expect(output).toContain("ran out of heap after 2 of 4 cycles");
+    expect(output).not.toContain("heap  ");
+  });
+
+  it("counts as a measured route, not as one that failed", () => {
+    const output = formatReport(withDeath([180 * 1024 * 1024]));
+
+    expect(output).toContain("measured all 1 discovered route(s)");
+  });
+});
