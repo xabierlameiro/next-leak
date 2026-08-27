@@ -118,6 +118,38 @@ export function formatBuildReport(
     return lines.join("\n");
   }
 
+/**
+ * What the build's own process reached, reported next to the worker's figure
+ * and never mixed into it.
+ *
+ * The parent was already sampled and then thrown away — the type called it
+ * "reported but never judged" while no report touched it. Two real cases need
+ * it: the compilation phase of vercel/next.js#97802 dies before any worker
+ * exists, and the file-tracing phase of vercel/next.js#76704 runs entirely in
+ * the parent after static generation has finished. In both, everything the
+ * worker figure describes is absent at the moment of the failure.
+ *
+ * Kept separate on purpose. The parent sheds memory while the worker climbs —
+ * 1.43 GB down to 0.10 GB over the same window on the #97464 reproduction — so
+ * summing the two cancels the finding the worker verdict is built on.
+ */
+function parentPeakLines(result: BuildRunResult): string[] {
+  const peak = result.parentSamples.reduce(
+    (highest, sample) => Math.max(highest, sample.rssBytes),
+    0
+  );
+  if (peak === 0) {
+    return [];
+  }
+  const last = result.parentSamples[result.parentSamples.length - 1];
+  const ended = last === undefined ? 0 : last.rssBytes;
+  return [
+    `      the build's own process peaked at ${mb(peak)} (ended at ${mb(ended)}) — ` +
+      `reported, not judged:`,
+    `      it sheds while workers climb, so it is never added to the figure above`,
+  ];
+}
+
   if (result.status === "nothing-to-measure") {
     lines.push(
       `  – no static-generation worker ran, so there was nothing to measure`,
@@ -155,6 +187,7 @@ export function formatBuildReport(
 
   lines.push(
     ...attributionLines(attribution),
+    ...parentPeakLines(result),
     "",
     `  peak worker rss ${mb(result.peakWorkerRssBytes)} · sampled from the process tree, so a`,
     `  spike shorter than the polling interval is not observed`
