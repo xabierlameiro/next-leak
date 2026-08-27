@@ -9,6 +9,7 @@ export type CliRunOptions = {
   maxOldSpaceMb: number | null;
   quick: boolean;
   noResolve: boolean;
+  selfCheck: boolean;
   diffAll: boolean;
   attributeBuild: boolean;
   writeConfig: boolean;
@@ -47,6 +48,7 @@ const RUN_ONLY_FLAGS: ReadonlyArray<[keyof CliRunOptions, string]> = [
   ["maxOldSpaceMb", "--max-old-space"],
   ["quick", "--quick"],
   ["noResolve", "--no-resolve"],
+  ["selfCheck", "--self-check"],
   ["diffAll", "--diff-all"],
   ["writeConfig", "--write-config"],
 ];
@@ -108,6 +110,11 @@ const FLAGS: FlagSpec[] = [
     flag: "--no-resolve",
     value: "none",
     help: "Do not re-measure inconclusive routes with more cycles (default: re-measure once)",
+  },
+  {
+    flag: "--self-check",
+    value: "none",
+    help: "Measure a planted leak first to prove the harness works here — costs one extra route's worth of time",
   },
   { flag: "--output", value: "string", argName: "<dir>", help: "Where to write runs (default <app-dir>/.next-leak)" },
   {
@@ -242,6 +249,9 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--write-config":
       options.writeConfig = true;
       return FLAG_OK;
+    case "--self-check":
+      options.selfCheck = true;
+      return FLAG_OK;
     case "--no-resolve":
       options.noResolve = true;
       return FLAG_OK;
@@ -310,6 +320,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     maxOldSpaceMb: null,
     quick: false,
     noResolve: false,
+    selfCheck: false,
     diffAll: false,
     attributeBuild: false,
     writeConfig: false,

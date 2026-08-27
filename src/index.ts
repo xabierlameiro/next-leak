@@ -13,6 +13,7 @@ export type { LaunchedApp, LaunchOptions } from "./launcher.js";
 export { diffSnapshotFiles, diffAgainstBaseline, summarizeBaseline, retainerChain, assertReadableSnapshot, parsedSectionBytes, SnapshotError } from "./heap-diff.js";
 export type { DiffOptions, HeapDiff, HeapLike, NodeFinding, TypeDelta } from "./heap-diff.js";
 export { runMeasurement, freePort } from "./runner.js";
+export { runSelfCheck, type SelfCheckResult } from "./self-check.js";
 export type { RouteReport, RunOptions, RunnerDeps, RunReport } from "./runner.js";
 export { formatReport } from "./report.js";
 export { extractModuleRegistry, extractChunkModules } from "./module-registry.js";

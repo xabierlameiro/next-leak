@@ -222,7 +222,12 @@ separates them, because each one has a different fix:
 
 - **`stable`** — no growth this run could detect: across the cycles it ran, the
   post-GC curve never cleared the growth gate printed at the foot of the
-  report. That is not proof of absence, and the wording matters — the verdict
+  report. Before trusting a page of these, prove the instrument works where you
+  are running it: `--self-check` plants a leak of 8 KB per request and measures
+  it, under your Node build, your heap cap, your concurrency and your container
+  limits. On this machine it comes back at 8.16 MB/1000 requests against a
+  theoretical 8.0 — a harness that cannot see that is one whose flat curves mean
+  nothing, and the run says so when nothing vouched for it. That is not proof of absence, and the wording matters — the verdict
   is deliberately biased toward missing a leak rather than inventing one (a
   single flat or falling cycle is enough to call a route stable), so a leak
   that oscillates while it climbs can land here. To press harder, raise
