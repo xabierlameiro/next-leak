@@ -164,7 +164,7 @@ export function renderHtmlReport(run: RunReport): string {
 <html lang="en"><head><meta charset="utf-8">
 <title>next-leak — ${escapeHtml(run.appDir)}</title>
 <style>
-body{font:14px/1.5 system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;color:#222}
+body{font:14px/1.5 system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;color:#222;background:#fff}
 h1{font-size:1.3rem} h2{font-size:1rem;margin:1.5rem 0 .3rem}
 .badge{color:#fff;border-radius:4px;padding:1px 8px;font-size:.8rem}
 table{border-collapse:collapse;font-size:.85rem;margin:.5rem 0}

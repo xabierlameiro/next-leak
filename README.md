@@ -74,11 +74,12 @@ provide heap snapshots taken after forced GC"* — which almost nobody produces
 correctly. `next-leak` runs that controlled measurement for you and answers with
 evidence a maintainer would accept.
 
-Three possible answers, all valuable:
+The answers, all valuable:
 
 1. **You don't have a leak** — the spike is transient and drains during idle (the most common case).
-2. **The leak is in your code (or a dependency)** — named down to the source file when possible.
-3. **It looks like framework internals** — with a ready-to-file issue draft.
+2. **Something is filling up, not leaking** — a bounded cache on its way to its ceiling, which grows every cycle and still is not a leak.
+3. **The leak is in your code (or a dependency)** — named down to the source file when possible.
+4. **It looks like framework internals** — with a ready-to-file issue draft.
 
 ## Quickstart
 
@@ -121,6 +122,7 @@ Every report prints the gate it used.
 | `--max-old-space <mb>` | 512 | Heap cap of each measured process. Raise it for apps whose legitimate working set is larger, or they die under measurement |
 | `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Same cycle count as the default; what it trades away is traffic per cycle, so it sits on the noise floor and is less sensitive to slow leaks. Explicit flags override it |
 | `--no-resolve` | off | Skip the second pass on inconclusive routes |
+| `--self-check` | off | Measure a planted leak first to prove the harness works here. Costs one route's worth of time; a run that cannot detect 8 KB per request produces verdicts worth nothing |
 | `--diff-all` | off | Diff snapshots for stable routes too |
 | `--attribute` | off | **`build` only.** Also name *what* the worker retains, not only that it retains |
 | `--output <dir>` | `<app>/.next-leak` | Where runs are written |
@@ -414,10 +416,16 @@ through the build's source maps.
   once for an hour and a half. Use it on a reproduction you are investigating,
   not on a build you need to finish. It also covers only a low slice of the
   curve, and says which: a snapshot weighs roughly 0.4x to 0.8x the worker's
-  resident size, so past about a gigabyte it exceeds the 512 MB a V8 string can
-  hold and cannot be read back — both captures happen below that, and the
-  report states what share of the observed growth they span (19% on that
+  resident size — both captures happen well below the ceiling, and the report
+  states what share of the observed growth they span (19% on that
   reproduction, whose worker peaks near 4 GB).
+
+  That ceiling is not the file's size. memlab reads `nodes`, `edges` and
+  `locations` as typed arrays in chunks and only parses the rest, so what has
+  to fit in a 512 MB V8 string is everything else — and on a leaking snapshot
+  that is almost nothing. A 1342.9 MB capture of a leaking route parsed 2.4 MB
+  of JSON and diffs fine; a 2227.5 MB one whose `strings` section alone was
+  868.9 MB is refused, and the message names 869 MB rather than 2227 MB.
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
 - Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.0/16.3.1 and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). Most recent measurements, 2026-08-17/18: the runtime path on 16.2.12 and 16.3.1-canary.18, the build path on 16.2.12 and 16.3.1. The contracts it relies on are stable since Next 13–14, but older versions are untested.

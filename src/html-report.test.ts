@@ -283,3 +283,16 @@ describe("a route that ran out of heap", () => {
     expect(renderHtmlReport(withDeath())).toContain("killed by V8 mid-run");
   });
 });
+
+// The report sets its own text colour, so it has to set its own background:
+// inheriting the browser's leaves #222 text on a dark page, which is what a
+// reader on a dark-mode machine actually got.
+describe("readability", () => {
+  it("paints its own background rather than inheriting the browser's", () => {
+    const html = renderHtmlReport(makeRunReport());
+    const bodyRule = /body\{[^}]*\}/.exec(html)?.[0] ?? "";
+
+    expect(bodyRule).toContain("color:#222");
+    expect(bodyRule).toContain("background:#fff");
+  });
+});
