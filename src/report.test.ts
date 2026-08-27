@@ -540,3 +540,31 @@ describe("cache and saturation lines", () => {
   });
 });
 
+// A verdict with no named retainer reads as a thin finding rather than a
+// missing one. The summary says which it is.
+describe("attribution gaps in the summary", () => {
+  it("counts routes whose snapshot could not be read, and names them", () => {
+    const run = makeRunReport();
+    const routes = run.routes.map((route) =>
+      route.status === "measured" && route.route === "/leaky"
+        ? {
+            ...route,
+            diff: null,
+            attributionGap: {
+              reason: "snapshot-unreadable" as const,
+              detail: "heap snapshot parses 900 MB. Around --requests 2000 should keep it diffable",
+            },
+          }
+        : route
+    );
+    const output = formatReport({ ...run, routes });
+
+    expect(output).toContain("1 route(s) finished without attribution");
+    expect(output).toContain("/leaky");
+    expect(output).toContain("the verdicts stand");
+  });
+
+  it("says nothing when every measured route was attributable", () => {
+    expect(formatReport(makeRunReport())).not.toContain("finished without attribution");
+  });
+});

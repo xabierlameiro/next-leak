@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertReadableSnapshot,
+  parsedSectionBytes,
   SnapshotError,
   diffAgainstBaseline,
   diffSnapshotFiles,
@@ -633,5 +634,110 @@ describe("snapshots too large to parse", () => {
     await handle.close();
 
     await expect(assertReadableSnapshot(file)).rejects.not.toThrow(/cannot be parsed/);
+  });
+});
+
+// memlab reads `nodes`, `edges` and `locations` as typed arrays in chunks and
+// parses only what is left, so the ceiling sits on the rest of the file — not
+// on the file. Measured 2026-08-27: a 1342.9 MB snapshot of a leaking route
+// carried 1340.5 MB of nodes and edges and reached JSON.parse with 2.4 MB, and
+// the old file-size check refused it.
+describe("parsedSectionBytes", () => {
+  const writeSnapshot = async (sections: Record<string, string>): Promise<string> => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const dir = await mkdtemp(path.join(tmpdir(), "next-leak-scan-"));
+    const file = path.join(dir, "s.heapsnapshot");
+    const body = Object.entries(sections)
+      .map(([key, value]) => `"${key}":${value}`)
+      .join(",");
+    await writeFile(file, `{${body}}`);
+    return file;
+  };
+
+  const sizeOf = async (file: string): Promise<number> => {
+    const { stat } = await import("node:fs/promises");
+    return (await stat(file)).size;
+  };
+
+  it("excludes the typed-array sections from what has to fit in a string", async () => {
+    const nodes = `[${Array.from({ length: 4000 }, (_, i) => i).join(",")}]`;
+    const edges = `[${Array.from({ length: 4000 }, (_, i) => i).join(",")}]`;
+    const file = await writeSnapshot({
+      snapshot: '{"meta":{}}',
+      nodes,
+      edges,
+      trace_function_infos: "[]",
+      trace_tree: "[]",
+      samples: "[]",
+      locations: "[1,2,3]",
+      strings: '["a","b"]',
+    });
+    const size = await sizeOf(file);
+    const parsed = await parsedSectionBytes(file, size);
+
+    expect(parsed).not.toBeNull();
+    // Everything outside nodes/edges/locations is a few dozen bytes here.
+    expect(parsed ?? size).toBeLessThan(size / 10);
+  });
+
+  it("counts a strings-heavy snapshot as mostly parsed", async () => {
+    const strings = `[${Array.from({ length: 2000 }, (_, i) => `"s${i}-${"x".repeat(40)}"`).join(",")}]`;
+    const file = await writeSnapshot({
+      snapshot: '{"meta":{}}',
+      nodes: "[1,2,3]",
+      edges: "[4,5,6]",
+      trace_function_infos: "[]",
+      trace_tree: "[]",
+      samples: "[]",
+      locations: "[]",
+      strings,
+    });
+    const size = await sizeOf(file);
+    const parsed = await parsedSectionBytes(file, size);
+
+    expect(parsed).not.toBeNull();
+    expect(parsed ?? 0).toBeGreaterThan(size * 0.9);
+  });
+
+  it("returns null when a typed section is missing, so the caller falls back", async () => {
+    const file = await writeSnapshot({
+      snapshot: '{"meta":{}}',
+      nodes: "[1,2,3]",
+      strings: '["a"]',
+    });
+    expect(await parsedSectionBytes(file, await sizeOf(file))).toBeNull();
+  });
+
+  it("returns null when the sections are not in V8's order", async () => {
+    const file = await writeSnapshot({
+      snapshot: '{"meta":{}}',
+      strings: '["a"]',
+      nodes: "[1,2,3]",
+      edges: "[4,5,6]",
+      locations: "[]",
+    });
+    expect(await parsedSectionBytes(file, await sizeOf(file))).toBeNull();
+  });
+
+  it("is not fooled by section names appearing inside strings", async () => {
+    // The `strings` section holds arbitrary program text. V8 writes it last,
+    // so the first occurrence of each key is always the real one.
+    const file = await writeSnapshot({
+      snapshot: '{"meta":{}}',
+      nodes: `[${Array.from({ length: 2000 }, (_, i) => i).join(",")}]`,
+      edges: `[${Array.from({ length: 2000 }, (_, i) => i).join(",")}]`,
+      trace_function_infos: "[]",
+      trace_tree: "[]",
+      samples: "[]",
+      locations: "[1]",
+      strings: '["{\\"nodes\\":[999999]", "\\"edges\\":["]',
+    });
+    const size = await sizeOf(file);
+    const parsed = await parsedSectionBytes(file, size);
+
+    expect(parsed).not.toBeNull();
+    expect(parsed ?? size).toBeLessThan(size / 5);
   });
 });

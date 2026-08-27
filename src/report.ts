@@ -339,6 +339,28 @@ function coverageLine(report: RunReport): string {
   return `measured ${measured} of ${total} discovered route(s) — ${breakdown}; the rest is not a verdict about your app`;
 }
 
+/**
+ * Routes that were measured but could not be attributed, and why.
+ *
+ * A verdict with no named retainer reads as a thin finding rather than a
+ * missing one, so the count goes next to the coverage line: those routes have
+ * a verdict, and the part that says what holds the memory is absent for a
+ * reason worth acting on.
+ */
+function attributionGapLine(report: RunReport): string[] {
+  const gaps = report.routes.filter(
+    (route) => route.status === "measured" && route.attributionGap !== undefined
+  );
+  if (gaps.length === 0) {
+    return [];
+  }
+  const names = gaps.map((route) => route.route).join(", ");
+  return [
+    `${gaps.length} route(s) finished without attribution because their snapshot ` +
+      `could not be read (${names}) — the verdicts stand, what retains the memory is unnamed`,
+  ];
+}
+
 export function formatReport(report: RunReport): string {
   const lines = [`next-leak — ${report.appDir}`, ""];
   for (const route of report.routes) {
@@ -363,7 +385,7 @@ export function formatReport(report: RunReport): string {
     resolvedCycles.length === 0
       ? `${cycles} cycles`
       : `${cycles} cycles (${resolvedCycles.join(", ")} where resolved)`;
-  lines.push("", coverageLine(report));
+  lines.push("", coverageLine(report), ...attributionGapLine(report));
   lines.push(
     `judged over ${cyclesLabel} × ${loadRequests} requests, growth gate ` +
       `${(minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle ` +
