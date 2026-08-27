@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { renderHtmlReport } from "./html-report.js";
 import { makeRunReport } from "./run-report.fixture.js";
 
+const MB = 1024 * 1024;
+
 describe("renderHtmlReport", () => {
   const html = renderHtmlReport(makeRunReport());
 
@@ -233,5 +235,51 @@ describe("renderHtmlReport confidence", () => {
     });
     expect(html).toContain(">inconclusive</span>");
     expect(html).toContain("Measured <strong>leak</strong>, withdrawn");
+  });
+});
+
+// A verdict that only exists on the page as a missing row is a verdict lost:
+// the status filters are `filter` calls, so a new variant disappears silently
+// rather than failing to compile.
+describe("a route that ran out of heap", () => {
+  const withDeath = () => {
+    const report = makeRunReport();
+    report.routes = [
+      ...report.routes,
+      {
+        route: "/heavy",
+        status: "died-of-heap",
+        requestPath: "/heavy",
+        reason: "the measured process ran out of heap and was killed by V8 mid-run",
+        memorySamples: [
+          { gcExposed: true, heapUsed: 180 * MB, rss: 400 * MB, external: 0, arrayBuffers: 0 },
+          { gcExposed: true, heapUsed: 460 * MB, rss: 900 * MB, external: 0, arrayBuffers: 0 },
+        ],
+        peaks: [],
+        cyclesCompleted: 1,
+        cyclesRequested: 4,
+        requestsPerCycle: 400,
+      },
+    ];
+    return report;
+  };
+
+  it("shows it as a leak rather than dropping it from the page", () => {
+    const html = renderHtmlReport(withDeath());
+
+    expect(html).toContain("/heavy");
+    expect(html).toContain(">leak<");
+  });
+
+  it("gives the cycles it survived and the readings before the death", () => {
+    const html = renderHtmlReport(withDeath());
+
+    expect(html).toContain("Ran out of heap after 1 of 4 cycles");
+    expect(html).toContain("180.0 MB");
+    expect(html).toContain("460.0 MB");
+  });
+
+  it("carries the reason the process died", () => {
+    expect(renderHtmlReport(withDeath())).toContain("killed by V8 mid-run");
   });
 });

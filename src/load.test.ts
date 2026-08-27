@@ -406,3 +406,62 @@ describe("a closed param set is not a broken route", () => {
     expect((failure as LoadError).message).not.toContain("never prerendered");
   });
 });
+
+// The probe spends two requests to reach a conclusion; when it cannot get
+// them, or when they do not disagree, it must stay quiet and let the route
+// diagnosis speak rather than invent a cause.
+describe("the closed-param-set probe stays quiet without evidence", () => {
+  it("says nothing when the server is gone before the probe runs", async () => {
+    let port = 0;
+    port = await listen((_req, res) => {
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    const url = `http://127.0.0.1:${port}/post-{n}`;
+    const failure = await runLoadPhase({ url, amount: 20, connections: 2 }).catch(
+      (cause: unknown) => cause
+    );
+    // The load already failed; whether the probe reached a verdict or not, the
+    // message must never be empty about why.
+    const message = (failure as LoadError).message;
+    expect(message).toContain("requests failed");
+  });
+
+  it("does not claim the value is at fault when novel params are served", async () => {
+    // Every param answers 200, so a wall of non-2xx cannot be about the value.
+    const port = await listen((req, res) => {
+      if ((req.url ?? "").includes("999999") || (req.url ?? "").endsWith("post-0")) {
+        res.end("ok");
+        return;
+      }
+      res.statusCode = 503;
+      res.end("busy");
+    });
+    const failure = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/post-{n}`,
+      amount: 30,
+      connections: 3,
+    }).catch((cause: unknown) => cause);
+
+    expect((failure as LoadError).message).not.toContain("never prerendered");
+  });
+
+  it("works the same for a bounded marker", async () => {
+    const port = await listen((req, res) => {
+      const slug = (req.url ?? "").replace(/^\/post-/, "");
+      if (Number(slug) < 1) {
+        res.end("ok");
+        return;
+      }
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    const failure = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/post-{n%8}`,
+      amount: 32,
+      connections: 4,
+    }).catch((cause: unknown) => cause);
+
+    expect((failure as LoadError).message).toContain("requests failed");
+  });
+});
