@@ -352,11 +352,17 @@ export async function parsedSectionBytes(file: string, fileSize: number): Promis
       if (offsets.has("strings")) {
         break;
       }
-      // `nodes` and `edges` are the second and third keys V8 writes, after a
-      // `meta` block of a few hundred bytes. Absent from the first chunk, this
-      // is not a snapshot laid out the way the scan assumes, and reading the
-      // rest of a multi-gigabyte file to confirm that helps nobody.
-      if (!offsets.has("nodes") || !offsets.has("edges")) {
+      // `nodes` is the second key V8 writes, after a `meta` block of a few
+      // hundred bytes, so it is in the first chunk of any real snapshot.
+      // Absent, this is not the layout the scan assumes, and reading the rest
+      // of a multi-gigabyte file to confirm that helps nobody.
+      //
+      // Only `nodes`. `edges` comes after the whole nodes array — hundreds of
+      // MB on the snapshots this matters for — so requiring it here aborted
+      // the scan on every large file, which is exactly the case the scan
+      // exists for. Caught on a real 769.9 MB capture that fell back to the
+      // file-size check and was refused.
+      if (!offsets.has("nodes")) {
         return null;
       }
       carry = text.slice(-longestKey);
