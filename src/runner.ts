@@ -196,6 +196,17 @@ export type RunReport = {
   workDir: string;
   /** Carried so the report can suggest sample params the build already knows. */
   prerender?: PrerenderManifest;
+  /**
+   * Whether a leak of known size was detected in this environment during this
+   * session.
+   *
+   * A `stable` verdict means either "the app does not leak" or "the
+   * measurement did not work", and a flat curve looks the same both ways. When
+   * this says verified, the second reading is excluded; when it does not, the
+   * report must not imply otherwise. Absent verification is the ordinary case,
+   * not a failure.
+   */
+  harness: { verified: false } | { verified: true; growthPer1000Requests: number };
   environment: MeasurementEnvironment;
   parameters: RunParameters;
   routes: RouteReport[];
@@ -227,6 +238,12 @@ export type RunOptions = {
    * call it. Default true: the run should answer the question it was asked.
    */
   resolveInconclusive?: boolean;
+  /**
+   * Growth the self-check measured on its planted leak, when one ran before
+   * this measurement. Its presence is what lets the report say a `stable`
+   * verdict was produced by a harness known to work.
+   */
+  harnessVerifiedAt?: number;
   /** Abort between phases; remaining routes are reported as interrupted. */
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
@@ -814,6 +831,10 @@ export async function runMeasurement(
     startedAt: startedAt.toISOString(),
     workDir,
     ...(target.prerender !== undefined && { prerender: target.prerender }),
+    harness:
+      options.harnessVerifiedAt === undefined
+        ? { verified: false }
+        : { verified: true, growthPer1000Requests: options.harnessVerifiedAt },
     environment: captureEnvironment(nextVersion),
     parameters,
     routes: reports,

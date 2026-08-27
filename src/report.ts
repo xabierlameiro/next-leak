@@ -361,6 +361,30 @@ function attributionGapLine(report: RunReport): string[] {
   ];
 }
 
+/**
+ * What vouched for the instrument, on the runs where it matters.
+ *
+ * A page of `stable` verdicts is the one output that reads the same whether
+ * the app is healthy or the measurement never worked. Saying so there is
+ * useful; saying it under a leak would be noise, since a harness that just
+ * caught one is not the harness in question.
+ */
+function harnessLine(report: RunReport): string[] {
+  const measured = report.routes.filter((route) => route.status === "measured");
+  if (report.harness.verified) {
+    const rate = formatGrowth(report.harness.growthPer1000Requests);
+    return [`harness verified this session: a planted leak measured ${rate}`];
+  }
+  const allStable = measured.length > 0 && measured.every((route) => effectiveVerdict(route) === "stable");
+  if (!allStable) {
+    return [];
+  }
+  return [
+    "nothing verified the harness this session — a flat curve reads the same " +
+      "whether nothing leaks or nothing was measured; --self-check plants a leak and proves it",
+  ];
+}
+
 export function formatReport(report: RunReport): string {
   const lines = [`next-leak — ${report.appDir}`, ""];
   for (const route of report.routes) {
@@ -385,7 +409,7 @@ export function formatReport(report: RunReport): string {
     resolvedCycles.length === 0
       ? `${cycles} cycles`
       : `${cycles} cycles (${resolvedCycles.join(", ")} where resolved)`;
-  lines.push("", coverageLine(report), ...attributionGapLine(report));
+  lines.push("", coverageLine(report), ...attributionGapLine(report), ...harnessLine(report));
   lines.push(
     `judged over ${cyclesLabel} × ${loadRequests} requests, growth gate ` +
       `${(minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle ` +

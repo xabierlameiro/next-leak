@@ -568,3 +568,40 @@ describe("attribution gaps in the summary", () => {
     expect(formatReport(makeRunReport())).not.toContain("finished without attribution");
   });
 });
+
+// A page of `stable` verdicts is the one output that reads the same whether
+// the app is healthy or the measurement never worked.
+describe("harness verification in the summary", () => {
+  const allStable = () => {
+    const run = makeRunReport();
+    return {
+      ...run,
+      routes: run.routes.map((route) =>
+        route.status === "measured"
+          ? { ...route, trend: { ...route.trend, verdict: "stable" as const } }
+          : route
+      ),
+    };
+  };
+
+  it("says nothing vouched for the harness when every verdict is stable", () => {
+    const output = formatReport(allStable());
+    expect(output).toContain("nothing verified the harness this session");
+    expect(output).toContain("--self-check");
+  });
+
+  it("reports the planted leak when the harness was verified", () => {
+    const output = formatReport({
+      ...allStable(),
+      harness: { verified: true, growthPer1000Requests: 8.16 * MB },
+    });
+    expect(output).toContain("harness verified this session");
+    expect(output).toContain("8.16 MB/1000 req");
+    expect(output).not.toContain("nothing verified the harness");
+  });
+
+  it("stays quiet on an unverified run that found a leak", () => {
+    // The harness just caught one, so it is not the harness in question.
+    expect(formatReport(makeRunReport())).not.toContain("nothing verified the harness");
+  });
+});
