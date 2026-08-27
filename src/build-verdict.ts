@@ -138,8 +138,8 @@ export function strippedHeapCap(nodeOptions: string | undefined): string | null 
   const value = match[1] ?? "";
   return (
     `NODE_OPTIONS sets --max-old-space-size=${value}, which Next strips from the ` +
-    `static-generation worker's environment — the worker never sees it. Use ` +
-    `--max-heap-size=${value} instead, which survives.`
+    `static-generation worker's environment — the worker never sees it. Set ` +
+    `NODE_OPTIONS=--max-heap-size=${value} instead, which survives.`
   );
 }
 

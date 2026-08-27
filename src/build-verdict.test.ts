@@ -109,8 +109,18 @@ describe("strippedHeapCap", () => {
     expect(warning).toContain("--max-heap-size=2048");
   });
 
+  it("names the replacement as a NODE_OPTIONS value, not a CLI flag", () => {
+    // Bare "--max-heap-size=2048" reads as an option of next-leak itself, which
+    // rejects it as unknown. The cap only survives inside NODE_OPTIONS.
+    const warning = strippedHeapCap("--max-old-space-size=2048");
+
+    expect(warning).toContain("Set NODE_OPTIONS=--max-heap-size=2048 instead");
+  });
+
   it("also catches the underscore spelling Next strips", () => {
-    expect(strippedHeapCap("--max_old_space_size=4096")).toContain("--max-heap-size=4096");
+    expect(strippedHeapCap("--max_old_space_size=4096")).toContain(
+      "NODE_OPTIONS=--max-heap-size=4096"
+    );
   });
 
   it("stays quiet for a cap the worker actually inherits", () => {
