@@ -29,20 +29,21 @@ next-leak found the growth, the retaining object and the chain that holds it —
 without being told what to look for. Next.js 16.3.0 has since fixed it.
 
 **Verified against real Next.js issues**, not synthetic fixtures. Issue states
-checked 2026-08-18:
+checked 2026-08-27:
 
 | Issue | What it is | Measured | State today |
 |---|---|---|---|
+| [#97938](https://github.com/vercel/next.js/issues/97938) | `cacheComponents`: composite abort signal never released | +705 KB per request on 16.3.3, flat on 16.2.6 | **open** |
 | [#96533](https://github.com/vercel/next.js/issues/96533) | ISR revalidation holds RSC buffers between collections | 4–5 MB of `arrayBuffers` held vs 0.32 MB retained | **open** |
-| [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | worker rss 1.07 → 2.96 GB, then OOM | **open** |
+| [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | OOM after 1617 and 1525 of 2504 pages on 16.3.3; 16.2.12 finishes at 0.05 MB/page | **open** |
 | [#92287](https://github.com/vercel/next.js/issues/92287) | Cache Components: unbounded `arrayBuffers` under load | 37.5 MB of arrayBuffers held between collections, 37x what it retains (16.3.1) | **open** |
 | [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | 32.8 → 369.9 MB | **open** |
-| [#89091](https://github.com/vercel/next.js/issues/89091) | zlib retention on mid-stream aborts | +42.5 MB/1000 aborted req on 16.1.5; **+0.03 on 16.3.1** | open, no longer reproduces |
+| [#89091](https://github.com/vercel/next.js/issues/89091) | zlib retention on mid-stream aborts | +42.5 MB/1000 aborted req on 16.1.5; **+0.03 on 16.3.1** | closed |
 | [#95094](https://github.com/vercel/next.js/issues/95094) | Middleware `setTimeout` ids retained by the sandbox | 112 MB retained; flat after the fix | fixed in 16.3.0 |
 | [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | 26.7 → 71.9 MB | fixed in 16.3.0 |
 | [#94919](https://github.com/vercel/next.js/issues/94919) | Retention on client aborts | 39 → 139 MB · [with a caveat](#scope-and-limits-read-before-filing-issues) | fixed in 16.3.0 |
 
-The three fixed ones are kept deliberately: a tool that only lists open bugs
+The closed ones are kept deliberately: a tool that only lists open bugs
 looks impressive until the bugs close, and what those rows show is that the
 measurements matched what the fixes turned out to be. #94919 is the sharpest —
 the PR that closed it discarded the RSC-WeakMap hypothesis in the title and
@@ -121,6 +122,7 @@ Every report prints the gate it used.
 | `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Same cycle count as the default; what it trades away is traffic per cycle, so it sits on the noise floor and is less sensitive to slow leaks. Explicit flags override it |
 | `--no-resolve` | off | Skip the second pass on inconclusive routes |
 | `--diff-all` | off | Diff snapshots for stable routes too |
+| `--attribute` | off | **`build` only.** Also name *what* the worker retains, not only that it retains |
 | `--output <dir>` | `<app>/.next-leak` | Where runs are written |
 | `--write-config` | off | Write `next-leak.config.json` for the routes that need sample params, then exit. Never overwrites an existing file |
 
@@ -135,7 +137,15 @@ A large site can run out of heap while prerendering, before any server exists to
 measure ([#97464](https://github.com/vercel/next.js/issues/97464)). That command
 runs your build unmodified and samples the resident memory of each
 static-generation worker. It needs neither a previous build nor standalone
-output, and takes `--output` only.
+output, and takes `--output` and `--attribute`.
+
+The report also prints what the build's **own process** reached, separately from
+the worker's figure and labelled *reported, not judged*. The two are never added
+together: the parent sheds memory while workers climb — 1.43 GB down to 0.10 GB
+over the same window on the #97464 reproduction — so summing them cancels the
+finding the worker verdict rests on. It is there because a build can fail
+entirely in the parent, during compilation or file tracing, where no worker
+exists yet.
 
 Dynamic routes need sample params in `next-leak.config.json` in your app dir:
 
@@ -149,7 +159,8 @@ Dynamic routes need sample params in `next-leak.config.json` in your app dir:
 
 `--write-config` generates that file for you. It takes the *shape* of each value
 from paths your build already prerendered, and makes the value itself move:
-`post-0` becomes `post-{n}`. A value the build prerendered is the one value
+`post-0` becomes `post-{n}`, and a value with no trailing number gets one —
+`seed` becomes `seed-{n}`. A value the build prerendered is the one value
 guaranteed not to measure anything — every request hits the same warm cache
 entry, so the route reads as flat whatever it retains, and that false negative
 lands on exactly the leaks being reported now (`use cache`, `cacheComponents`
@@ -222,6 +233,8 @@ separates them, because each one has a different fix:
 - **`leak`** — the report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. An `ISSUE-<route>.md` draft is generated **when the evidence plainly supports the verdict** — a `leak` carrying low-confidence warnings (growth barely over the threshold, one cycle dominating the mean, too few cycles for its size) gets the verdict but no draft, because a draft is written to be pasted into someone else's tracker. If the leak is app-owned, the draft tells you **not** to file it upstream.
 - **`inconclusive`** — the evidence does not decide. The run does not stop there: any inconclusive route is **measured again automatically**, with twice the cycles, and the second pass is what you see (`resolved at 8 cycles` next to the verdict). On the reproduction for [#95094](https://github.com/vercel/next.js/issues/95094), `--quick` alone reports `inconclusive` on three deltas and then comes back with the leak. `--no-resolve` turns the second pass off; when even that is undecided, the re-run command is still printed.
 - **`failed`** — the route errored under load (auth redirects, POST-only endpoints). >1% non-2xx aborts measurement instead of measuring garbage. That's by design. A process that died of **heap exhaustion** is not one of these: it reports `leak`, because a route that could not survive its own load did not fail to be measured — it was measured right up to the point where it stopped fitting. The verdict comes from that outcome, not from the shape of the truncated curve, which is the same rule `next-leak build` applies to a static-generation worker that dies. The run prints the cycles it survived and the growth up to the death, and exits 0 with a finding rather than 1 with an error.
+
+  When a route is configured with a varying sample value (`{n}`) and *every* request comes back non-2xx, the run checks whether the value is the problem before blaming the route: it requests one value the marker would produce and one the build prerendered, and only when those disagree does it say so. An app with `generateStaticParams` and `dynamicParams = false` answers 404 for anything outside its param set, which is indistinguishable from a broken route in the counters alone. Bound the marker to the params that exist (`{n%N}`) or drop it.
 
 ## Peak pressure: `stable` is not the same as safe
 
@@ -355,6 +368,7 @@ absolute sizes. Then it maps the retaining objects back to *your* source files
 through the build's source maps.
 
 ## Scope and limits (read before filing issues)
+
 
 - **Supported (default command):** App Router · `output: "standalone"` · Node ≥ 22 · Linux/macOS. Pages Router, non-standalone, and Windows are rejected with a clear message.
 - **Sample values can vary per request.** `"slug": "post-{n}"` gives every
