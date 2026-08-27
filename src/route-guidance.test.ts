@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { hasPlaceholders, renderConfigSkeleton, sampleValuesFromManifest } from "./route-guidance.js";
+import {
+  hasPlaceholders,
+  renderConfigSkeleton,
+  sampleValuesFromManifest,
+  varyingValueFrom,
+} from "./route-guidance.js";
 import { prerenderManifestSchema } from "./manifests.js";
 
 // The real shape of the vercel/next.js#96533 build: concrete paths pointing
@@ -32,12 +37,27 @@ describe("sampleValuesFromManifest", () => {
 });
 
 describe("renderConfigSkeleton", () => {
-  it("writes a config that resolves on the first try when the build knows a value", () => {
+  // The prerendered value gives the shape; it must not give the value, or
+  // every request serves the same warm cache entry and the route reads flat.
+  it("writes a config whose value moves, keeping the shape the build knows", () => {
     const skeleton = renderConfigSkeleton(["/posts/[slug]"], MANIFEST);
     if (skeleton === null) throw new Error("expected a skeleton");
 
-    expect(JSON.parse(skeleton)).toEqual({ routes: { "/posts/[slug]": { slug: "post-0" } } });
+    expect(JSON.parse(skeleton)).toEqual({ routes: { "/posts/[slug]": { slug: "post-{n}" } } });
     expect(hasPlaceholders(skeleton)).toBe(false);
+  });
+
+  it("never proposes a value the build already prerendered", () => {
+    const skeleton = renderConfigSkeleton(["/posts/[slug]", "/docs/[...path]"], MANIFEST);
+    if (skeleton === null) throw new Error("expected a skeleton");
+
+    const { routes } = JSON.parse(skeleton) as { routes: Record<string, Record<string, string>> };
+    for (const values of Object.values(routes)) {
+      for (const value of Object.values(values)) {
+        expect(Object.keys(MANIFEST.routes ?? {})).not.toContain(`/posts/${value}`);
+        expect(value).toContain("{n}");
+      }
+    }
   });
 
   it("marks what the user has to fill in when the build knows nothing", () => {
@@ -73,5 +93,33 @@ describe("renderConfigSkeleton", () => {
   it("is valid JSON the user can paste unchanged", () => {
     const skeleton = renderConfigSkeleton(["/posts/[slug]"], MANIFEST);
     expect(() => JSON.parse(skeleton ?? "")).not.toThrow();
+  });
+});
+
+describe("varyingValueFrom", () => {
+  // The whole point: a prerendered value measures the cache, not the route.
+  it("replaces a trailing number so the prefix the app routes on survives", () => {
+    expect(varyingValueFrom("post-0")).toBe("post-{n}");
+    expect(varyingValueFrom("item-42")).toBe("item-{n}");
+  });
+
+  it("appends a moving tail when there is no trailing number", () => {
+    expect(varyingValueFrom("seed")).toBe("seed-{n}");
+  });
+
+  it("keeps a catch-all's remaining segments addressable", () => {
+    expect(varyingValueFrom("a/b")).toBe("a/b-{n}");
+  });
+
+  // A value that is nothing but digits has no prefix to preserve, so keeping
+  // it whole is the only way the app still recognises the shape.
+  it("does not strip a value that is only digits", () => {
+    expect(varyingValueFrom("42")).toBe("42-{n}");
+  });
+
+  it("always produces a value that varies", () => {
+    for (const prerendered of ["post-0", "seed", "a/b", "42", "x-1-2"]) {
+      expect(varyingValueFrom(prerendered)).toContain("{n}");
+    }
   });
 });

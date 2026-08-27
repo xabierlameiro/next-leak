@@ -378,15 +378,19 @@ describe("formatReport guidance for skipped routes", () => {
     expect(output).toContain("REPLACE-ME");
   });
 
-  it("uses values the build already prerendered when it knows them", () => {
+  // The build's value gives the shape, never the value itself: requesting a
+  // prerendered path serves the warm cache and reports flat whatever the route
+  // retains, which is a false negative the reader has no way to notice.
+  it("takes the shape from what the build prerendered, but makes the value move", () => {
     const report = makeRunReport();
     report.prerender = {
       routes: { "/products/widget-1": { initialRevalidateSeconds: 60, srcRoute: "/products/[id]" } },
     };
     const output = formatReport(report);
 
-    expect(output).toContain("widget-1");
-    expect(output).toContain("already prerendered");
+    expect(output).toContain("widget-{n}");
+    expect(output).not.toContain('"widget-1"');
+    expect(output).toContain("serves the warm cache");
     expect(output).not.toContain("REPLACE-ME");
   });
 

@@ -253,7 +253,11 @@ function skippedGuidanceLines(report: RunReport): string[] {
   }
   const editing = hasPlaceholders(skeleton)
     ? ` Replace each ${"REPLACE-ME"} with a value that exists in your app.`
-    : ` The values come from paths your build already prerendered.`;
+    : ` The shapes come from paths your build already prerendered; \`{n}\` makes ` +
+      `every request use a different one, because reusing a prerendered value ` +
+      `serves the warm cache and reads as flat whatever the route retains. Use ` +
+      `\`{n%200}\` instead to revisit a fixed set of 200 keys, and drop the marker ` +
+      `only if the app 404s on params it never prerendered.`;
   return [
     "",
     `${needConfig.length} route(s) need sample params. Write this to ` +
