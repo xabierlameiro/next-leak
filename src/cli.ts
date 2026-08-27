@@ -238,7 +238,14 @@ async function main(): Promise<void> {
   }
   // A run that measured nothing answered no question, however cleanly it
   // finished. Exiting 0 there reads as "your app is fine" in CI.
-  if (!report.routes.some((route) => route.status === "measured")) {
+  //
+  // A route that ran out of heap answered it: that is a leak verdict, so the
+  // run did produce a finding and must not also claim it measured nothing.
+  if (
+    !report.routes.some(
+      (route) => route.status === "measured" || route.status === "died-of-heap"
+    )
+  ) {
     console.error("error: no route was measured — nothing above is a verdict about your app");
     process.exitCode = 1;
   }

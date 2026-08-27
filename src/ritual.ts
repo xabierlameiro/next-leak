@@ -93,6 +93,37 @@ export type PeakSample = {
   polls: number;
 };
 
+/** What survived a process that ran out of heap partway through a run. */
+export type HeapExhaustedEvidence = {
+  /** Post-GC readings taken before the death: baseline first, then per cycle. */
+  memorySamples: HeapSample[];
+  peaks: PeakSample[];
+  unreclaimedSamples: HeapSample[];
+  /** Cycles that finished. Zero means it died inside the first one. */
+  cyclesCompleted: number;
+  cyclesRequested: number;
+  requestsPerCycle: number;
+  baselineSnapshot: string;
+};
+
+/**
+ * The measured process ran out of heap mid-run.
+ *
+ * Thrown rather than returned because there is no `RitualResult` to build: no
+ * after-snapshot was taken and the trend has nothing complete to classify. It
+ * is still a finding, not a failure — see `explainExit` in `launcher.ts` — and
+ * the evidence it carries is what the report shows instead of a curve.
+ */
+export class HeapExhaustedError extends Error {
+  readonly evidence: HeapExhaustedEvidence;
+
+  constructor(message: string, evidence: HeapExhaustedEvidence) {
+    super(message);
+    this.name = "HeapExhaustedError";
+    this.evidence = evidence;
+  }
+}
+
 export type RitualResult = {
   route: string;
   /** Wall-clock per phase, so slow runs can be explained instead of guessed. */
@@ -385,6 +416,17 @@ export async function runRitual(
     }
   };
 
+  // Declared outside the try so a process that dies mid-run does not take the
+  // cycles it already survived with it. The curve up to the death is the
+  // evidence for the death.
+  const memorySamples: HeapSample[] = [];
+  const unreclaimedSamples: HeapSample[] = [];
+  let unreclaimedLost = false;
+  const peaks: PeakSample[] = [];
+  let afterSnapshot = "";
+  let baselineSnapshot = "";
+  let cyclesCompleted = 0;
+
   try {
     const routeUrl = `http://127.0.0.1:${app.appPort}${options.route}`;
 
@@ -400,11 +442,8 @@ export async function runRitual(
       requestSnapshot(app.controlPort, "baseline")
     );
 
-    const memorySamples: HeapSample[] = [baseline.sample];
-    const unreclaimedSamples: HeapSample[] = [];
-    let unreclaimedLost = false;
-    const peaks: PeakSample[] = [];
-    let afterSnapshot = "";
+    memorySamples.push(baseline.sample);
+    baselineSnapshot = baseline.file;
     for (let cycle = 1; cycle <= cycles; cycle += 1) {
       // Warm-up is deliberately not polled: its memory is not a claim the
       // report makes, and the baseline is taken after it.
@@ -448,6 +487,7 @@ export async function runRitual(
       } else {
         memorySamples.push(await requestGc(app.controlPort));
       }
+      cyclesCompleted = cycle;
     }
 
     const samples = memorySamples.map((sample) => sample.heapUsed);
@@ -474,7 +514,7 @@ export async function runRitual(
             unreclaimedSamples.map((sample) => sample.external),
             { minGrowthPerCycle }
           ),
-      baselineSnapshot: baseline.file,
+      baselineSnapshot,
       afterSnapshot,
       trend: classifyMemoryTrend(samples, externalSamples, { minGrowthPerCycle }),
       requestsPerCycle: loadRequests,
@@ -486,7 +526,22 @@ export async function runRitual(
     // the more useful error — and heap exhaustion is a finding, not noise.
     const death = app.explainExit();
     if (death !== null) {
-      throw new Error(death);
+      if (death.heapExhausted) {
+        // The outcome decides, the same way it does for a build worker: a
+        // process that could not survive its own load leaked, whatever shape
+        // the truncated curve has. Carrying the samples out means the report
+        // can show the growth that led to the death.
+        throw new HeapExhaustedError(death.reason, {
+          memorySamples,
+          peaks,
+          unreclaimedSamples: unreclaimedLost ? [] : unreclaimedSamples,
+          cyclesCompleted,
+          cyclesRequested: cycles,
+          requestsPerCycle: loadRequests,
+          baselineSnapshot,
+        });
+      }
+      throw new Error(death.reason);
     }
     throw cause;
   } finally {
