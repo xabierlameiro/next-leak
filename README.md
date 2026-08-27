@@ -370,6 +370,19 @@ than a false accusation, and the warnings are on the report either way.
 └── <nn>-<route>/      # raw baseline/after .heapsnapshot per route
 ```
 
+`report.html` is the one you send to someone else. It is a real run below —
+three routes measured with `--self-check`, on the reproduction this repo tests
+against:
+
+<img src="https://raw.githubusercontent.com/xabierlameiro/next-leak/main/docs/report-example.png" alt="next-leak HTML report: two stable routes and one leaking at +471 MB per 1000 requests, with the objects it retains" width="720">
+
+Per route it draws the post-GC curve, the peak reached *during* each cycle
+across heap, external, arrayBuffers and RSS, and what grew between the two
+snapshots with its retained size. No JavaScript, no external requests, no
+fonts to fetch: it opens offline from a CI artifact. The file above is
+[`docs/report-example.html`](./docs/report-example.html) if you want to poke at
+the markup.
+
 Snapshots are the ground truth: load them in Chrome DevTools (Memory → Load → Comparison) and check every claim yourself. Runs accumulate — each keeps its snapshots (tens of MB per route); delete old timestamp folders when done.
 
 ## Why not just use…
