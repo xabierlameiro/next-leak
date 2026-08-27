@@ -224,3 +224,43 @@ describe("formatBuildReport attribution", () => {
     expect(output).not.toContain("what it retained");
   });
 });
+
+// The parent was sampled and discarded for two releases while the type called
+// it "reported". Two open issues fail entirely in it: vercel/next.js#97802 dies
+// in compilation before a worker exists, and #76704 fails in the file-tracing
+// phase that runs after static generation.
+describe("the build's own process", () => {
+  const withParent = (rss: number[]): BuildRunResult => ({
+    ...baseResult,
+    parentSamples: rss.map((value, index) => ({ atMs: index * 1000, rssBytes: value * MB })),
+  });
+
+  it("reports what the parent reached and where it ended", () => {
+    const output = formatBuildReport(withParent([200, 1430, 980, 100]));
+
+    expect(output).toContain("peaked at 1430.0 MB");
+    expect(output).toContain("ended at 100.0 MB");
+  });
+
+  // The parent shedding while the worker climbs is the reason the two are never
+  // added together; the report has to say so or the reader will add them.
+  it("says the parent figure is reported and not judged", () => {
+    const output = formatBuildReport(withParent([200, 1430, 100]));
+
+    expect(output).toContain("reported, not judged");
+    expect(output).toContain("never added to the figure above");
+  });
+
+  it("says nothing when the parent was never sampled", () => {
+    const output = formatBuildReport(withParent([]));
+
+    expect(output).not.toContain("the build's own process");
+  });
+
+  it("leaves the worker verdict untouched", () => {
+    const output = formatBuildReport(withParent([200, 1430, 100]));
+
+    expect(output).toContain("static-generation worker  leak");
+    expect(output).toContain("peak worker rss 2960.0 MB");
+  });
+});
