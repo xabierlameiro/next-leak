@@ -168,6 +168,13 @@ async function writeConfigSkeleton(appDir: string): Promise<void> {
   console.log(`wrote ${file}`);
   if (hasPlaceholders(skeleton)) {
     console.log("replace each REPLACE-ME with a value that exists in your app");
+  } else {
+    console.log(
+      "`{n}` gives every request a different value: a prerendered one serves the " +
+        "warm cache and reads as flat whatever the route retains. Use `{n%200}` to " +
+        "revisit a fixed set of keys, and drop the marker only if the app 404s on " +
+        "params it never prerendered."
+    );
   }
 }
 

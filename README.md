@@ -142,14 +142,20 @@ Dynamic routes need sample params in `next-leak.config.json` in your app dir:
 ```json
 {
   "params": { "lang": "en" },
-  "routes": { "/products/[id]": { "id": "42" } },
+  "routes": { "/products/[id]": { "id": "42-{n}" } },
   "headers": { "accept-encoding": "gzip, br", "cookie": "session=..." }
 }
 ```
 
-`--write-config` generates that file for you, filling in values from paths your
-build already prerendered where it knows them, so it usually resolves on the
-first try. When a run skips a route it prints the same fragment.
+`--write-config` generates that file for you. It takes the *shape* of each value
+from paths your build already prerendered, and makes the value itself move:
+`post-0` becomes `post-{n}`. A value the build prerendered is the one value
+guaranteed not to measure anything — every request hits the same warm cache
+entry, so the route reads as flat whatever it retains, and that false negative
+lands on exactly the leaks being reported now (`use cache`, `cacheComponents`
+and ISR all key on the params). If your app answers 404 for params it never
+prerendered, the run says so through its non-2xx count; drop the marker then.
+When a run skips a route it prints the same fragment.
 
 ```json
 ```
