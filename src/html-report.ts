@@ -1,10 +1,16 @@
 import { effectiveVerdict } from "./confidence.js";
 import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
+import type { TrendVerdict } from "./trend.js";
 
 const MB = 1024 * 1024;
 
-const VERDICT_COLOR = { leak: "#c0392b", stable: "#27ae60", inconclusive: "#e67e22" } as const;
+const VERDICT_COLOR = {
+  leak: "#c0392b",
+  stable: "#27ae60",
+  inconclusive: "#e67e22",
+  saturating: "#2980b9",
+} as const satisfies Record<TrendVerdict, string>;
 
 function escapeHtml(value: string): string {
   return value

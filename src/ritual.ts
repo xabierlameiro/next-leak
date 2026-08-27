@@ -29,6 +29,12 @@ export type RitualOptions = {
   maxOldSpaceMb?: number;
   /** Headers sent with every request during warm-up and load. */
   headers?: Record<string, string>;
+  /**
+   * The load is driving a cached route with keys it has not served before, so
+   * the store fills up as a side effect of measuring. Recorded on the verdict
+   * for disclosure; it does not change how the verdict is reached.
+   */
+  cacheDriven?: boolean;
   /** Emulate clients that disconnect before the response arrives. */
   abandonAfterMs?: number;
   /** Where that deadline starts. Defaults to `first-byte`. */
@@ -496,6 +502,10 @@ export async function runRitual(
     // The gate scales with the traffic each cycle served, so the verdict does
     // not change meaning when --requests does.
     const minGrowthPerCycle = minGrowthFor(loadRequests);
+    const trendOptions = {
+      minGrowthPerCycle,
+      ...(options.cacheDriven === true && { cacheDriven: true }),
+    };
     return {
       route: options.route,
       timings,
@@ -512,11 +522,11 @@ export async function runRitual(
         : classifyMemoryTrend(
             unreclaimedSamples.map((sample) => sample.heapUsed),
             unreclaimedSamples.map((sample) => sample.external),
-            { minGrowthPerCycle }
+            trendOptions
           ),
       baselineSnapshot,
       afterSnapshot,
-      trend: classifyMemoryTrend(samples, externalSamples, { minGrowthPerCycle }),
+      trend: classifyMemoryTrend(samples, externalSamples, trendOptions),
       requestsPerCycle: loadRequests,
       minGrowthPerCycle,
     };

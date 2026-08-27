@@ -3,7 +3,8 @@
   "basePath": "",
   "staticRoutes": [
     { "page": "/", "regex": "^/(?:/)?$" },
-    { "page": "/leaky", "regex": "^/leaky(?:/)?$" }
+    { "page": "/leaky", "regex": "^/leaky(?:/)?$" },
+    { "page": "/cached", "regex": "^/cached(?:/)?$" }
   ],
   "dynamicRoutes": []
 }

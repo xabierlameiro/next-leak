@@ -17,8 +17,22 @@ describe("CLI interrupt safety", () => {
     const cli = spawn(process.execPath, [path.join(rootDir, "dist", "cli.js"), appDir], {
       stdio: ["ignore", "pipe", "pipe"],
     });
-    // Let discovery finish and the first route enter its ritual, then interrupt.
-    await new Promise((resolve) => setTimeout(resolve, 4000));
+    // Interrupt once the first route is actually in its ritual. A fixed sleep
+    // raced the machine: under a loaded suite four seconds is sometimes still
+    // discovery, and the interrupt then lands somewhere this test is not
+    // describing.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("CLI never announced it was measuring")),
+        30_000
+      );
+      cli.stderr.on("data", (chunk: Buffer) => {
+        if (chunk.toString("utf8").includes("measuring")) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
     cli.kill("SIGINT");
 
     const exitCode: number | null = await new Promise((resolve) => {
@@ -44,7 +58,9 @@ describe("CLI interrupt safety", () => {
     const interrupted = run.routes.filter(
       (route) => route.status === "skipped" && route.reason === "interrupted"
     );
-    expect(run.routes).toHaveLength(2);
+    // Every route the fixture declares is accounted for: the one in flight,
+    // and one entry per route the interrupt never reached.
+    expect(run.routes).toHaveLength(3);
     expect(interrupted.length).toBeGreaterThanOrEqual(1);
   }, 90_000);
 });
