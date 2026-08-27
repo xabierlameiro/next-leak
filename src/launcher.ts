@@ -40,10 +40,23 @@ export type LaunchedApp = {
    * a child that died mid-run surfaces as "fetch failed", which reads like a
    * bug in the tool and hides the finding — most often that the app blew
    * through the heap limit the run configured.
+   *
+   * `heapExhausted` separates that one death from every other, because it is
+   * the only one the run is allowed to call a verdict rather than a failure.
    */
-  explainExit: () => string | null;
+  explainExit: () => RuntimeDeath | null;
   /** SIGTERM, then SIGKILL after a grace period. Resolves when the child exited. */
   close: () => Promise<void>;
+};
+
+/**
+ * How the measured process died. `heapExhausted` is the one death that is a
+ * measurement: the app did not fit in the limit the run gave it, which is the
+ * finding the tool exists to produce. Every other death is a failure.
+ */
+export type RuntimeDeath = {
+  reason: string;
+  heapExhausted: boolean;
 };
 
 export class LaunchError extends Error {
@@ -111,8 +124,18 @@ export function explainStartupFailure(stderr: string): string {
  * is a finding rather than an accident: the app did not fit in the limit the
  * run gave it.
  */
+/**
+ * Whether a stderr window carries V8's own fatal heap message. The build path
+ * asks the same question of build output in `build-verdict.ts`; the two are
+ * deliberately not shared yet, because `launcher` importing the build verdict
+ * would couple the runtime path to it for one regex.
+ */
+export function stderrShowsHeapExhaustion(stderr: string): boolean {
+  return /heap out of memory|Reached heap limit|Ineffective mark-compacts/i.test(stderr);
+}
+
 export function explainRuntimeFailure(stderr: string, maxOldSpaceMb: number): string {
-  if (/heap out of memory|Reached heap limit|Ineffective mark-compacts/i.test(stderr)) {
+  if (stderrShowsHeapExhaustion(stderr)) {
     return (
       `the measured process ran out of heap and was killed by V8 mid-run ` +
       `(limit in force: --max-old-space-size=${maxOldSpaceMb} MB). That is the ` +
@@ -259,10 +282,19 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
       pid: child.pid ?? -1,
       appPort: options.appPort,
       controlPort,
-      explainExit: () =>
-        exited
-          ? explainRuntimeFailure(stderrWindow(), options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB)
-          : null,
+      explainExit: () => {
+        if (!exited) {
+          return null;
+        }
+        const stderr = stderrWindow();
+        return {
+          reason: explainRuntimeFailure(
+            stderr,
+            options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB
+          ),
+          heapExhausted: stderrShowsHeapExhaustion(stderr),
+        };
+      },
       close: async () => {
         if (exited) {
           return;
