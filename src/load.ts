@@ -53,6 +53,58 @@ async function describeRedirect(url: string): Promise<string | null> {
 }
 
 /**
+ * Whether the app answers for params it never prerendered.
+ *
+ * A varying sample value is what makes a keyed leak visible, and on an app with
+ * a closed param set (`generateStaticParams` plus `dynamicParams = false`) it is
+ * also what makes every request a 404. The two look identical in the counters —
+ * a wall of non-2xx — and the honest answer is not a guess: request one value
+ * the marker would produce and one the app is known to serve, and compare.
+ *
+ * Measured on an app with `post-0..post-2` prerendered and `dynamicParams` off:
+ * `/post-0` answers 200, `/post-3` answers 404. Without this probe the run told
+ * the user the fault was in their route, and sent them to inspect a route that
+ * was working correctly.
+ *
+ * Note this branch cannot occur under `cacheComponents`: Next rejects
+ * `dynamicParams` at build time when it is enabled, so those apps always render
+ * on demand.
+ */
+async function describeUnprerenderedParams(url: string): Promise<string | null> {
+  const bounded = boundedMarkerOf(url);
+  const marker = bounded === null ? UNIQUE_MARKER : bounded.marker;
+  if (!url.includes(marker)) {
+    return null;
+  }
+  // A high value the build is very unlikely to have prerendered, against the
+  // first one it almost certainly did.
+  const probe = async (value: string): Promise<number | null> => {
+    try {
+      const response = await fetch(url.split(marker).join(value), { redirect: "manual" });
+      return response.status;
+    } catch {
+      return null;
+    }
+  };
+  const [novel, familiar] = await Promise.all([probe("999999"), probe("0")]);
+  if (novel === null || familiar === null) {
+    return null;
+  }
+  // Only a conclusion when the two disagree. Both failing means something else
+  // is wrong and the route diagnosis should have its say.
+  if (novel === 404 && familiar >= 200 && familiar < 300) {
+    return (
+      `the sample value varies per request (\`${marker}\`) and this app answers 404 ` +
+      `for params it never prerendered — the route itself is fine, the value is ` +
+      `the problem. Bound it to the params your build did prerender ` +
+      `(\`{n%N}\` with N of them), or drop the marker and accept that every ` +
+      `request serves the same cached entry`
+    );
+  }
+  return null;
+}
+
+/**
  * Cycles a request path through exactly `bound` distinct values.
  *
  * The counter is shared across connections on purpose: what matters is how many
@@ -158,13 +210,20 @@ export async function runLoadPhase(options: LoadPhaseOptions): Promise<LoadPhase
   const ratio = options.amount === 0 ? 0 : failures / options.amount;
   if (ratio > (options.maxErrorRatio ?? 0.01)) {
     const unanswered = failures - result.non2xx - result.errors - result.timeouts;
-    const redirect = result.non2xx > 0 ? await describeRedirect(options.url) : null;
+    // Ordered by how specific the answer is. A varying value hitting a closed
+    // param set is the one cause the run can prove rather than infer, so it is
+    // asked first; blaming the route is the fallback, not the default.
+    const explained =
+      result.non2xx > 0
+        ? ((await describeUnprerenderedParams(options.url)) ??
+          (await describeRedirect(options.url)))
+        : null;
     throw new LoadError(
       `${failures} of ${options.amount} requests failed against ${options.url} ` +
         `(${result.non2xx} non-2xx, ${result.errors} errors, ${result.timeouts} timeouts` +
         (unanswered > 0 ? `, ${unanswered} with no recorded response` : "") +
         ")" +
-        (redirect === null ? diagnoseFailure(result, options.connections) : ` — ${redirect}`),
+        (explained === null ? diagnoseFailure(result, options.connections) : ` — ${explained}`),
       result
     );
   }

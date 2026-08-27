@@ -331,3 +331,78 @@ describe("saturation is not the same as a broken route", () => {
     ).resolves.toBeDefined();
   });
 });
+
+// Measured against a real app with `post-0..post-2` prerendered and
+// `dynamicParams = false`: the varying value made every request a 404 and the
+// run told the user the fault was in their route. It was not.
+describe("a closed param set is not a broken route", () => {
+  /** Serves only the params a build would have prerendered. */
+  const closedParamSet = (prerendered: number): http.RequestListener => {
+    return (req, res) => {
+      const slug = (req.url ?? "").replace(/^\/post-/, "");
+      if (Number(slug) < prerendered) {
+        res.end("ok");
+        return;
+      }
+      res.statusCode = 404;
+      res.end("not found");
+    };
+  };
+
+  it("blames the sample value, not the route, when only novel params 404", async () => {
+    const port = await listen(closedParamSet(3));
+    const failure = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/post-{n}`,
+      amount: 40,
+      connections: 4,
+    }).catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(LoadError);
+    const message = (failure as LoadError).message;
+    expect(message).toContain("never prerendered");
+    expect(message).toContain("the route itself is fine");
+    // The old, wrong diagnosis must be gone.
+    expect(message).not.toContain("fault in the route");
+  });
+
+  it("names the bounded marker as the way out", async () => {
+    const port = await listen(closedParamSet(3));
+    const failure = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/post-{n}`,
+      amount: 40,
+      connections: 4,
+    }).catch((cause: unknown) => cause);
+
+    expect((failure as LoadError).message).toContain("{n%N}");
+  });
+
+  // A route that is genuinely broken answers badly for every value, including
+  // the one the build prerendered, so the probe must not claim the value is at
+  // fault and must let the route diagnosis speak.
+  it("still blames the route when even a prerendered param fails", async () => {
+    const port = await listen((_req, res) => {
+      res.statusCode = 500;
+      res.end("boom");
+    });
+    const failure = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/post-{n}`,
+      amount: 40,
+      connections: 4,
+    }).catch((cause: unknown) => cause);
+
+    const message = (failure as LoadError).message;
+    expect(message).toContain("fault in the route");
+    expect(message).not.toContain("never prerendered");
+  });
+
+  it("says nothing about params when the path carries no marker", async () => {
+    const port = await listen(closedParamSet(0));
+    const failure = await runLoadPhase({
+      url: `http://127.0.0.1:${port}/post-7`,
+      amount: 40,
+      connections: 4,
+    }).catch((cause: unknown) => cause);
+
+    expect((failure as LoadError).message).not.toContain("never prerendered");
+  });
+});
