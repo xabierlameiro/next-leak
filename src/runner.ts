@@ -29,6 +29,7 @@ import {
   type RouteConfig,
 } from "./route-config.js";
 import {
+  HeapExhaustedError,
   RITUAL_DEFAULTS,
   runRitual,
   type LoadOutcome,
@@ -44,6 +45,28 @@ import { minGrowthFor, type TrendResult } from "./trend.js";
 export type RouteReport =
   | { route: string; status: "skipped"; reason: string }
   | { route: string; status: "failed"; reason: string }
+  /**
+   * The measured process ran out of heap partway through. This is a verdict,
+   * not a failure: the route did not fit in the limit the run gave it, and the
+   * outcome decides regardless of the shape of the truncated curve — the same
+   * rule the build path applies to a static-generation worker that dies.
+   *
+   * Kept apart from `measured` because there is no after-snapshot and no
+   * complete trend, and dressing it as a full measurement would claim data
+   * that does not exist.
+   */
+  | {
+      route: string;
+      status: "died-of-heap";
+      requestPath: string;
+      reason: string;
+      /** Post-GC readings up to the death; may be as short as the baseline. */
+      memorySamples: HeapSample[];
+      peaks: PeakSample[];
+      cyclesCompleted: number;
+      cyclesRequested: number;
+      requestsPerCycle: number;
+    }
   /**
    * The route was reachable, but the load could not have exercised the code
    * path it represents — so no verdict is emitted. Measuring an ISR route
@@ -576,6 +599,23 @@ async function routeReportFor(
       return first;
     }
   } catch (cause) {
+    if (cause instanceof HeapExhaustedError) {
+      // Not a failure: the route was measured right up to the point where it
+      // stopped fitting, which is the strongest evidence a run can produce.
+      progress(`leak ${label}: ${cause.message}`);
+      const { evidence } = cause;
+      return {
+        route: route.path,
+        status: "died-of-heap",
+        requestPath,
+        reason: cause.message,
+        memorySamples: evidence.memorySamples,
+        peaks: evidence.peaks,
+        cyclesCompleted: evidence.cyclesCompleted,
+        cyclesRequested: evidence.cyclesRequested,
+        requestsPerCycle: evidence.requestsPerCycle,
+      };
+    }
     const failure = cause instanceof Error ? cause.message : String(cause);
     progress(`failed ${label}: ${failure}`);
     return { route: route.path, status: "failed", reason: failure };

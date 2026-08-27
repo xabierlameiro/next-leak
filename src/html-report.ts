@@ -149,6 +149,10 @@ export function renderHtmlReport(run: RunReport): string {
   const measured = run.routes.filter((route) => route.status === "measured");
   const skipped = run.routes.filter((route) => route.status === "skipped");
   const failed = run.routes.filter((route) => route.status === "failed");
+  // Its own section rather than a row among the measured ones: there is no
+  // after-snapshot and no complete curve to draw, and leaving it out of the
+  // page altogether would drop a leak verdict on the floor.
+  const exhausted = run.routes.filter((route) => route.status === "died-of-heap");
   const environment = run.environment;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -173,6 +177,21 @@ code{background:#f4f4f4;padding:0 4px;border-radius:3px}
     run.parameters.maxOldSpaceMb
   } MB · growth gate ${(run.parameters.minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle</p>
 ${measured.map((route) => measuredSection(route, run.parameters)).join("\n")}
+${exhausted
+  .map((route) =>
+    route.status !== "died-of-heap"
+      ? ""
+      : `<h2><span class="badge" style="background:#c0392b">leak</span> <code>${escapeHtml(
+          route.route
+        )}</code></h2>
+<p class="curve">Ran out of heap after ${route.cyclesCompleted} of ${
+          route.cyclesRequested
+        } cycles × ${route.requestsPerCycle} requests. Post-GC heap up to the death: ${route.memorySamples
+          .map((sample) => `${(sample.heapUsed / MB).toFixed(1)} MB`)
+          .join(" → ")}</p>
+<p class="warn">${escapeHtml(route.reason)}</p>`
+  )
+  .join("\n")}
 ${
   skipped.length === 0
     ? ""

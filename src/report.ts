@@ -211,6 +211,18 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
   if (route.status === "not-exercised") {
     return [`  – ${route.route}  not exercised: ${route.reason}`];
   }
+  // A process that could not survive its own load leaked, and says so with the
+  // same word as any other leak. The curve is shown truncated because it is:
+  // what makes this a verdict is the death, not the slope.
+  if (route.status === "died-of-heap") {
+    const curve = route.memorySamples.map((sample) => formatMb(sample.heapUsed)).join(" → ");
+    return [
+      `  ${VERDICT_ICON.leak} ${route.route}  leak  (ran out of heap after ` +
+        `${route.cyclesCompleted} of ${route.cyclesRequested} cycles)` +
+        (curve === "" ? "" : `  heap ${curve}`),
+      `      ${route.reason}`,
+    ];
+  }
 
   const verdict = effectiveVerdict(route);
   const curve = route.samples.map(formatMb).join(" → ");
@@ -275,7 +287,12 @@ function skippedGuidanceLines(report: RunReport): string[] {
  */
 function coverageLine(report: RunReport): string {
   const total = report.routes.length;
-  const measured = report.routes.filter((route) => route.status === "measured").length;
+  // A route that died of heap was measured: it produced a verdict, and the
+  // summary must not tell the reader nothing was measured on the same screen
+  // where the verdict says `leak`.
+  const measured = report.routes.filter(
+    (route) => route.status === "measured" || route.status === "died-of-heap"
+  ).length;
   if (measured === total) {
     return `measured all ${total} discovered route(s)`;
   }

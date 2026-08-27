@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { requestMemory } from "./control-client.js";
 import type { LaunchedApp } from "./launcher.js";
 import type { LoadPhaseResult } from "./load.js";
-import { runRitual, unreclaimedSettleFor, type RitualDeps } from "./ritual.js";
+import {
+  HeapExhaustedError,
+  runRitual,
+  unreclaimedSettleFor,
+  type RitualDeps,
+} from "./ritual.js";
 
 const MB = 1024 * 1024;
 
@@ -463,12 +468,61 @@ describe("mutation-hardening: ritual", () => {
       ...harness.deps,
       launch: async (options: Parameters<RitualDeps["launch"]>[0]) => {
         const app = await harness!.deps.launch(options);
-        return { ...app, explainExit: () => "the measured process ran out of heap (limit 512 MB)" };
+        return {
+          ...app,
+          explainExit: () => ({ reason: "the app exited mid-run", heapExhausted: false }),
+        };
       },
     };
     await expect(runRitual(await baseOptions(), explained)).rejects.toThrow(
-      /ran out of heap \(limit 512 MB\)/
+      /exited mid-run/
     );
+  });
+
+  // The whole point of the distinction: this death is a verdict, so it must
+  // arrive as one, carrying the cycles it did survive.
+  it("raises heap exhaustion as a finding with the samples taken before it", async () => {
+    harness = await makeHarness([29 * MB, 31 * MB], { failLoadCall: 2 });
+    const exhausted = {
+      ...harness.deps,
+      launch: async (options: Parameters<RitualDeps["launch"]>[0]) => {
+        const app = await harness!.deps.launch(options);
+        return {
+          ...app,
+          explainExit: () => ({
+            reason: "the measured process ran out of heap (limit 512 MB)",
+            heapExhausted: true,
+          }),
+        };
+      },
+    };
+    const raised = await runRitual(await baseOptions(), exhausted).catch(
+      (cause: unknown) => cause
+    );
+    expect(raised).toBeInstanceOf(HeapExhaustedError);
+    const error = raised as HeapExhaustedError;
+    expect(error.message).toMatch(/ran out of heap \(limit 512 MB\)/);
+    // The baseline was taken before the load that killed it, so the evidence
+    // is never empty even when it dies inside the first cycle.
+    expect(error.evidence.memorySamples.length).toBeGreaterThan(0);
+    expect(error.evidence.cyclesCompleted).toBe(0);
+    expect(error.evidence.cyclesRequested).toBeGreaterThan(0);
+  });
+
+  it("does not treat a non-heap death as a finding", async () => {
+    harness = await makeHarness([29 * MB, 31 * MB], { failLoadCall: 2 });
+    const other = {
+      ...harness.deps,
+      launch: async (options: Parameters<RitualDeps["launch"]>[0]) => {
+        const app = await harness!.deps.launch(options);
+        return {
+          ...app,
+          explainExit: () => ({ reason: "the port was taken", heapExhausted: false }),
+        };
+      },
+    };
+    const raised = await runRitual(await baseOptions(), other).catch((cause: unknown) => cause);
+    expect(raised).not.toBeInstanceOf(HeapExhaustedError);
   });
 
   it("labels every phase in timings and settle outcomes", async () => {
