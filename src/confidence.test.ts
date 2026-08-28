@@ -701,3 +701,28 @@ describe("warm-up baseline contamination", () => {
     expect(warrantsIssueDraft({ trend: { verdict: "leak", growthPerCycle: 0, deltas: [] }, confidence: report })).toBe(true);
   });
 });
+
+// `saturating` is a finding, not an accusation: the curve bends, which is what
+// a bounded store does. Drafting an issue from one would file a cache.
+describe("drafts and the saturating verdict", () => {
+  it("does not warrant an issue draft", () => {
+    const report = {
+      trend: { verdict: "saturating" as const, growthPerCycle: 4 * 1024 * 1024, deltas: [] },
+      confidence: { level: "high" as const, warnings: [] },
+    };
+    expect(warrantsIssueDraft(report)).toBe(false);
+  });
+
+  it("still warrants one for a leak on a cache-driven route, which the draft must disclose", () => {
+    const report = {
+      trend: {
+        verdict: "leak" as const,
+        growthPerCycle: 4 * 1024 * 1024,
+        deltas: [],
+        cacheDriven: true as const,
+      },
+      confidence: { level: "high" as const, warnings: [] },
+    };
+    expect(warrantsIssueDraft(report)).toBe(true);
+  });
+});

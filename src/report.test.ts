@@ -508,3 +508,100 @@ describe("a route that ran out of heap", () => {
     expect(output).toContain("measured all 1 discovered route(s)");
   });
 });
+
+// Two explanations the reader needs before reading the growth figure: a curve
+// that bends is a store filling up, and a cache driven with unseen keys fills
+// up as a side effect of being measured.
+describe("cache and saturation lines", () => {
+  function withRoute(changes: Record<string, unknown>): string {
+    const run = makeRunReport();
+    const routes = run.routes.map((route) =>
+      route.status === "measured" && route.route === "/leaky"
+        ? { ...route, trend: { ...route.trend, ...changes } }
+        : route
+    );
+    return formatReport({ ...run, routes });
+  }
+
+  it("explains a saturating verdict as a bounded store, not a leak", () => {
+    const output = withRoute({ verdict: "saturating" });
+    expect(output).toContain("~ /leaky  saturating");
+    expect(output).toContain("growth is decelerating, not linear");
+  });
+
+  it("names cache residency when a growing route was driven with unseen keys", () => {
+    const output = withRoute({ cacheDriven: true });
+    expect(output).toContain("keys this route had never cached");
+    expect(output).toContain("{n%N}");
+  });
+
+  it("stays quiet about caches on a route that was not cache-driven", () => {
+    expect(formatReport(makeRunReport())).not.toContain("keys this route had never cached");
+  });
+});
+
+// A verdict with no named retainer reads as a thin finding rather than a
+// missing one. The summary says which it is.
+describe("attribution gaps in the summary", () => {
+  it("counts routes whose snapshot could not be read, and names them", () => {
+    const run = makeRunReport();
+    const routes = run.routes.map((route) =>
+      route.status === "measured" && route.route === "/leaky"
+        ? {
+            ...route,
+            diff: null,
+            attributionGap: {
+              reason: "snapshot-unreadable" as const,
+              detail: "heap snapshot parses 900 MB. Around --requests 2000 should keep it diffable",
+            },
+          }
+        : route
+    );
+    const output = formatReport({ ...run, routes });
+
+    expect(output).toContain("1 route(s) finished without attribution");
+    expect(output).toContain("/leaky");
+    expect(output).toContain("the verdicts stand");
+  });
+
+  it("says nothing when every measured route was attributable", () => {
+    expect(formatReport(makeRunReport())).not.toContain("finished without attribution");
+  });
+});
+
+// A page of `stable` verdicts is the one output that reads the same whether
+// the app is healthy or the measurement never worked.
+describe("harness verification in the summary", () => {
+  const allStable = () => {
+    const run = makeRunReport();
+    return {
+      ...run,
+      routes: run.routes.map((route) =>
+        route.status === "measured"
+          ? { ...route, trend: { ...route.trend, verdict: "stable" as const } }
+          : route
+      ),
+    };
+  };
+
+  it("says nothing vouched for the harness when every verdict is stable", () => {
+    const output = formatReport(allStable());
+    expect(output).toContain("nothing verified the harness this session");
+    expect(output).toContain("--self-check");
+  });
+
+  it("reports the planted leak when the harness was verified", () => {
+    const output = formatReport({
+      ...allStable(),
+      harness: { verified: true, growthPer1000Requests: 8.16 * MB },
+    });
+    expect(output).toContain("harness verified this session");
+    expect(output).toContain("8.16 MB/1000 req");
+    expect(output).not.toContain("nothing verified the harness");
+  });
+
+  it("stays quiet on an unverified run that found a leak", () => {
+    // The harness just caught one, so it is not the harness in question.
+    expect(formatReport(makeRunReport())).not.toContain("nothing verified the harness");
+  });
+});
