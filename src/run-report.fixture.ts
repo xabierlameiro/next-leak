@@ -43,6 +43,7 @@ export function makeRunReport(): RunReport {
     appDir: "/apps/shop",
     startedAt: "2026-07-20T12:00:00.000Z",
     workDir: "/apps/shop/.next-leak/2026-07-20T12-00-00-000Z",
+    harness: { verified: false },
     environment: {
       nodeVersion: "v24.15.0",
       platform: "linux",

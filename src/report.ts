@@ -21,7 +21,12 @@ const formatGrowth = (bytes: number): string => {
   return `${sign}${(bytes / MB).toFixed(2)} MB/1000 req`;
 };
 
-const VERDICT_ICON = { leak: "✖", stable: "✔", inconclusive: "?" } as const;
+const VERDICT_ICON = {
+  leak: "✖",
+  stable: "✔",
+  inconclusive: "?",
+  saturating: "~",
+} as const satisfies Record<TrendVerdict, string>;
 
 /** RSS is noisier than the heap, so it needs both a trend and a real size. */
 const RSS_MIN_GROWTH_PER_CYCLE = 16 * MB;
@@ -70,6 +75,32 @@ function revalidationLines(route: MeasuredRouteView): string[] {
         `      driven through ISR revalidation (revalidates every ` +
           `${route.revalidatedEverySeconds}s; without it the load would serve the cache)`,
       ];
+}
+
+/**
+ * What a bending curve means, and what a growing cache does to a verdict.
+ *
+ * Both lines answer the same question from opposite sides: how much of this
+ * growth is the route storing what it was asked to store. A `use cache` route
+ * driven with a fresh key per request measured +603 MB/1000 requests on
+ * Next 16.3.3, all of it the cache; the same route with the payload removed
+ * measured +88 MB. Without saying so, the first number reads as a leak.
+ */
+function cacheLines(route: MeasuredRouteView): string[] {
+  const lines: string[] = [];
+  if (route.trend.verdict === "saturating") {
+    lines.push(
+      `      growth is decelerating, not linear — the shape of a bounded store ` +
+        `filling up rather than memory going missing`
+    );
+  }
+  if (route.trend.cacheDriven === true && route.trend.growthPerCycle > 0) {
+    lines.push(
+      `      the load served keys this route had never cached, so some of this ` +
+        `growth is cache residency; bound it with {n%N} in next-leak.config.json`
+    );
+  }
+  return lines;
 }
 
 /**
@@ -237,6 +268,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
       route.growthPer1000Requests
     )})  heap ${curve}${resolved}`,
     ...revalidationLines(route),
+    ...cacheLines(route),
     ...abandonLines(route),
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),
@@ -307,6 +339,52 @@ function coverageLine(report: RunReport): string {
   return `measured ${measured} of ${total} discovered route(s) — ${breakdown}; the rest is not a verdict about your app`;
 }
 
+/**
+ * Routes that were measured but could not be attributed, and why.
+ *
+ * A verdict with no named retainer reads as a thin finding rather than a
+ * missing one, so the count goes next to the coverage line: those routes have
+ * a verdict, and the part that says what holds the memory is absent for a
+ * reason worth acting on.
+ */
+function attributionGapLine(report: RunReport): string[] {
+  const gaps = report.routes.filter(
+    (route) => route.status === "measured" && route.attributionGap !== undefined
+  );
+  if (gaps.length === 0) {
+    return [];
+  }
+  const names = gaps.map((route) => route.route).join(", ");
+  return [
+    `${gaps.length} route(s) finished without attribution because their snapshot ` +
+      `could not be read (${names}) — the verdicts stand, what retains the memory is unnamed`,
+  ];
+}
+
+/**
+ * What vouched for the instrument, on the runs where it matters.
+ *
+ * A page of `stable` verdicts is the one output that reads the same whether
+ * the app is healthy or the measurement never worked. Saying so there is
+ * useful; saying it under a leak would be noise, since a harness that just
+ * caught one is not the harness in question.
+ */
+function harnessLine(report: RunReport): string[] {
+  const measured = report.routes.filter((route) => route.status === "measured");
+  if (report.harness.verified) {
+    const rate = formatGrowth(report.harness.growthPer1000Requests);
+    return [`harness verified this session: a planted leak measured ${rate}`];
+  }
+  const allStable = measured.length > 0 && measured.every((route) => effectiveVerdict(route) === "stable");
+  if (!allStable) {
+    return [];
+  }
+  return [
+    "nothing verified the harness this session — a flat curve reads the same " +
+      "whether nothing leaks or nothing was measured; --self-check plants a leak and proves it",
+  ];
+}
+
 export function formatReport(report: RunReport): string {
   const lines = [`next-leak — ${report.appDir}`, ""];
   for (const route of report.routes) {
@@ -331,7 +409,7 @@ export function formatReport(report: RunReport): string {
     resolvedCycles.length === 0
       ? `${cycles} cycles`
       : `${cycles} cycles (${resolvedCycles.join(", ")} where resolved)`;
-  lines.push("", coverageLine(report));
+  lines.push("", coverageLine(report), ...attributionGapLine(report), ...harnessLine(report));
   lines.push(
     `judged over ${cyclesLabel} × ${loadRequests} requests, growth gate ` +
       `${(minGrowthPerCycle / 1024).toFixed(0)} KiB/cycle ` +

@@ -1,10 +1,16 @@
 import { effectiveVerdict } from "./confidence.js";
 import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
+import type { TrendVerdict } from "./trend.js";
 
 const MB = 1024 * 1024;
 
-const VERDICT_COLOR = { leak: "#c0392b", stable: "#27ae60", inconclusive: "#e67e22" } as const;
+const VERDICT_COLOR = {
+  leak: "#c0392b",
+  stable: "#27ae60",
+  inconclusive: "#e67e22",
+  saturating: "#2980b9",
+} as const satisfies Record<TrendVerdict, string>;
 
 function escapeHtml(value: string): string {
   return value
@@ -158,7 +164,7 @@ export function renderHtmlReport(run: RunReport): string {
 <html lang="en"><head><meta charset="utf-8">
 <title>next-leak — ${escapeHtml(run.appDir)}</title>
 <style>
-body{font:14px/1.5 system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;color:#222}
+body{font:14px/1.5 system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;color:#222;background:#fff}
 h1{font-size:1.3rem} h2{font-size:1rem;margin:1.5rem 0 .3rem}
 .badge{color:#fff;border-radius:4px;padding:1px 8px;font-size:.8rem}
 table{border-collapse:collapse;font-size:.85rem;margin:.5rem 0}

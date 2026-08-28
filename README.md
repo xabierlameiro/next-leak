@@ -74,11 +74,12 @@ provide heap snapshots taken after forced GC"* — which almost nobody produces
 correctly. `next-leak` runs that controlled measurement for you and answers with
 evidence a maintainer would accept.
 
-Three possible answers, all valuable:
+The answers, all valuable:
 
 1. **You don't have a leak** — the spike is transient and drains during idle (the most common case).
-2. **The leak is in your code (or a dependency)** — named down to the source file when possible.
-3. **It looks like framework internals** — with a ready-to-file issue draft.
+2. **Something is filling up, not leaking** — a bounded cache on its way to its ceiling, which grows every cycle and still is not a leak.
+3. **The leak is in your code (or a dependency)** — named down to the source file when possible.
+4. **It looks like framework internals** — with a ready-to-file issue draft.
 
 ## Quickstart
 
@@ -121,6 +122,7 @@ Every report prints the gate it used.
 | `--max-old-space <mb>` | 512 | Heap cap of each measured process. Raise it for apps whose legitimate working set is larger, or they die under measurement |
 | `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Same cycle count as the default; what it trades away is traffic per cycle, so it sits on the noise floor and is less sensitive to slow leaks. Explicit flags override it |
 | `--no-resolve` | off | Skip the second pass on inconclusive routes |
+| `--self-check` | off | Measure a planted leak first to prove the harness works here. Costs one route's worth of time; a run that cannot detect 8 KB per request produces verdicts worth nothing |
 | `--diff-all` | off | Diff snapshots for stable routes too |
 | `--attribute` | off | **`build` only.** Also name *what* the worker retains, not only that it retains |
 | `--output <dir>` | `<app>/.next-leak` | Where runs are written |
@@ -213,6 +215,7 @@ separates them, because each one has a different fix:
 | One-time warm-up growth (JIT, lazy caches) | `stable` | The first cycle is excluded from the verdict; warm-up flattens, leaks keep climbing |
 | A route that is expensive, not leaky | `failed` under load it cannot sustain, flat once concurrency fits | Real leaks survive forced GC at any concurrency; saturation disappears when load drops |
 | Growth that pauses and resumes (stepwise) | `leak` | A healthy route gives back 20-30% of its growth; a stepwise leak gives back nothing |
+| A cache filling up under the load that measures it | `saturating` | A bounded store grows by less each cycle as new keys get rarer; a leak does not decelerate |
 | Native/buffer memory with a flat JS heap | `leak (external)` or an explicit RSS note | Heap, `external` and RSS are sampled and judged separately |
 | A leak in your code vs a dependency vs Next itself | `culprit: src/app/x/page.tsx (your code)` — or the package, or framework internals | Retainer chains mapped through the build's source maps |
 | A run whose own evidence is weak | `low confidence` warnings, or the verdict is withdrawn | Every run audits itself: did the load land, did the heap settle, does one cycle carry the average, did the heap run into its own ceiling |
@@ -221,7 +224,12 @@ separates them, because each one has a different fix:
 
 - **`stable`** — no growth this run could detect: across the cycles it ran, the
   post-GC curve never cleared the growth gate printed at the foot of the
-  report. That is not proof of absence, and the wording matters — the verdict
+  report. Before trusting a page of these, prove the instrument works where you
+  are running it: `--self-check` plants a leak of 8 KB per request and measures
+  it, under your Node build, your heap cap, your concurrency and your container
+  limits. On this machine it comes back at 8.16 MB/1000 requests against a
+  theoretical 8.0 — a harness that cannot see that is one whose flat curves mean
+  nothing, and the run says so when nothing vouched for it. That is not proof of absence, and the wording matters — the verdict
   is deliberately biased toward missing a leak rather than inventing one (a
   single flat or falling cycle is enough to call a route stable), so a leak
   that oscillates while it climbs can land here. To press harder, raise
@@ -231,6 +239,19 @@ separates them, because each one has a different fix:
   flat but RSS keeps climbing, the report says so explicitly: that is an
   allocator, external-buffer or fragmentation problem, not a JS-heap leak.
 - **`leak`** — the report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. An `ISSUE-<route>.md` draft is generated **when the evidence plainly supports the verdict** — a `leak` carrying low-confidence warnings (growth barely over the threshold, one cycle dominating the mean, too few cycles for its size) gets the verdict but no draft, because a draft is written to be pasted into someone else's tracker. If the leak is app-owned, the draft tells you **not** to file it upstream.
+- **`saturating`** — every cycle grew, but by less than the one before, and the
+  last by less than half the first. That is the shape of a bounded store
+  running out of new keys, not of memory going missing. It matters because the
+  alternative was calling it a leak: a `use cache` route measured on Next
+  16.3.3 came out at +603 MB per 1000 requests that was entirely the cache
+  storing what it had been asked to store — the same route dropped to +88 MB
+  once the payload was removed. Because the shape requires every cycle to clear
+  the growth gate, a decelerating curve always ends the window still growing,
+  so where it settles is outside what was measured: these routes are
+  **measured again** with twice the cycles, like `inconclusive` ones. No issue
+  draft is generated. When the load was driving a cache with keys it had never
+  served, the report says so on any growing route and points at `{n%N}` to
+  bound the key set — measure again that way before believing the number.
 - **`inconclusive`** — the evidence does not decide. The run does not stop there: any inconclusive route is **measured again automatically**, with twice the cycles, and the second pass is what you see (`resolved at 8 cycles` next to the verdict). On the reproduction for [#95094](https://github.com/vercel/next.js/issues/95094), `--quick` alone reports `inconclusive` on three deltas and then comes back with the leak. `--no-resolve` turns the second pass off; when even that is undecided, the re-run command is still printed.
 - **`failed`** — the route errored under load (auth redirects, POST-only endpoints). >1% non-2xx aborts measurement instead of measuring garbage. That's by design. A process that died of **heap exhaustion** is not one of these: it reports `leak`, because a route that could not survive its own load did not fail to be measured — it was measured right up to the point where it stopped fitting. The verdict comes from that outcome, not from the shape of the truncated curve, which is the same rule `next-leak build` applies to a static-generation worker that dies. The run prints the cycles it survived and the growth up to the death, and exits 0 with a finding rather than 1 with an error.
 
@@ -349,6 +370,20 @@ than a false accusation, and the warnings are on the report either way.
 └── <nn>-<route>/      # raw baseline/after .heapsnapshot per route
 ```
 
+`report.html` is the one you send to someone else. It is a real run below —
+three routes measured with `--self-check`, on the reproduction this repo tests
+against:
+
+<img src="https://raw.githubusercontent.com/xabierlameiro/next-leak/main/docs/report-example.png" alt="next-leak HTML report: two stable routes and one leaking at +471 MB per 1000 requests, attributed to lib/sink.ts" width="720">
+
+Per route it draws the post-GC curve, the peak reached *during* each cycle
+across heap, external, arrayBuffers and RSS, and what grew between the two
+snapshots — with its retained size and, when the source maps resolve it, the
+file that owns it. No JavaScript, no external requests, no
+fonts to fetch: it opens offline from a CI artifact. The file above is
+[`docs/report-example.html`](./docs/report-example.html) if you want to poke at
+the markup.
+
 Snapshots are the ground truth: load them in Chrome DevTools (Memory → Load → Comparison) and check every claim yourself. Runs accumulate — each keeps its snapshots (tens of MB per route); delete old timestamp folders when done.
 
 ## Why not just use…
@@ -395,10 +430,16 @@ through the build's source maps.
   once for an hour and a half. Use it on a reproduction you are investigating,
   not on a build you need to finish. It also covers only a low slice of the
   curve, and says which: a snapshot weighs roughly 0.4x to 0.8x the worker's
-  resident size, so past about a gigabyte it exceeds the 512 MB a V8 string can
-  hold and cannot be read back — both captures happen below that, and the
-  report states what share of the observed growth they span (19% on that
+  resident size — both captures happen well below the ceiling, and the report
+  states what share of the observed growth they span (19% on that
   reproduction, whose worker peaks near 4 GB).
+
+  That ceiling is not the file's size. memlab reads `nodes`, `edges` and
+  `locations` as typed arrays in chunks and only parses the rest, so what has
+  to fit in a 512 MB V8 string is everything else — and on a leaking snapshot
+  that is almost nothing. A 1342.9 MB capture of a leaking route parsed 2.4 MB
+  of JSON and diffs fine; a 2227.5 MB one whose `strings` section alone was
+  868.9 MB is refused, and the message names 869 MB rather than 2227 MB.
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
 - Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.0/16.3.1 and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). Most recent measurements, 2026-08-17/18: the runtime path on 16.2.12 and 16.3.1-canary.18, the build path on 16.2.12 and 16.3.1. The contracts it relies on are stable since Next 13–14, but older versions are untested.

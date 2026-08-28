@@ -479,7 +479,11 @@ describe("mutation-hardening: runner, second pass", () => {
       { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => withNote.push(m) },
       makeDeps([])
     );
-    expect(withNote.some((line) => line.includes("inconclusive routes are measured again"))).toBe(true);
+    expect(
+      withNote.some((line) =>
+        line.includes("undecided and still-decelerating routes are measured again")
+      )
+    ).toBe(true);
 
     const without: string[] = [];
     await runMeasurement(
@@ -1183,5 +1187,217 @@ describe("a failed snapshot diff does not lose the measurement", () => {
     expect(route.diff).toBeNull();
     expect(messages.some((message) => message.includes("snapshot diff unavailable"))).toBe(true);
     expect(messages.some((message) => message.includes("1740 MB"))).toBe(true);
+  });
+});
+
+// A cached route driven with keys it has never served fills its store while
+// being measured. The verdict has to know, or it reports the cache as a leak —
+// which is exactly what happened on a `use cache` route measured against
+// Next 16.3.3 on 2026-08-27: +603 MB/1000 requests, all of it the cache.
+describe("cache-driven routes", () => {
+  async function cacheDrivenFlagFor(
+    appPaths: Record<string, string>,
+    config?: Record<string, unknown>
+  ): Promise<boolean | undefined> {
+    const appDir = await makeAppDir(appPaths);
+    await writeFile(
+      path.join(appDir, ".next", "prerender-manifest.json"),
+      JSON.stringify({
+        routes: { "/": { initialRevalidateSeconds: 900 } },
+        preview: { previewModeId: "preview-id" },
+      })
+    );
+    if (config !== undefined) {
+      await writeFile(path.join(appDir, "next-leak.config.json"), JSON.stringify(config));
+    }
+    let seen: boolean | undefined;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          seen = options.cacheDriven;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    return seen;
+  }
+
+  it("marks an ISR route driven with unbounded keys", async () => {
+    expect(await cacheDrivenFlagFor({ "/page": "app/page.js" })).toBe(true);
+  });
+
+  it("does not mark a route that is not served from the ISR cache", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let seen: boolean | undefined;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          seen = options.cacheDriven;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    expect(seen).toBeUndefined();
+  });
+
+  it("does not mark an ISR route whose key set is bounded", async () => {
+    // `{n%5}` revisits the same five keys, so the store settles and growth
+    // beyond it is not the cache filling up.
+    const flag = await cacheDrivenFlagFor(
+      { "/page": "app/page.js" },
+      { query: { "/": "page={n%5}" } }
+    );
+    expect(flag).toBeUndefined();
+  });
+});
+
+// run.json is what a maintainer re-reads months later. A verdict whose
+// alternative explanation lives only in the terminal is a verdict that will be
+// misread once the scrollback is gone.
+describe("cache-driven context survives serialization", () => {
+  it("writes the cache-driven fact to run.json alongside the verdict", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          const result = ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return { ...result, trend: { ...result.trend, cacheDriven: true as const } };
+        },
+      }
+    );
+    const persisted = JSON.parse(
+      await readFile(path.join(report.workDir, "run.json"), "utf8")
+    ) as { routes: { trend?: { cacheDriven?: boolean } }[] };
+
+    expect(persisted.routes[0]?.trend?.cacheDriven).toBe(true);
+  });
+});
+
+// A decelerating curve always ends the measured window still growing, because
+// `saturating` requires every cycle to clear the gate. Where it settles is
+// outside what was measured, so the run goes back for a longer look.
+describe("saturating routes are measured again", () => {
+  function saturatingResult(route: string) {
+    const result = ritualResult(route, [28 * MB, 30 * MB, 38 * MB, 42 * MB, 43.5 * MB]);
+    return {
+      ...result,
+      trend: { ...result.trend, verdict: "saturating" as const, growthPerCycle: 4.5 * MB },
+    };
+  }
+
+  it("goes back for a longer window, exactly once", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progressLines: string[] = [];
+    let passes = 0;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => progressLines.push(m) },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          passes += 1;
+          return saturatingResult(options.route);
+        },
+      }
+    );
+
+    expect(passes).toBe(2);
+    expect(
+      progressLines.some(
+        (line) =>
+          line.includes("re-measuring / with 8 cycles") &&
+          line.includes("still decelerating when the window ran out")
+      )
+    ).toBe(true);
+  });
+
+  it("stays on one pass when the caller opted out", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let passes = 0;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", resolveInconclusive: false },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          passes += 1;
+          return saturatingResult(options.route);
+        },
+      }
+    );
+    expect(passes).toBe(1);
+  });
+
+  it("leaves a leak and a stable route on one pass", async () => {
+    const appDir = await makeAppDir({ "/leaky/page": "app/leaky/page.js" });
+    let passes = 0;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          passes += 1;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    expect(passes).toBe(1);
+  });
+});
+
+// An absent diff and an unreadable snapshot both leave `diff: null`. One says
+// nothing grew enough to name; the other says the evidence could not be read.
+// A report that conflates them turns a hole in the evidence into a finding.
+describe("attribution gaps are distinguishable", () => {
+  async function runWithDiff(diff: RunnerDeps["diff"]) {
+    const appDir = await makeAppDir({ "/leaky/page": "app/leaky/page.js" });
+    return runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      { ...makeDeps([]), diff }
+    );
+  }
+
+  it("records an unreadable snapshot as a gap, with advice sized to the run", async () => {
+    const { constants } = await import("node:buffer");
+    const { SnapshotError } = await import("./heap-diff.js");
+    const report = await runWithDiff(async () => {
+      throw new SnapshotError("heap snapshot parses 1024 MB", constants.MAX_STRING_LENGTH * 2);
+    });
+
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.diff).toBeNull();
+    expect(route.attributionGap?.reason).toBe("snapshot-unreadable");
+    // 5000 requests produced twice the ceiling, so a fifth of that is the
+    // advice: 5000 × (1/2) × 0.8 = 2000.
+    expect(route.attributionGap?.detail).toContain("--requests 2000");
+  });
+
+  it("leaves no gap when the diff ran and simply found nothing", async () => {
+    const report = await runWithDiff(async () => ({
+      typeDeltas: [],
+      grownNodes: [],
+      newNodes: [],
+    }));
+
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.attributionGap).toBeUndefined();
+  });
+
+  it("persists the gap to run.json", async () => {
+    const { SnapshotError } = await import("./heap-diff.js");
+    const report = await runWithDiff(async () => {
+      throw new SnapshotError("heap snapshot parses 900 MB");
+    });
+    const persisted = JSON.parse(
+      await readFile(path.join(report.workDir, "run.json"), "utf8")
+    ) as { routes: { attributionGap?: { reason: string } }[] };
+
+    expect(persisted.routes[0]?.attributionGap?.reason).toBe("snapshot-unreadable");
   });
 });

@@ -1,4 +1,5 @@
 {
   "/page": "app/page.js",
-  "/leaky/page": "app/leaky/page.js"
+  "/leaky/page": "app/leaky/page.js",
+  "/cached/page": "app/cached/page.js"
 }

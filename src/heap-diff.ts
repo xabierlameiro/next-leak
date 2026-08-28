@@ -260,14 +260,139 @@ export function diffAgainstBaseline(
 }
 
 export class SnapshotError extends Error {
-  constructor(message: string) {
+  /**
+   * Bytes that had to fit in one string, when that is why the snapshot was
+   * refused. Carried on the error so the caller — which knows the load that
+   * produced it — can work out what would have fit.
+   */
+  readonly parsedBytes?: number;
+
+  constructor(message: string, parsedBytes?: number) {
     super(message);
     this.name = "SnapshotError";
+    if (parsedBytes !== undefined) {
+      this.parsedBytes = parsedBytes;
+    }
   }
 }
 
 const SNAPSHOT_HEAD = '{"snapshot"';
 const PROBE_BYTES = 512;
+
+/**
+ * Top-level keys of a V8 heap snapshot, in the order V8 writes them.
+ *
+ * The order is what makes scanning for them safe. `strings` holds arbitrary
+ * program text that can imitate any of these keys, and it comes last, so the
+ * first occurrence of each one is always the real key. `snapshot.meta` carries
+ * `node_fields` and `edge_types`, never `"nodes":` or `"edges":`.
+ */
+const SNAPSHOT_SECTIONS = [
+  "snapshot",
+  "nodes",
+  "edges",
+  "trace_function_infos",
+  "trace_tree",
+  "samples",
+  "locations",
+  "strings",
+] as const;
+
+/**
+ * Sections memlab pulls out as typed arrays rather than parsing as JSON.
+ *
+ * `HeapParser.parseFile` reads these three through `StringLoader` in chunks
+ * and calls `JSON.parse` only on what is left, so their bytes never have to
+ * fit in a string however many of them there are.
+ */
+const TYPED_ARRAY_SECTIONS: ReadonlySet<string> = new Set(["nodes", "edges", "locations"]);
+
+/** Reading granularity for the section scan. */
+const SCAN_CHUNK_BYTES = 8 * 1024 * 1024;
+
+const mb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(0);
+
+/**
+ * How many bytes of a snapshot memlab actually has to hold in one string.
+ *
+ * Null when the file does not look like the layout above, in which case the
+ * caller falls back to judging it by its total size — what this tool did for
+ * every snapshot before it was measured that the two are wildly different: on
+ * a 1342.9 MB snapshot of a leaking route, 1340.5 MB were `nodes` and `edges`
+ * and 2.4 MB reached `JSON.parse`. Refusing that one cost the attribution on
+ * the worst leak in the run.
+ */
+export async function parsedSectionBytes(file: string, fileSize: number): Promise<number | null> {
+  const { createReadStream } = await import("node:fs");
+
+  const offsets = new Map<string, number>();
+  let scanned = 0;
+  let carry = "";
+  const longestKey = Math.max(...SNAPSHOT_SECTIONS.map((key) => key.length)) + 3;
+
+  const stream = createReadStream(file, {
+    encoding: "latin1",
+    highWaterMark: SCAN_CHUNK_BYTES,
+  });
+  try {
+    for await (const chunk of stream) {
+      const text = carry + (chunk as string);
+      const base = scanned - carry.length;
+      for (const key of SNAPSHOT_SECTIONS) {
+        if (offsets.has(key)) {
+          continue;
+        }
+        const at = text.indexOf(`"${key}":`);
+        if (at !== -1) {
+          offsets.set(key, base + at);
+        }
+      }
+      scanned += (chunk as string).length;
+      // `strings` is last, so everything is located once it is found.
+      if (offsets.has("strings")) {
+        break;
+      }
+      // `nodes` is the second key V8 writes, after a `meta` block of a few
+      // hundred bytes, so it is in the first chunk of any real snapshot.
+      // Absent, this is not the layout the scan assumes, and reading the rest
+      // of a multi-gigabyte file to confirm that helps nobody.
+      //
+      // Only `nodes`. `edges` comes after the whole nodes array — hundreds of
+      // MB on the snapshots this matters for — so requiring it here aborted
+      // the scan on every large file, which is exactly the case the scan
+      // exists for. Caught on a real 769.9 MB capture that fell back to the
+      // file-size check and was refused.
+      if (!offsets.has("nodes")) {
+        return null;
+      }
+      carry = text.slice(-longestKey);
+    }
+  } finally {
+    stream.destroy();
+  }
+
+  const located = SNAPSHOT_SECTIONS.filter((key) => offsets.has(key)).map((key) => ({
+    key,
+    at: offsets.get(key) ?? 0,
+  }));
+  const typedFound = located.filter((section) => TYPED_ARRAY_SECTIONS.has(section.key));
+  const ascending = located.every(
+    (section, index) => index === 0 || section.at > (located[index - 1]?.at ?? 0)
+  );
+  if (typedFound.length !== TYPED_ARRAY_SECTIONS.size || !ascending) {
+    return null;
+  }
+
+  let typedBytes = 0;
+  for (const [index, section] of located.entries()) {
+    if (!TYPED_ARRAY_SECTIONS.has(section.key)) {
+      continue;
+    }
+    const end = located[index + 1]?.at ?? fileSize;
+    typedBytes += end - section.at;
+  }
+  return fileSize - typedBytes;
+}
 
 /**
  * Cheap structural check before handing a file to memlab.
@@ -289,20 +414,38 @@ export async function assertReadableSnapshot(file: string): Promise<void> {
   if (size === 0) {
     throw new SnapshotError(`heap snapshot is empty: ${file}`);
   }
-  // A snapshot is parsed by reading it into one string, and V8 caps a string
-  // at 512 MB. Past that the read dies with `RangeError: Invalid string
+  // Part of a snapshot is parsed by reading it into one string, and V8 caps a
+  // string at 512 MB. Past that the read dies with `RangeError: Invalid string
   // length` from inside node:fs, which no amount of care in this file
   // prevents — so refuse before the attempt and say what happened. Measured
-  // 2026-08-18 on the vercel/next.js#97424 reproduction: the second pass
-  // wrote a 1.7 GB baseline and the whole run died at the diff, taking a
-  // completed measurement with it.
-  if (size > constants.MAX_STRING_LENGTH) {
+  // 2026-08-18 on the vercel/next.js#97424 reproduction: the second pass wrote
+  // a 1.7 GB baseline and the whole run died at the diff, taking a completed
+  // measurement with it.
+  //
+  // Which part matters. memlab reads `nodes`, `edges` and `locations` as typed
+  // arrays in chunks and parses only the rest, and on a leaking snapshot the
+  // rest is almost nothing: 2.4 MB of 1342.9 MB, measured 2026-08-27. Judging
+  // the file refused diffs memlab would have completed, and it refused them
+  // hardest on the biggest leaks — the runs where naming the retainer is worth
+  // the most. When the scan cannot make sense of the layout it returns null
+  // and the file size decides, which is where this started.
+  // Only worth scanning when the file alone would be refused: below the
+  // ceiling every section is below it too, and the scan would be a sequential
+  // read bought for nothing.
+  const parsedBytes =
+    size > constants.MAX_STRING_LENGTH ? await parsedSectionBytes(file, size) : size;
+  const judged = parsedBytes ?? size;
+  if (judged > constants.MAX_STRING_LENGTH) {
+    const scope =
+      parsedBytes === null
+        ? `heap snapshot is ${mb(size)} MB`
+        : `heap snapshot parses ${mb(parsedBytes)} MB of its ${mb(size)} MB`;
     throw new SnapshotError(
-      `heap snapshot is ${(size / (1024 * 1024)).toFixed(0)} MB, past the ` +
-        `${(constants.MAX_STRING_LENGTH / (1024 * 1024)).toFixed(0)} MB a single string can ` +
+      `${scope}, past the ${mb(constants.MAX_STRING_LENGTH)} MB a single string can ` +
         `hold, so it cannot be parsed: ${file}. The measurement itself is unaffected — ` +
         `only the snapshot diff, which names the retaining object, is unavailable. ` +
-        `Lower --requests or --cycles to keep the heap smaller if you need it`
+        `Lower --requests or --cycles to keep the heap smaller if you need it`,
+      judged
     );
   }
 

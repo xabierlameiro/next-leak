@@ -10,12 +10,13 @@ import { runBuildMeasurement } from "./build-run.js";
 import { discardPendingSnapshotsSync } from "./build-snapshot.js";
 import { helpText, parseCliArgs, type ParsedCli } from "./cli-args.js";
 import { checkRuntime } from "./guards.js";
+import { runSelfCheck } from "./self-check.js";
 import { killActiveChildren } from "./launcher.js";
 import { formatReport } from "./report.js";
 import { RouteConfigError } from "./route-config.js";
 import { discoverPagesRoutes, discoverRoutes } from "./manifests.js";
 import { hasPlaceholders, renderConfigSkeleton } from "./route-guidance.js";
-import { runMeasurement } from "./runner.js";
+import { runMeasurement, freePort } from "./runner.js";
 import { TargetError, validateTarget } from "./target.js";
 
 const require = createRequire(import.meta.url);
@@ -214,10 +215,36 @@ async function main(): Promise<void> {
   const quickPreset = options.quick
     ? { loadRequests: 2000, cycles: 4, idleMs: 8000 }
     : {};
+  const bootstrapPath = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
+
+  // Run before the app, not after: a harness that cannot see its own planted
+  // leak makes every verdict that follows worthless, and measuring the app
+  // first would spend the time to produce them anyway.
+  let harnessVerifiedAt: number | undefined;
+  if (options.selfCheck) {
+    console.error("· self-check: measuring a planted leak to prove the harness works here");
+    const check = await runSelfCheck({
+      bootstrapPath,
+      appPort: await freePort(),
+      ...(options.requests !== null && { loadRequests: options.requests }),
+      ...(options.connections !== null && { connections: options.connections }),
+      ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),
+      ...(options.maxOldSpaceMb !== null && { maxOldSpaceMb: options.maxOldSpaceMb }),
+    });
+    console.error(`· ${check.summary}`);
+    if (!check.passed) {
+      console.error(`error: ${check.summary}`);
+      process.exitCode = 1;
+      return;
+    }
+    harnessVerifiedAt = check.growthPer1000Requests;
+  }
+
   const report = await runMeasurement({
     appDir: options.appDir,
-    bootstrapPath: fileURLToPath(new URL("./bootstrap.js", import.meta.url)),
+    bootstrapPath,
     signal: aborter.signal,
+    ...(harnessVerifiedAt !== undefined && { harnessVerifiedAt }),
     ...quickPreset,
     ...(options.routes !== null && { routeFilter: options.routes }),
     ...(options.cycles !== null && { cycles: options.cycles }),
