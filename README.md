@@ -374,11 +374,12 @@ than a false accusation, and the warnings are on the report either way.
 three routes measured with `--self-check`, on the reproduction this repo tests
 against:
 
-<img src="https://raw.githubusercontent.com/xabierlameiro/next-leak/main/docs/report-example.png" alt="next-leak HTML report: two stable routes and one leaking at +471 MB per 1000 requests, with the objects it retains" width="720">
+<img src="https://raw.githubusercontent.com/xabierlameiro/next-leak/main/docs/report-example.png" alt="next-leak HTML report: two stable routes and one leaking at +471 MB per 1000 requests, attributed to lib/sink.ts" width="720">
 
 Per route it draws the post-GC curve, the peak reached *during* each cycle
 across heap, external, arrayBuffers and RSS, and what grew between the two
-snapshots with its retained size. No JavaScript, no external requests, no
+snapshots — with its retained size and, when the source maps resolve it, the
+file that owns it. No JavaScript, no external requests, no
 fonts to fetch: it opens offline from a CI artifact. The file above is
 [`docs/report-example.html`](./docs/report-example.html) if you want to poke at
 the markup.
