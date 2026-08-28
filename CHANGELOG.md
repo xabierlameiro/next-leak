@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.10.0](https://github.com/xabierlameiro/next-leak/compare/v0.9.0...v0.10.0) (2026-08-28)
+
+
+### Features
+
+* **self-check:** prove the harness works before trusting a stable verdict ([91f4068](https://github.com/xabierlameiro/next-leak/commit/91f4068562cb6fc5f8b148ec6071fa7a667694e9))
+* tell a filling cache from a leak, and prove the harness works ([147678e](https://github.com/xabierlameiro/next-leak/commit/147678e5bcc64f894f45a42de74745c7372b6531))
+* **trend:** tell a filling cache from a leak ([284d539](https://github.com/xabierlameiro/next-leak/commit/284d539bef22fa7cb0d2635f60b17b56ce587348))
+
+
+### Bug Fixes
+
+* **build:** point the stripped-cap warning at NODE_OPTIONS ([133d9ba](https://github.com/xabierlameiro/next-leak/commit/133d9ba75297362cd06abc4eaf3bf9a6779d1d3d))
+* **heap-diff:** judge a snapshot by what actually gets parsed ([825641b](https://github.com/xabierlameiro/next-leak/commit/825641ba8fc25c04beb2ff7c0d599bf41933f8ba))
+* **heap-diff:** keep scanning past the first chunk to find edges ([319afda](https://github.com/xabierlameiro/next-leak/commit/319afdafa16d5b29afad895f4620ab9c9e2d03a3))
+
 ## [0.9.0](https://github.com/xabierlameiro/next-leak/compare/v0.8.0...v0.9.0) (2026-08-27)
 
 
