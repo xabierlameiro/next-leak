@@ -567,6 +567,29 @@ describe("attribution gaps in the summary", () => {
   it("says nothing when every measured route was attributable", () => {
     expect(formatReport(makeRunReport())).not.toContain("finished without attribution");
   });
+
+  // "Could not be read" sends the reader looking for a file that was never
+  // written. The two failures need different next steps, so they read
+  // differently.
+  it("says a snapshot was never taken, rather than never read", () => {
+    const run = makeRunReport();
+    const routes = run.routes.map((route) =>
+      route.status === "measured" && route.route === "/leaky"
+        ? {
+            ...route,
+            diff: null,
+            attributionGap: {
+              reason: "snapshot-unavailable" as const,
+              detail: "control channel /snapshot?name=after wrote nothing for 300s",
+            },
+          }
+        : route
+    );
+    const output = formatReport({ ...run, routes });
+
+    expect(output).toContain("their final snapshot could not be taken");
+    expect(output).not.toContain("their snapshot could not be read");
+  });
 });
 
 // A page of `stable` verdicts is the one output that reads the same whether

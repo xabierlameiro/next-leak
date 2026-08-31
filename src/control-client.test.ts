@@ -1,11 +1,16 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   deadlineForOperation,
   requestGc,
   requestMemory,
   requestSnapshot,
+  requestWatchingFile,
   requestWithDeadline,
+  snapshotPathFor,
 } from "./control-client.js";
 
 let server: http.Server | undefined;
@@ -95,7 +100,7 @@ describe("control channel deadlines", () => {
       // Accept the request, never respond: the wedged-child shape.
     });
     await expect(requestWithDeadline(port, "/gc", 200)).rejects.toThrow(
-      /did not answer within 0s — the measured process is wedged, or this snapshot is larger than anything this tool has been validated on/
+      /did not answer within 0s — the measured process is wedged or its event loop is blocked/
     );
   });
 
@@ -122,4 +127,120 @@ describe("control channel deadlines", () => {
     });
     await expect(requestWithDeadline(port, "/mem", 300)).rejects.toThrow(/within 0s/);
   }, 10_000);
+});
+
+/**
+ * `v8.writeHeapSnapshot` blocks the measured process's event loop until the
+ * file is on disk, so the channel goes silent exactly while it is doing the
+ * work. A wall-clock bound cannot tell that apart from a wedged child, and got
+ * it wrong in the direction that matters: measured on the
+ * vercel/next.js#84648 reproduction, the old 1800 s bound failed a leaking
+ * route whose 267 MB snapshot landed intact moments later. The bigger the
+ * leak, the bigger the snapshot — so it failed hardest on the runs worth
+ * keeping. Bytes reaching disk are the heartbeat instead.
+ */
+describe("snapshot waits judged by progress on disk", () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir !== undefined) {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  async function tempDir(): Promise<string> {
+    dir = await mkdtemp(path.join(tmpdir(), "next-leak-watch-"));
+    return dir;
+  }
+
+  it("keeps waiting while the file is still growing, past the stall window", async () => {
+    const workDir = await tempDir();
+    const file = snapshotPathFor(workDir, "after");
+    // Answers only after several stall windows would have expired. A growing
+    // file has to be enough to hold the wait open that long.
+    const port = await listen((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            file,
+            sample: { gcExposed: true, heapUsed: 1, rss: 1, external: 1, arrayBuffers: 1 },
+          })
+        );
+      }, 400);
+    });
+    let bytes = 0;
+    const growing = setInterval(() => {
+      bytes += 1024;
+      void writeFile(file, Buffer.alloc(bytes));
+    }, 20);
+    try {
+      const answer = await requestWatchingFile(port, "/snapshot?name=after", 60_000, {
+        file,
+        stallMs: 100,
+        hardCapMs: 60_000,
+        pollMs: 10,
+      });
+      expect(answer).toMatchObject({ file });
+    } finally {
+      clearInterval(growing);
+    }
+  });
+
+  it("gives up on a file that stops growing, and says how far it got", async () => {
+    const workDir = await tempDir();
+    const file = snapshotPathFor(workDir, "after");
+    await writeFile(file, Buffer.alloc(2 * 1_048_576));
+    const port = await listen(() => {
+      // Accept and never answer: the wedged-child shape.
+    });
+    await expect(
+      requestWatchingFile(port, "/snapshot?name=after", 60_000, {
+        file,
+        stallMs: 100,
+        hardCapMs: 60_000,
+        pollMs: 10,
+      })
+    ).rejects.toThrow(/wrote nothing for 0s \(2\.0 MB on disk\) — the measured process is wedged/);
+  });
+
+  it("still ends an unattended run when the file grows forever", async () => {
+    const workDir = await tempDir();
+    const file = snapshotPathFor(workDir, "after");
+    const port = await listen(() => {
+      // Never answers; the file below never stops growing either.
+    });
+    let bytes = 0;
+    const growing = setInterval(() => {
+      bytes += 1024;
+      void writeFile(file, Buffer.alloc(bytes));
+    }, 10);
+    try {
+      await expect(
+        requestWatchingFile(port, "/snapshot?name=after", 60_000, {
+          file,
+          stallMs: 60_000,
+          hardCapMs: 200,
+          pollMs: 10,
+        })
+      ).rejects.toThrow(/was still writing after .* — giving up so an unattended run can end/);
+    } finally {
+      clearInterval(growing);
+    }
+  });
+
+  it("reports nothing written when the snapshot file never appears", async () => {
+    const workDir = await tempDir();
+    const port = await listen(() => {
+      // Accept and never answer, with no file ever created.
+    });
+    await expect(
+      requestWatchingFile(port, "/snapshot?name=after", 60_000, {
+        file: snapshotPathFor(workDir, "after"),
+        stallMs: 100,
+        hardCapMs: 60_000,
+        pollMs: 10,
+      })
+    ).rejects.toThrow(/nothing written yet/);
+  });
 });
