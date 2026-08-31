@@ -160,7 +160,14 @@ export type RitualResult = {
   /** Trend over `unreclaimedSamples`. Reported, never the verdict. */
   unreclaimedTrend: TrendResult;
   baselineSnapshot: string;
+  /**
+   * Empty when the final snapshot could not be taken. The curve is already
+   * complete by then, so the run still has a verdict — only the attribution
+   * is lost. `snapshotFailure` says why.
+   */
   afterSnapshot: string;
+  /** Why `afterSnapshot` is empty, when it is. */
+  snapshotFailure?: string;
   trend: TrendResult;
   requestsPerCycle: number;
   /**
@@ -430,6 +437,7 @@ export async function runRitual(
   let unreclaimedLost = false;
   const peaks: PeakSample[] = [];
   let afterSnapshot = "";
+  let snapshotFailure: string | undefined;
   let baselineSnapshot = "";
   let cyclesCompleted = 0;
 
@@ -445,7 +453,7 @@ export async function runRitual(
       })
     );
     const baseline = await timed("baseline snapshot", () =>
-      requestSnapshot(app.controlPort, "baseline")
+      requestSnapshot(app.controlPort, "baseline", options.workDir)
     );
 
     memorySamples.push(baseline.sample);
@@ -485,11 +493,20 @@ export async function runRitual(
       settleOutcomes.push({ phase: `cycle ${cycle}`, ...settle });
 
       if (cycle === cycles) {
-        const after = await timed("after snapshot", () =>
-          requestSnapshot(app.controlPort, "after")
-        );
-        afterSnapshot = after.file;
-        memorySamples.push(after.sample);
+        // The curve is complete except for this last point, so a failure here
+        // must not cost the whole route. Fall back to a plain GC sample: the
+        // verdict survives, only the diff — and with it the attribution — is
+        // lost. Same trade the diff step already makes one stage later.
+        try {
+          const after = await timed("after snapshot", () =>
+            requestSnapshot(app.controlPort, "after", options.workDir)
+          );
+          afterSnapshot = after.file;
+          memorySamples.push(after.sample);
+        } catch (cause) {
+          snapshotFailure = cause instanceof Error ? cause.message : String(cause);
+          memorySamples.push(await requestGc(app.controlPort));
+        }
       } else {
         memorySamples.push(await requestGc(app.controlPort));
       }
@@ -526,6 +543,7 @@ export async function runRitual(
           ),
       baselineSnapshot,
       afterSnapshot,
+      ...(snapshotFailure !== undefined && { snapshotFailure }),
       trend: classifyMemoryTrend(samples, externalSamples, trendOptions),
       requestsPerCycle: loadRequests,
       minGrowthPerCycle,

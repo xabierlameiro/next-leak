@@ -33,6 +33,8 @@ async function makeHarness(
     failLoadCall?: number;
     underLoadHeap?: number;
     failMemory?: boolean;
+    /** Refuse the snapshot with this label, as a wedged child would. */
+    failSnapshot?: string;
     /** Per-poll /gc readings; overrides the per-cycle script when present. */
     gcPollScript?: number[];
   } = {}
@@ -87,6 +89,11 @@ async function makeHarness(
     }
     const name = url.searchParams.get("name") ?? "?";
     events.push(`snapshot:${name}`);
+    if (options.failSnapshot === name) {
+      response.statusCode = 500;
+      response.end(JSON.stringify({ error: "wedged" }));
+      return;
+    }
     response.end(JSON.stringify({ file: `/fake/${name}.heapsnapshot`, sample }));
   });
   const controlPort = await new Promise<number>((resolve, reject) => {
@@ -410,6 +417,24 @@ describe("peak capture", () => {
     // the empty peak says plainly that nothing was read.
     expect(result.trend.verdict).toBe("leak");
     expect(result.peaks.every((peak) => peak.polls === 0)).toBe(true);
+  });
+
+  it("keeps the verdict when the final snapshot cannot be taken", async () => {
+    // The curve is complete by the time the last snapshot is asked for, so
+    // losing it must cost the attribution and nothing else. Measured on
+    // vercel/next.js#84648, where the whole route was reported as a failure
+    // because its snapshot arrived after the deadline.
+    harness = await makeHarness([29 * MB, 31 * MB, 33 * MB, 35 * MB], {
+      failSnapshot: "after",
+    });
+    const result = await runRitual(await baseOptions(), harness.deps);
+
+    expect(result.trend.verdict).toBe("leak");
+    expect(result.afterSnapshot).toBe("");
+    expect(result.snapshotFailure).toMatch(/responded 500/);
+    // The last point still exists — taken by a plain GC instead of a snapshot —
+    // so the series is baseline plus one per cycle, exactly as a clean run.
+    expect(result.memorySamples).toHaveLength(5);
   });
 });
 

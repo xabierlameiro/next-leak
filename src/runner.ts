@@ -155,7 +155,12 @@ export type RouteReport =
        * attribute.
        */
       attributionGap?: {
-        reason: "snapshot-unreadable";
+        /**
+         * `snapshot-unreadable`: both snapshots exist, the diff refused them.
+         * `snapshot-unavailable`: the final snapshot was never taken, so there
+         * is nothing to diff. Either way the verdict below still stands.
+         */
+        reason: "snapshot-unreadable" | "snapshot-unavailable";
         detail: string;
       };
       /** Null when there is no diff or no module registry. */
@@ -513,7 +518,16 @@ async function measureRoute(
 
   let diff: HeapDiff | null = null;
   let attributionGap: MeasuredRoute["attributionGap"];
-  if (verdict !== "stable" || options.diffAll === true) {
+  if (result.snapshotFailure !== undefined) {
+    // The measurement finished; only its last snapshot did not. Say so and
+    // keep the verdict, rather than reporting the route as a failure and
+    // throwing away every cycle that did complete.
+    attributionGap = {
+      reason: "snapshot-unavailable",
+      detail: result.snapshotFailure,
+    };
+    progress(`no snapshot to attribute for ${route.path}: ${result.snapshotFailure}`);
+  } else if (verdict !== "stable" || options.diffAll === true) {
     progress(`diffing snapshots for ${route.path}`);
     try {
       diff = await deps.diff(result.baselineSnapshot, result.afterSnapshot);
