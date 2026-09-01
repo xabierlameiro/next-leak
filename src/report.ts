@@ -355,9 +355,21 @@ function attributionGapLine(report: RunReport): string[] {
     return [];
   }
   const names = gaps.map((route) => route.route).join(", ");
+  // Two different failures, and the difference tells the reader what to try
+  // next: an unreadable snapshot is on disk and too big to parse, a missing
+  // one was never written because the process would not hand it over.
+  const unwritten = gaps.filter(
+    (route) => route.status === "measured" && route.attributionGap?.reason === "snapshot-unavailable"
+  ).length;
+  const cause =
+    unwritten === gaps.length
+      ? "their final snapshot could not be taken"
+      : unwritten === 0
+        ? "their snapshot could not be read"
+        : "their final snapshot could not be taken or read";
   return [
-    `${gaps.length} route(s) finished without attribution because their snapshot ` +
-      `could not be read (${names}) — the verdicts stand, what retains the memory is unnamed`,
+    `${gaps.length} route(s) finished without attribution because ${cause} ` +
+      `(${names}) — the verdicts stand, what retains the memory is unnamed`,
   ];
 }
 

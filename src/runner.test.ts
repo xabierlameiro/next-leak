@@ -1389,6 +1389,38 @@ describe("attribution gaps are distinguishable", () => {
     expect(route.attributionGap).toBeUndefined();
   });
 
+  it("records a snapshot that was never taken as its own kind of gap", async () => {
+    // Distinct from `snapshot-unreadable`: there is no file to parse, because
+    // the measured process never handed one over. The cycles that did complete
+    // still carry a verdict, and the run must keep it — reported on
+    // vercel/next.js#84648, where the route came back as a bare failure.
+    const appDir = await makeAppDir({ "/leaky/page": "app/leaky/page.js" });
+    let diffed = false;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => ({
+          ...ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]),
+          afterSnapshot: "",
+          snapshotFailure: "control channel /snapshot?name=after wrote nothing for 300s",
+        }),
+        diff: async () => {
+          diffed = true;
+          throw new Error("must not diff without a snapshot");
+        },
+      }
+    );
+
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("route should be measured");
+    expect(route.trend.verdict).toBe("leak");
+    expect(route.attributionGap?.reason).toBe("snapshot-unavailable");
+    expect(route.attributionGap?.detail).toContain("wrote nothing for 300s");
+    expect(route.diff).toBeNull();
+    expect(diffed).toBe(false);
+  });
+
   it("persists the gap to run.json", async () => {
     const { SnapshotError } = await import("./heap-diff.js");
     const report = await runWithDiff(async () => {
