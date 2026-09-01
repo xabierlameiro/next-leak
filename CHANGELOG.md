@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/xabierlameiro/next-leak/compare/v0.10.0...v0.10.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* **control-client:** judge a snapshot wait by bytes on disk, not the clock ([5758aa6](https://github.com/xabierlameiro/next-leak/commit/5758aa6d0746c2da69c10886d55775ec7954c1d3))
+* judge a snapshot wait by bytes on disk, not the clock ([b652944](https://github.com/xabierlameiro/next-leak/commit/b652944ef2d33b1ea0e896470292e247e11ac9d7))
+
 ## [0.10.0](https://github.com/xabierlameiro/next-leak/compare/v0.9.0...v0.10.0) (2026-08-28)
 
 
