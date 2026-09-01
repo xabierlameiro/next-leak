@@ -440,6 +440,17 @@ through the build's source maps.
   that is almost nothing. A 1342.9 MB capture of a leaking route parsed 2.4 MB
   of JSON and diffs fine; a 2227.5 MB one whose `strings` section alone was
   868.9 MB is refused, and the message names 869 MB rather than 2227 MB.
+- **A slow snapshot is not a failed route.** `v8.writeHeapSnapshot` blocks the
+  measured process until the file is on disk, so the control channel goes
+  silent for as long as the write takes — and the worse the leak, the longer
+  that is. The wait is judged by bytes reaching disk, not by a clock: a
+  snapshot that is still growing is given as long as it needs, while five
+  minutes with nothing written is treated as a wedged process and said so. If
+  the final snapshot cannot be taken at all, the run keeps its verdict — the
+  curve is already complete by then — and reports the missing attribution
+  instead of discarding the route. Measured on the
+  [#84648](https://github.com/vercel/next.js/issues/84648) reproduction, whose
+  4.2 GB capture outlasted every fixed deadline worth setting.
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
 - Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.0/16.3.1 and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). Most recent measurements, 2026-08-17/18: the runtime path on 16.2.12 and 16.3.1-canary.18, the build path on 16.2.12 and 16.3.1. The contracts it relies on are stable since Next 13–14, but older versions are untested.
