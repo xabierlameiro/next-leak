@@ -248,6 +248,7 @@ async function main(): Promise<void> {
     ...quickPreset,
     ...(options.routes !== null && { routeFilter: options.routes }),
     ...(options.cycles !== null && { cycles: options.cycles }),
+    ...(options.repeat !== null && { repeat: options.repeat }),
     ...(options.requests !== null && { loadRequests: options.requests }),
     ...(options.connections !== null && { connections: options.connections }),
     ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),

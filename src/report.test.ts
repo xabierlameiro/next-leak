@@ -628,3 +628,39 @@ describe("harness verification in the summary", () => {
     expect(formatReport(makeRunReport())).not.toContain("nothing verified the harness");
   });
 });
+
+describe("formatReport repetitions", () => {
+  const withRepetitions = (repetitions: unknown) => {
+    const report = makeRunReport();
+    const leaky = report.routes[1];
+    if (leaky?.status !== "measured") throw new Error("fixture broken");
+    leaky.repetitions = repetitions as never;
+    return formatReport(report);
+  };
+
+  it("says nothing when the route was measured once", () => {
+    expect(formatReport(makeRunReport())).not.toContain("repetitions");
+  });
+
+  // Same verdict, different magnitudes: the case vercel/next.js#97424 produced,
+  // where two runs read 14.3 and 14.4 and a third read 6.5.
+  it("prints the spread even when every repetition agreed", () => {
+    const output = withRepetitions([
+      { verdict: "leak", growthPer1000Requests: 0.5 * MB },
+      { verdict: "leak", growthPer1000Requests: 1.25 * MB },
+      { verdict: "leak", growthPer1000Requests: 0.8 * MB },
+    ]);
+    expect(output).toContain("across 3 repetitions");
+    expect(output).toContain("all 3 agreed on leak");
+    expect(output).toContain("+0.50 to +1.25 MB/1000 req");
+  });
+
+  it("names the verdicts when repetitions disagree", () => {
+    const output = withRepetitions([
+      { verdict: "leak", growthPer1000Requests: 0.9 * MB },
+      { verdict: "stable", growthPer1000Requests: 0.02 * MB },
+    ]);
+    expect(output).toContain("they disagreed (leak, stable)");
+    expect(output).toContain("no single verdict is reported");
+  });
+});

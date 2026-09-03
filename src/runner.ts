@@ -43,6 +43,13 @@ import { validateTarget, type ValidatedTarget } from "./target.js";
 import { planRevalidation, revalidateSecondsFor } from "./isr.js";
 import { minGrowthFor, type TrendResult, type TrendVerdict } from "./trend.js";
 
+/** What one repetition of a route concluded, for disclosing the spread. */
+export type RepetitionSummary = {
+  verdict: TrendVerdict;
+  /** Growth normalized by traffic, so repetitions stay comparable. */
+  growthPer1000Requests: number;
+};
+
 export type RouteReport =
   | { route: string; status: "skipped"; reason: string }
   | { route: string; status: "failed"; reason: string }
@@ -104,6 +111,12 @@ export type RouteReport =
       unreclaimedTrend: TrendResult;
       /** Requests each cycle served — what the growth rates normalize by. */
       requestsPerCycle: number;
+      /**
+       * One entry per repetition when `repeat` was greater than 1, in the
+       * order they ran. Absent for a single measurement, so `run.json` keeps
+       * its existing shape unless repetition was asked for.
+       */
+      repetitions?: RepetitionSummary[];
       /**
        * The early-disconnect regime, when the route asked for one. Recorded
        * because a curve measured with cuts landing mid-stream and one measured
@@ -243,6 +256,13 @@ export type RunOptions = {
    * call it. Default true: the run should answer the question it was asked.
    */
   resolveInconclusive?: boolean;
+  /**
+   * How many times to measure each route, each from a fresh server. Default 1.
+   *
+   * Distinct from `cycles`, which watches a single process for longer. The
+   * variance that makes a number unpublishable is between processes.
+   */
+  repeat?: number;
   /**
    * Growth the self-check measured on its planted leak, when one ran before
    * this measurement. Its presence is what lets the report say a `stable`
@@ -447,7 +467,7 @@ async function measureRoute(
   route: DiscoveredRoute,
   requestPath: string,
   index: number,
-  pass: { cycles: number; dirSuffix: string } | undefined = undefined
+  pass: { cycles?: number; dirSuffix: string } | undefined = undefined
 ): Promise<RouteReport> {
   const { deps, options, target, workDir, routeConfig, registry, nextVersion, progress } = context;
   // An ISR route serves its cache unless the request carries the build's own
@@ -477,7 +497,7 @@ async function measureRoute(
     ...(options.warmupRequests !== undefined && { warmupRequests: options.warmupRequests }),
     ...(options.loadRequests !== undefined && { loadRequests: options.loadRequests }),
     ...(options.connections !== undefined && { connections: options.connections }),
-    ...(pass !== undefined
+    ...(pass?.cycles !== undefined
       ? { cycles: pass.cycles }
       : options.cycles !== undefined && { cycles: options.cycles }),
     ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
@@ -550,7 +570,7 @@ async function measureRoute(
     route: route.path,
     status: "measured",
     requestPath,
-    ...(pass !== undefined && { resolvedWithCycles: pass.cycles }),
+    ...(pass?.cycles !== undefined && { resolvedWithCycles: pass.cycles }),
     samples: result.samples,
     memorySamples: result.memorySamples,
     peaks: result.peaks,
@@ -646,7 +666,7 @@ async function routeReportFor(
     progress(`not measuring ${label}: ${plan.reason}`);
     return { route: route.path, status: "not-exercised", reason: plan.reason };
   }
-  return measureWithResolution(context, route, requestPath, index, label);
+  return measureRepeatedly(context, route, requestPath, index, label);
 }
 
 /**
@@ -675,18 +695,125 @@ function reasonToResolve(verdict: TrendVerdict): string | null {
 }
 
 /** Measures a route, and goes back for a longer look when the verdict earns one. */
-async function measureWithResolution(
+/**
+ * Measures a route `repeat` times, each from its own server, and judges it on
+ * all of them.
+ *
+ * `resolveInconclusive` already re-measures with more cycles, but extra cycles
+ * run inside the same process, so anything that varies with process startup is
+ * held fixed across every one of them. The spreads that make a number
+ * unpublishable are between processes: three runs of one build on
+ * vercel/next.js#84648 peaked at 602, 826 and 875 MB, and a fourth was flat at
+ * 39 MB.
+ *
+ * Each repetition runs the whole per-route measurement, its own inner
+ * re-measurement included. Suppressing that would mean the repetitions are not
+ * measuring what a normal run measures, so their agreement would say nothing
+ * about a normal run.
+ */
+async function measureRepeatedly(
   context: MeasurementContext,
   route: DiscoveredRoute,
   requestPath: string,
   index: number,
   label: string
 ): Promise<RouteReport> {
+  const repeat = context.options.repeat ?? 1;
+  if (repeat <= 1) {
+    return measureWithResolution(context, route, requestPath, index, label);
+  }
+
+  const passes: RouteReport[] = [];
+  for (let attempt = 1; attempt <= repeat; attempt += 1) {
+    context.progress(`repetition ${attempt}/${repeat} of ${label}`);
+    passes.push(
+      await measureWithResolution(context, route, requestPath, index, label, `-rep${attempt}`)
+    );
+    // A Ctrl+C mid-way keeps what has been measured rather than discarding it;
+    // the aggregate then judges the repetitions that actually ran.
+    if (context.options.signal?.aborted === true) {
+      break;
+    }
+  }
+  return aggregateRepetitions(passes);
+}
+
+/**
+ * Combines repeated measurements of one route into the verdict it earned.
+ *
+ * Unanimity or nothing. Taking the most severe would let one noisy repetition
+ * in five accuse a healthy route, and a false accusation is the expensive
+ * error; taking the majority would discard exactly the disagreement the
+ * repetitions were run to find. When they disagree the honest report is that
+ * the measurement did not settle, which is what `inconclusive` means and what
+ * already routes to re-measurement and away from issue drafts.
+ */
+export function aggregateRepetitions(passes: readonly RouteReport[]): RouteReport {
+  const first = passes[0];
+  if (first === undefined) {
+    return { route: "", status: "failed", reason: "no repetition produced a result" };
+  }
+  const measured = passes.filter((pass) => pass.status === "measured");
+  // A repetition that failed or died of heap is not a disagreement to average
+  // away — the first non-measured outcome is the finding, and it is returned
+  // as it stands.
+  if (measured.length !== passes.length || measured.length === 0) {
+    return passes.find((pass) => pass.status !== "measured") ?? first;
+  }
+
+  const repetitions: RepetitionSummary[] = measured.map((pass) => ({
+    verdict: pass.trend.verdict,
+    growthPer1000Requests: (pass.trend.growthPerCycle / pass.requestsPerCycle) * 1000,
+  }));
+  const verdicts = [...new Set(repetitions.map((entry) => entry.verdict))];
+  const winner = measured[0];
+  if (winner === undefined) {
+    return first;
+  }
+  if (verdicts.length === 1) {
+    return { ...winner, repetitions };
+  }
+
+  const observed = verdicts.join(", ");
+  return {
+    ...winner,
+    repetitions,
+    confidence: {
+      ...winner.confidence,
+      level: "low",
+      warnings: [
+        ...winner.confidence.warnings,
+        {
+          code: "repetitions-disagree",
+          detail:
+            `${repetitions.length} repetitions of this route disagreed (${observed}) — ` +
+            `the measurement did not settle, so no single verdict is reported`,
+        },
+      ],
+      supersededVerdict: "inconclusive",
+    },
+  };
+}
+
+async function measureWithResolution(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  requestPath: string,
+  index: number,
+  label: string,
+  repetitionSuffix = ""
+): Promise<RouteReport> {
   const { progress } = context;
   try {
     const asPath = requestPath === route.path ? "" : ` as ${requestPath}`;
     progress(`measuring ${label}${asPath}`);
-    const first = await measureRoute(context, route, requestPath, index);
+    const first = await measureRoute(
+      context,
+      route,
+      requestPath,
+      index,
+      repetitionSuffix === "" ? undefined : { dirSuffix: repetitionSuffix }
+    );
     const reason = first.status === "measured" ? reasonToResolve(effectiveVerdict(first)) : null;
     if (first.status !== "measured" || context.options.resolveInconclusive === false || reason === null) {
       return first;
@@ -702,7 +829,7 @@ async function measureWithResolution(
     try {
       return await measureRoute(context, route, requestPath, index, {
         cycles,
-        dirSuffix: "-resolve",
+        dirSuffix: `${repetitionSuffix}-resolve`,
       });
     } catch (cause) {
       // The second pass is a bonus, not a bet: losing it (port race lost

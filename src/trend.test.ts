@@ -367,6 +367,67 @@ describe("saturating growth", () => {
   });
 });
 
+describe("saturation reached at the tail", () => {
+  // Field series, Next 16.3.4 on 2026-09-03: a `use cache` route at 3000
+  // requests per cycle, gate 262 144 B. Deltas
+  // [598048, 677536, 465744, 435992, 892616, 447464, 252504]. The closing
+  // cycle is 96% of the gate, so `allGrow` was false, saturation was never
+  // evaluated, and stepwise detection claimed it — a curve that flattens has
+  // no drawdown. The verdict was `leak` on a route whose growth had stopped
+  // reaching the leak rate. A control fixture with `'use cache'` removed
+  // entirely reported the same +0.17 MB/1000 req, so this was never even
+  // cache residency.
+  const FIELD_SAMPLES = [
+    30907912, 32686936, 33284984, 33962520, 34428264, 34864256, 35756872, 36204336, 36456840,
+  ];
+
+  it("calls the field series saturating once the tail is admissible", () => {
+    const result = classifyTrend(FIELD_SAMPLES, { minGrowthPerCycle: minGrowthFor(3000) });
+    expect(result.deltas).toEqual([598048, 677536, 465744, 435992, 892616, 447464, 252504]);
+    expect(result.verdict).toBe("saturating");
+  });
+
+  it("bends despite stepping up twice on the way down", () => {
+    // The same shape, stated plainly: monotonicity is not required, arrival
+    // and direction are.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 45 * MB, 49 * MB, 58 * MB, 61 * MB, 62 * MB];
+    const result = classifyTrend(samples);
+    expect(result.deltas).toEqual([8 * MB, 7 * MB, 4 * MB, 9 * MB, 3 * MB, 1 * MB]);
+    expect(result.verdict).toBe("saturating");
+  });
+
+  it("keeps a halt a leak even when the rest of the curve bends", () => {
+    // Identical to the bend above except the closing cycle is 0: a wall, not
+    // a curve, and stepwise detection keeps it.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 45 * MB, 49 * MB, 58 * MB, 61 * MB, 61 * MB];
+    const result = classifyTrend(samples);
+    expect(result.deltas).toEqual([8 * MB, 7 * MB, 4 * MB, 9 * MB, 3 * MB, 0]);
+    expect(result.verdict).toBe("leak");
+  });
+
+  it("refuses a series that never grew at the leak rate to begin with", () => {
+    // Deltas well under the gate throughout: nothing to decelerate from, and
+    // small consistent drift is measurement noise, not a store filling up.
+    const samples = [
+      10 * MB,
+      11 * MB,
+      11 * MB + 60 * KIB,
+      11 * MB + 100 * KIB,
+      11 * MB + 120 * KIB,
+    ];
+    expect(classifyTrend(samples).verdict).not.toBe("saturating");
+  });
+
+  it("refuses a decline that arrives nowhere", () => {
+    // Later cycles below earlier ones, but the closing cycle is still 75% of
+    // the opening one: running slower, not running out.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 45.5 * MB, 52.5 * MB, 58.5 * MB];
+    const result = classifyTrend(samples);
+    expect(result.deltas).toEqual([8 * MB, 7.5 * MB, 7 * MB, 6 * MB]);
+    expect(result.verdict).toBe("leak");
+  });
+});
+
 describe("cache-driven context", () => {
   it("records the context without moving the verdict", () => {
     // Same series, both ways round: the flag is disclosure, not a threshold.

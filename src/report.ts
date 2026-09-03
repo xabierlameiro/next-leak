@@ -86,6 +86,31 @@ function revalidationLines(route: MeasuredRouteView): string[] {
  * Next 16.3.3, all of it the cache; the same route with the payload removed
  * measured +88 MB. Without saying so, the first number reads as a leak.
  */
+/**
+ * What repeated measurements of this route came out as.
+ *
+ * Printed even when every repetition agreed, because agreeing on the verdict
+ * is not agreeing on the number: vercel/next.js#97424 produced the same
+ * verdict across runs whose retained-per-render differed by 2.5×. Publishing
+ * the midpoint of that as a measurement is the error this exists to prevent.
+ */
+function repetitionLines(route: MeasuredRouteView): string[] {
+  const repetitions = route.repetitions;
+  if (repetitions === undefined || repetitions.length < 2) {
+    return [];
+  }
+  const rates = repetitions.map((entry) => entry.growthPer1000Requests);
+  const low = Math.min(...rates);
+  const high = Math.max(...rates);
+  const verdicts = [...new Set(repetitions.map((entry) => entry.verdict))];
+  const agreement =
+    verdicts.length === 1
+      ? `all ${repetitions.length} agreed on ${verdicts[0]}`
+      : `they disagreed (${verdicts.join(", ")}), so no single verdict is reported`;
+  const range = `${low >= 0 ? "+" : ""}${(low / MB).toFixed(2)} to ${formatGrowth(high)}`;
+  return [`      across ${repetitions.length} repetitions: ${range} — ${agreement}`];
+}
+
 function cacheLines(route: MeasuredRouteView): string[] {
   const lines: string[] = [];
   if (route.trend.verdict === "saturating") {
@@ -267,6 +292,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
     `  ${VERDICT_ICON[verdict]} ${route.route}  ${verdict}  (${formatGrowth(
       route.growthPer1000Requests
     )})  heap ${curve}${resolved}`,
+    ...repetitionLines(route),
     ...revalidationLines(route),
     ...cacheLines(route),
     ...abandonLines(route),
