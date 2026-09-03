@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -148,6 +148,28 @@ describe("snapshot waits judged by progress on disk", () => {
     }
   });
 
+  /**
+   * A writer that only ever makes the file bigger, one append at a time.
+   *
+   * Serialized on purpose: overlapping appends are what let the poll observe a
+   * size that is not monotonic, and the whole point of the file-watching path
+   * is that growth is the signal.
+   */
+  function appendingWriter(file: string): () => Promise<void> {
+    let writing = false;
+    return async () => {
+      if (writing) {
+        return;
+      }
+      writing = true;
+      try {
+        await appendFile(file, Buffer.alloc(1024));
+      } finally {
+        writing = false;
+      }
+    };
+  }
+
   async function tempDir(): Promise<string> {
     dir = await mkdtemp(path.join(tmpdir(), "next-leak-watch-"));
     return dir;
@@ -169,11 +191,19 @@ describe("snapshot waits judged by progress on disk", () => {
         );
       }, 400);
     });
-    let bytes = 0;
-    const growing = setInterval(() => {
-      bytes += 1024;
-      void writeFile(file, Buffer.alloc(bytes));
-    }, 20);
+    // A real snapshot is appended to, never rewritten. `writeFile` truncates to
+    // zero on every tick, and the poll reads that zero: measured on this
+    // pattern, 11 of 138 reads came back 0 and 11 went backwards. Since the
+    // watcher only refreshes its stall clock when the file *grows*, a run of
+    // those reads inside one stall window is enough to declare a healthy child
+    // wedged — which is how this test failed on CI once.
+    const grow = appendingWriter(file);
+    // Growing before the wait starts means the first poll reads a real size
+    // rather than a missing file, and appending every 10 ms leaves the widest
+    // observed gap between growths (30 ms, measured) well inside the 100 ms
+    // stall window without relaxing the window itself.
+    await grow();
+    const growing = setInterval(() => void grow(), 10);
     try {
       const answer = await requestWatchingFile(port, "/snapshot?name=after", 60_000, {
         file,
@@ -210,11 +240,8 @@ describe("snapshot waits judged by progress on disk", () => {
     const port = await listen(() => {
       // Never answers; the file below never stops growing either.
     });
-    let bytes = 0;
-    const growing = setInterval(() => {
-      bytes += 1024;
-      void writeFile(file, Buffer.alloc(bytes));
-    }, 10);
+    const grow = appendingWriter(file);
+    const growing = setInterval(() => void grow(), 10);
     try {
       await expect(
         requestWatchingFile(port, "/snapshot?name=after", 60_000, {
