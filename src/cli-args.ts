@@ -2,6 +2,15 @@ export type CliRunOptions = {
   appDir: string;
   routes: string[] | null;
   cycles: number | null;
+  /**
+   * How many times to measure each route, from a fresh server each time.
+   *
+   * More cycles watch one process for longer; repetitions watch different
+   * processes. The spreads that make a verdict unpublishable live between
+   * processes: vercel/next.js#84648 gave 602, 826 and 875 MB on three runs of
+   * one build and 39 MB on a fourth.
+   */
+  repeat: number | null;
   requests: number | null;
   connections: number | null;
   idleSeconds: number | null;
@@ -41,6 +50,7 @@ const BUILD_COMMAND = "build";
 const RUN_ONLY_FLAGS: ReadonlyArray<[keyof CliRunOptions, string]> = [
   ["routes", "--routes"],
   ["cycles", "--cycles"],
+  ["repeat", "--repeat"],
   ["requests", "--requests"],
   ["connections", "--connections"],
   ["idleSeconds", "--idle"],
@@ -80,6 +90,14 @@ const FLAGS: FlagSpec[] = [
     help: "Only measure these routes — comma-separated templates or prefixes (e.g. /api,/dashboard)",
   },
   { flag: "--cycles", value: "int", argName: "<n>", help: "Load cycles per route (default 4, minimum 3)" },
+  {
+    flag: "--repeat",
+    value: "int",
+    argName: "<n>",
+    help:
+      "Measure each route n times from a fresh server (default 1) — the run takes n times as long, " +
+      "and routes whose repetitions disagree are reported inconclusive",
+  },
   { flag: "--requests", value: "int", argName: "<n>", help: "Requests per cycle (default 5000)" },
   { flag: "--connections", value: "int", argName: "<n>", help: "Concurrent connections (default 100)" },
   { flag: "--idle", value: "int", argName: "<seconds>", help: "Idle seconds before each sample (default 30)" },
@@ -164,6 +182,7 @@ interrupted, 1 on errors.
 /** Upper bounds that keep a mistyped digit from starting a run that never ends. */
 const LIMITS: Record<string, number | undefined> = {
   "--cycles": 100,
+  "--repeat": 10,
   "--requests": 1_000_000,
   "--connections": 10_000,
   "--idle": 3_600,
@@ -218,6 +237,7 @@ function applyNumericFlag(flag: string, value: string, options: CliRunOptions): 
     );
   }
   if (flag === "--cycles") options.cycles = parsed;
+  if (flag === "--repeat") options.repeat = parsed;
   if (flag === "--requests") options.requests = parsed;
   if (flag === "--connections") options.connections = parsed;
   if (flag === "--idle") options.idleSeconds = parsed;
@@ -231,6 +251,7 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--routes":
       return applyRoutesFlag(value, options);
     case "--cycles":
+    case "--repeat":
     case "--requests":
     case "--connections":
     case "--idle":
@@ -313,6 +334,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     appDir: "",
     routes: null,
     cycles: null,
+    repeat: null,
     requests: null,
     connections: null,
     idleSeconds: null,

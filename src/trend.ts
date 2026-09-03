@@ -173,26 +173,62 @@ function isStepwiseGrowth(
  * a `use cache` route that was storing exactly what it was asked to store,
  * against +88 MB/1000 for the same route once the payload was removed.
  *
- * Only reachable from the `allGrow` branch, so it cannot take cases from
- * stepwise detection: a staircase has cycles below the gate by definition.
+ * Three conditions, and each one earns its place:
+ *
+ * - **Every delta strictly positive.** A store that runs out stores *less*; it
+ *   does not stop. A series reaching zero has hit a wall, which is a staircase
+ *   and belongs to stepwise detection — `[8, 3, 0] MB` and the #95094 climb
+ *   both end that way and both are leaks.
+ * - **The opening cycle clears the gate.** Growth that never reached the leak
+ *   rate has nothing to decelerate from.
+ * - **It arrives somewhere, and it is heading there.** The final delta at most
+ *   half the first, *and* the later cycles averaging below the earlier ones.
+ *   Arrival alone would admit a series that spikes and drops on its last
+ *   cycle; direction alone would admit a decline that never gets anywhere.
+ *
+ * What is deliberately *not* required is that each delta be smaller than the
+ * one before it. Post-GC deltas do not descend in order — measured on Next
+ * 16.3.4 on 2026-09-03, a `use cache` route bent from 598 KB to 252 KB per
+ * cycle while stepping up twice on the way. Demanding monotonicity rejected
+ * that curve, and the tail dropping under the gate meant the test was never
+ * reached in the first place.
  */
-function isSaturating(deltas: readonly number[]): boolean {
+function isSaturating(deltas: readonly number[], minGrowth: number): boolean {
   if (deltas.length < SATURATION_MIN_CYCLES) {
     return false;
   }
   const first = deltas[0];
   const last = deltas[deltas.length - 1];
-  if (first === undefined || last === undefined || first <= 0) {
+  if (first === undefined || last === undefined || first < minGrowth) {
     return false;
   }
-  for (let i = 1; i < deltas.length; i += 1) {
-    const current = deltas[i];
-    const previous = deltas[i - 1];
-    if (current === undefined || previous === undefined || current >= previous) {
-      return false;
-    }
+  if (!deltas.every((delta) => delta > 0)) {
+    return false;
   }
-  return last <= first * SATURATION_MAX_FINAL_RATIO;
+  if (last > first * SATURATION_MAX_FINAL_RATIO) {
+    return false;
+  }
+  return isHeadingDown(deltas);
+}
+
+/**
+ * Whether the later cycles sit below the earlier ones.
+ *
+ * The split rounds the first half down, so the shortest admissible series
+ * (three deltas) compares one against two. That is coarse on purpose: it is
+ * paired with the arrival test, which is what stops a gentle wander from
+ * reading as deceleration.
+ */
+function isHeadingDown(deltas: readonly number[]): boolean {
+  const midpoint = Math.floor(deltas.length / 2);
+  const head = deltas.slice(0, midpoint);
+  const tail = deltas.slice(midpoint);
+  if (head.length === 0 || tail.length === 0) {
+    return false;
+  }
+  const mean = (values: readonly number[]): number =>
+    values.reduce((sum, value) => sum + value, 0) / values.length;
+  return mean(tail) < mean(head);
 }
 
 /**
@@ -250,10 +286,16 @@ function classifyShape(samples: readonly number[], options: TrendOptions): Trend
   //                  Also where a large oscillating series lands: the
   //                  acquittal is withdrawn, but a magnitude is not a shape
   //                  and will not carry an accusation.
+  // Saturation is judged before `allGrow` and before stepwise growth, because
+  // a store that has finished filling produces closing cycles *below* the
+  // gate. Gating this on `allGrow` made the verdict unreachable at exactly the
+  // point where the shape is clearest, and the series then fell to stepwise
+  // detection, which claims it: a curve that flattens hands nothing back, so
+  // its drawdown is zero. Measured on Next 16.3.4, 2026-09-03.
+  if (isSaturating(deltas, minGrowth)) {
+    return { verdict: "saturating", growthPerCycle: mean, deltas, source: "heap" };
+  }
   if (allGrow) {
-    if (isSaturating(deltas)) {
-      return { verdict: "saturating", growthPerCycle: mean, deltas, source: "heap" };
-    }
     return { verdict: "leak", growthPerCycle: mean, deltas, source: "heap" };
   }
   if (isStepwiseGrowth(samples, deltas, growingCycles, mean, minGrowth)) {
