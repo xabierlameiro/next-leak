@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.0](https://github.com/xabierlameiro/next-leak/compare/v0.10.1...v0.11.0) (2026-09-03)
+
+
+### Features
+
+* **cli:** add --repeat to judge a route across repeated runs ([a472d7b](https://github.com/xabierlameiro/next-leak/commit/a472d7bf427649d78ec9b0deaca06ae208928d59))
+* **trend:** stop calling a saturated curve a leak, and repeat before judging ([8e0ff19](https://github.com/xabierlameiro/next-leak/commit/8e0ff19a34c79cdc4d411633357c4a404d38fe20))
+
+
+### Bug Fixes
+
+* **trend:** reach saturation when deceleration drops the tail below the gate ([9cedd78](https://github.com/xabierlameiro/next-leak/commit/9cedd783ac08b19c64c68b1620c06133c512cd24))
+
 ## [0.10.1](https://github.com/xabierlameiro/next-leak/compare/v0.10.0...v0.10.1) (2026-09-01)
 
 
