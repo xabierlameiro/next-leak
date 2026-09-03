@@ -31,7 +31,16 @@ export type WarningCode =
   | "near-threshold"
   | "thin-evidence"
   | "near-heap-ceiling"
-  | "warm-up-baseline";
+  | "warm-up-baseline"
+  /**
+   * Repeated measurements of the same route did not agree.
+   *
+   * More cycles watch one process for longer; repetitions watch different
+   * ones, and that is where the spread lives — vercel/next.js#84648 gave 602,
+   * 826 and 875 MB on three runs of one build and 39 MB on a fourth. A verdict
+   * a second run contradicts is not a verdict.
+   */
+  | "repetitions-disagree";
 
 export type MeasurementWarning = {
   code: WarningCode;
@@ -102,6 +111,7 @@ const VERDICT_WEAKENING: ReadonlySet<WarningCode> = new Set([
   "near-threshold",
   "spiky-growth",
   "thin-evidence",
+  "repetitions-disagree",
 ]);
 
 /**

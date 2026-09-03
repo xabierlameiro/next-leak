@@ -25,6 +25,7 @@ describe("parseCliArgs", () => {
         appDir: "./my-app",
         routes: null,
         cycles: null,
+        repeat: null,
         requests: null,
         connections: null,
         idleSeconds: null,
@@ -43,7 +44,7 @@ describe("parseCliArgs", () => {
 
   it("parses every flag", () => {
     const parsed = parseCliArgs([
-      "app", "--routes", "/api,/dashboard", "--cycles", "6", "--requests", "1000",
+      "app", "--routes", "/api,/dashboard", "--cycles", "6", "--repeat", "3", "--requests", "1000",
       "--connections", "20", "--idle", "8", "--warmup", "50", "--max-old-space", "2048", "--quick",
       "--diff-all", "--no-resolve", "--self-check", "--write-config", "--output", "/tmp/out",
     ]);
@@ -54,6 +55,7 @@ describe("parseCliArgs", () => {
       appDir: "app",
       routes: ["/api", "/dashboard"],
       cycles: 6,
+      repeat: 3,
       requests: 1000,
       connections: 20,
       idleSeconds: 8,
@@ -174,6 +176,16 @@ describe("parseCliArgs message and boundary precision", () => {
   it("accepts exactly 3 cycles and rejects 2 with the verdict rationale", () => {
     expect(parseCliArgs(["app", "--cycles", "3"]).kind).toBe("run");
     expect(errorMessage(["app", "--cycles", "2"])).toContain("at least 3 cycles");
+  });
+
+  // Repetitions cost a whole measurement each, so the cap is about the clock
+  // rather than about memory: past ten, the runtime is the finding.
+  it("bounds --repeat at both ends", () => {
+    expect(parseCliArgs(["app", "--repeat", "1"]).kind).toBe("run");
+    expect(parseCliArgs(["app", "--repeat", "10"]).kind).toBe("run");
+    expect(errorMessage(["app", "--repeat", "0"])).toContain("positive integer");
+    expect(errorMessage(["app", "--repeat", "11"])).toContain("capped at 10");
+    expect(errorMessage(["app", "--repeat", "2.5"])).toContain("positive integer");
   });
 
   // The measured app used to be pinned at 512 MB with no way out: an app whose

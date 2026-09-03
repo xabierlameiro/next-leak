@@ -115,6 +115,7 @@ Every report prints the gate it used.
 |---|---|---|
 | `--routes <list>` | all | Only measure these routes (comma-separated templates or prefixes) |
 | `--cycles <n>` | 4 | Load cycles per route (min 3). The first is dropped as warm-up, so the verdict sees `n − 1` deltas — at 3 it sees two |
+| `--repeat <n>` | 1 | Measure each route `n` times, each from a fresh server, and judge it on all of them (max 10). The run takes `n` times as long. Routes whose repetitions disagree are reported `inconclusive`, and the spread of growth rates is printed either way. More cycles watch one process for longer; repetitions watch different ones, which is where the variance lives — three runs of one Next build measured 602, 826 and 875 MB retained, and a fourth measured 39 MB |
 | `--requests <n>` | 5000 | Requests per cycle. Raises sensitivity as well as duration: the growth gate scales with it, down to a noise floor around 5000 |
 | `--connections <n>` | 100 | Concurrent connections |
 | `--idle <seconds>` | 30 | **Maximum** wait before each sample; the run continues as soon as the heap settles |

@@ -4,13 +4,18 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RitualResult } from "./ritual.js";
 import {
+  aggregateRepetitions,
   estimateRun,
   formatDuration,
   formatEstimate,
   routeSlug,
   runMeasurement,
+  type RouteReport,
   type RunnerDeps,
 } from "./runner.js";
+import { warrantsIssueDraft } from "./confidence.js";
+import { makeRunReport } from "./run-report.fixture.js";
+import type { TrendVerdict } from "./trend.js";
 
 const MB = 1024 * 1024;
 const FIXTURES = new URL("./__fixtures__/", import.meta.url);
@@ -1431,5 +1436,121 @@ describe("attribution gaps are distinguishable", () => {
     ) as { routes: { attributionGap?: { reason: string } }[] };
 
     expect(persisted.routes[0]?.attributionGap?.reason).toBe("snapshot-unreadable");
+  });
+});
+
+describe("aggregateRepetitions", () => {
+  const measuredRoute = (verdict: TrendVerdict, growthPerCycle: number): RouteReport => {
+    const report = makeRunReport();
+    const route = report.routes[1];
+    if (route?.status !== "measured") throw new Error("fixture broken");
+    return {
+      ...route,
+      requestsPerCycle: 1000,
+      trend: { ...route.trend, verdict, growthPerCycle },
+      confidence: { level: "high", warnings: [] },
+    };
+  };
+
+  it("keeps the verdict when every repetition agrees", () => {
+    const aggregate = aggregateRepetitions([
+      measuredRoute("leak", 2 * MB),
+      measuredRoute("leak", 3 * MB),
+    ]);
+    if (aggregate.status !== "measured") throw new Error("expected a measured route");
+    expect(aggregate.trend.verdict).toBe("leak");
+    expect(aggregate.confidence.supersededVerdict).toBeUndefined();
+    expect(aggregate.repetitions).toEqual([
+      { verdict: "leak", growthPer1000Requests: 2 * MB },
+      { verdict: "leak", growthPer1000Requests: 3 * MB },
+    ]);
+  });
+
+  // Two runs of one build disagreeing is the finding, not an average to take:
+  // vercel/next.js#84648 gave 602, 826 and 875 MB and then 39 MB on a fourth.
+  it("supersedes a disagreement with inconclusive and says so", () => {
+    const aggregate = aggregateRepetitions([
+      measuredRoute("leak", 2 * MB),
+      measuredRoute("stable", 0.01 * MB),
+    ]);
+    if (aggregate.status !== "measured") throw new Error("expected a measured route");
+    expect(aggregate.confidence.supersededVerdict).toBe("inconclusive");
+    expect(aggregate.confidence.level).toBe("low");
+    expect(aggregate.confidence.warnings.map((warning) => warning.code)).toContain(
+      "repetitions-disagree"
+    );
+  });
+
+  it("withholds an issue draft when repetitions disagree", () => {
+    const aggregate = aggregateRepetitions([
+      measuredRoute("leak", 2 * MB),
+      measuredRoute("stable", 0.01 * MB),
+    ]);
+    if (aggregate.status !== "measured") throw new Error("expected a measured route");
+    expect(warrantsIssueDraft(aggregate)).toBe(false);
+  });
+
+  // A repetition that failed is not a disagreement to average away.
+  it("returns the failure when one repetition did not measure", () => {
+    const failed: RouteReport = { route: "/x", status: "failed", reason: "port race lost" };
+    const aggregate = aggregateRepetitions([measuredRoute("leak", 2 * MB), failed]);
+    expect(aggregate.status).toBe("failed");
+  });
+});
+
+describe("repeat runs the whole measurement again", () => {
+  it("measures a route once per repetition and records each result", async () => {
+    // The loop itself, not the aggregation: a `--repeat` that quietly measured
+    // once and copied the result would pass every aggregation test above.
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    // `ritualResult` derives its verdict from the route name, so each
+    // repetition's trend is set explicitly here.
+    const verdicts = ["leak", "leak", "stable"] as const;
+    let call = 0;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", repeat: 3 },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          const verdict = verdicts[call] ?? "leak";
+          call += 1;
+          const base = ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return {
+            ...base,
+            trend: {
+              verdict,
+              growthPerCycle: verdict === "leak" ? 2.5 * MB : 0.1 * MB,
+              deltas: [],
+            },
+          };
+        },
+      }
+    );
+
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("expected a measured route");
+    expect(call).toBe(3);
+    expect(route.repetitions?.map((entry) => entry.verdict)).toEqual(["leak", "leak", "stable"]);
+    // Two leaks and a flat run: the disagreement is what gets reported.
+    expect(route.confidence.supersededVerdict).toBe("inconclusive");
+  });
+
+  it("leaves the report untouched when repeat is 1", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let call = 0;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", repeat: 1 },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          call += 1;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("expected a measured route");
+    expect(call).toBe(1);
+    expect(route.repetitions).toBeUndefined();
   });
 });
