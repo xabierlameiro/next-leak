@@ -29,13 +29,15 @@ next-leak found the growth, the retaining object and the chain that holds it —
 without being told what to look for. Next.js 16.3.0 has since fixed it.
 
 **Verified against real Next.js issues**, not synthetic fixtures. Issue states
-checked 2026-08-27:
+checked 2026-09-05:
 
 | Issue | What it is | Measured | State today |
 |---|---|---|---|
-| [#97938](https://github.com/vercel/next.js/issues/97938) | `cacheComponents`: composite abort signal never released | +705 KB per request on 16.3.3, flat on 16.2.6 | **open** |
+| [#97776](https://github.com/vercel/next.js/issues/97776) | `use cache`: `AbortSignal.any` composites never released (canonical issue; #97938 and #97464 are duplicates) | +705 KB per request on 16.3.3, flat on 16.2.6 (the #97938 run) | **open** — fix [#97476](https://github.com/vercel/next.js/pull/97476) merged Aug 19, in no stable release as of 16.3.4 |
+| [#97938](https://github.com/vercel/next.js/issues/97938) | `cacheComponents`: composite abort signal never released | +705 KB per request on 16.3.3, flat on 16.2.6 | closed Aug 31 as a duplicate of #97776; fix in no stable release |
 | [#96533](https://github.com/vercel/next.js/issues/96533) | ISR revalidation holds RSC buffers between collections | 4–5 MB of `arrayBuffers` held vs 0.32 MB retained | **open** |
-| [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | OOM after 1617 and 1525 of 2504 pages on 16.3.3; 16.2.12 finishes at 0.05 MB/page | **open** |
+| [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | OOM after 1617 and 1525 of 2504 pages on 16.3.3; 16.2.12 finishes at 0.05 MB/page | closed Aug 31 as a duplicate of #97776; fix in no stable release |
+| [#97802](https://github.com/vercel/next.js/issues/97802) | Turbopack compilation saturates the container before rendering anything | Reporter's reproduction in a 2 CPU / 4 GB container: 16.2.12 peaks ~2 GB and finishes; 16.3.0 pins 4 GB and stalls | **open** — bisected to 16.3.0; no fix known |
 | [#92287](https://github.com/vercel/next.js/issues/92287) | Cache Components: unbounded `arrayBuffers` under load | 37.5 MB of arrayBuffers held between collections, 37x what it retains (16.3.1) | **open** |
 | [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | 32.8 → 369.9 MB | **open** |
 | [#89091](https://github.com/vercel/next.js/issues/89091) | zlib retention on mid-stream aborts | +42.5 MB/1000 aborted req on 16.1.5; **+0.03 on 16.3.1** | closed |
