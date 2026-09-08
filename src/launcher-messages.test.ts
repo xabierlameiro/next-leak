@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { appNeverListened, explainRuntimeFailure, explainStartupFailure } from "./launcher.js";
+import {
+  appNeverListened,
+  explainRuntimeFailure,
+  explainStartupFailure,
+  meansNotListening,
+  probeFailure,
+} from "./launcher.js";
 
 // Pure message functions, split from launcher.test.ts (which boots real
 // processes and is excluded from mutation runs) so mutation can judge the
@@ -91,14 +97,57 @@ describe("appNeverListened", () => {
   it("hands over what the process wrote while starting", () => {
     const message = appNeverListened("127.0.0.1", 44203, 60_000, "Error: DATABASE_URL is not set\n");
     expect(message).toContain("127.0.0.1:44203");
-    expect(message).toContain("never listened within 60s");
+    expect(message).toContain("never accepted a connection within 60s");
     expect(message).toContain("DATABASE_URL is not set");
   });
 
   it("names the budget and the flag that moves it when the process said nothing", () => {
     const message = appNeverListened("127.0.0.1", 44203, 15_000, "   \n");
-    expect(message).toContain("never listened within 15s");
+    expect(message).toContain("never accepted a connection within 15s");
     expect(message).toContain("wrote nothing to stderr");
     expect(message).toContain("--ready-timeout");
+  });
+});
+
+// The probe used to collapse every failure into "not listening yet". Only one
+// of these is that; the rest are answers from a port that was open all along.
+describe("probeFailure", () => {
+  it("digs the code out of the TypeError fetch rejects with", () => {
+    const failed = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:44203"), {
+        code: "ECONNREFUSED",
+      }),
+    });
+    expect(probeFailure(failed)).toBe("ECONNREFUSED");
+  });
+
+  it("falls back to the inner message when there is no code", () => {
+    const failed = new TypeError("fetch failed", {
+      cause: new Error("redirect count exceeded"),
+    });
+    expect(probeFailure(failed)).toBe("redirect count exceeded");
+  });
+});
+
+describe("meansNotListening", () => {
+  it("is true only for a refused connection", () => {
+    expect(meansNotListening("ECONNREFUSED")).toBe(true);
+    expect(meansNotListening("EHOSTUNREACH")).toBe(true);
+  });
+
+  it("is false for everything that happens after the handshake", () => {
+    // Measured on Node 24: a socket destroyed mid-request, a reset, and a
+    // redirect loop all reach the probe as failures, and all three prove the
+    // port was open.
+    expect(meansNotListening("UND_ERR_SOCKET")).toBe(false);
+    expect(meansNotListening("ECONNRESET")).toBe(false);
+    expect(meansNotListening("redirect count exceeded")).toBe(false);
+  });
+});
+
+describe("appNeverListened, on a port that really was closed", () => {
+  it("names the refusal it kept seeing", () => {
+    const message = appNeverListened("127.0.0.1", 44203, 60_000, "", "ECONNREFUSED");
+    expect(message).toContain("never accepted a connection (ECONNREFUSED) within 60s");
   });
 });

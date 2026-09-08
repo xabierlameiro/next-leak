@@ -367,6 +367,10 @@ export async function runRitual(
     serverPath: options.serverPath,
     workDir: options.workDir,
     bootstrapPath: options.bootstrapPath,
+    // Wait on the route this ritual is about to measure. `/` is a different
+    // page with different failure modes, and readiness judged on it withdrew
+    // routes that were serving fine (#74).
+    readyPath: options.route,
     ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(options.readyTimeoutMs !== undefined && { readyTimeoutMs: options.readyTimeoutMs }),
   };
