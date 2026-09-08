@@ -24,7 +24,42 @@ async function makeValidBuild(appDir: string): Promise<void> {
   );
 }
 
+/**
+ * A monorepo build does not put `server.js` at the root of the standalone
+ * tree: Next keeps the app's path relative to the workspace root it detected.
+ * Measured on Next 16.3.3 with a pnpm workspace whose app lives in `client/`,
+ * the server ships at `.next/standalone/client/server.js` with `node_modules`
+ * hoisted above it — and flattening that tree by hand breaks the symlinks it
+ * resolves through, so the tool has to meet the build where it is (#71).
+ */
+async function makeMonorepoBuild(appDir: string, suffix: string): Promise<void> {
+  await mkdir(path.join(appDir, ".next", "standalone", suffix), { recursive: true });
+  await mkdir(path.join(appDir, ".next", "server"), { recursive: true });
+  await writeFile(path.join(appDir, ".next", "standalone", suffix, "server.js"), "// stub\n");
+  await cp(
+    new URL("app-paths-manifest.json", FIXTURES),
+    path.join(appDir, ".next", "server", "app-paths-manifest.json")
+  );
+}
+
 describe("validateTarget", () => {
+  it("finds the standalone server under the app's own path in a monorepo", async () => {
+    const appDir = await makeAppDir();
+    await makeMonorepoBuild(appDir, path.basename(appDir));
+    const target = await validateTarget(appDir);
+    expect(target.standaloneServer).toBe(
+      path.join(appDir, ".next", "standalone", path.basename(appDir), "server.js")
+    );
+  });
+
+  it("still prefers the root server when the build has one", async () => {
+    const appDir = await makeAppDir();
+    await makeValidBuild(appDir);
+    await makeMonorepoBuild(appDir, path.basename(appDir));
+    const target = await validateTarget(appDir);
+    expect(target.standaloneServer).toBe(path.join(appDir, ".next", "standalone", "server.js"));
+  });
+
   it("fails with NO_BUILD when there is no .next directory", async () => {
     const appDir = await makeAppDir();
     await expect(validateTarget(appDir)).rejects.toMatchObject({

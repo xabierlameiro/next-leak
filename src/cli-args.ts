@@ -16,6 +16,8 @@ export type CliRunOptions = {
   idleSeconds: number | null;
   warmupRequests: number | null;
   maxOldSpaceMb: number | null;
+  /** Seconds each measured process gets to boot before the route is failed. */
+  readyTimeoutSeconds: number | null;
   quick: boolean;
   noResolve: boolean;
   selfCheck: boolean;
@@ -56,6 +58,7 @@ const RUN_ONLY_FLAGS: ReadonlyArray<[keyof CliRunOptions, string]> = [
   ["idleSeconds", "--idle"],
   ["warmupRequests", "--warmup"],
   ["maxOldSpaceMb", "--max-old-space"],
+  ["readyTimeoutSeconds", "--ready-timeout"],
   ["quick", "--quick"],
   ["noResolve", "--no-resolve"],
   ["selfCheck", "--self-check"],
@@ -112,6 +115,12 @@ const FLAGS: FlagSpec[] = [
     value: "int",
     argName: "<mb>",
     help: "Heap cap of each measured process (default 512) — raise it for apps whose working set is larger",
+  },
+  {
+    flag: "--ready-timeout",
+    value: "int",
+    argName: "<seconds>",
+    help: "Seconds each measured process gets to start listening (default 60) — raise it for slow-booting apps",
   },
   {
     flag: "--quick",
@@ -188,6 +197,7 @@ const LIMITS: Record<string, number | undefined> = {
   "--idle": 3_600,
   "--warmup": 1_000_000,
   "--max-old-space": 65_536,
+  "--ready-timeout": 600,
 };
 
 /**
@@ -243,6 +253,7 @@ function applyNumericFlag(flag: string, value: string, options: CliRunOptions): 
   if (flag === "--idle") options.idleSeconds = parsed;
   if (flag === "--warmup") options.warmupRequests = parsed;
   if (flag === "--max-old-space") options.maxOldSpaceMb = parsed;
+  if (flag === "--ready-timeout") options.readyTimeoutSeconds = parsed;
   return FLAG_OK;
 }
 
@@ -257,6 +268,7 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
     case "--idle":
     case "--warmup":
     case "--max-old-space":
+    case "--ready-timeout":
       return applyNumericFlag(spec.flag, value, options);
     case "--quick":
       options.quick = true;
@@ -340,6 +352,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     idleSeconds: null,
     warmupRequests: null,
     maxOldSpaceMb: null,
+    readyTimeoutSeconds: null,
     quick: false,
     noResolve: false,
     selfCheck: false,

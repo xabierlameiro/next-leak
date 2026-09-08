@@ -27,6 +27,8 @@ export type RitualOptions = {
   idleMs?: number;
   /** Old-space cap for the measured process (MB). Default: 512. */
   maxOldSpaceMb?: number;
+  /** How long the process gets to start listening (ms). Default: 60_000. */
+  readyTimeoutMs?: number;
   /** Headers sent with every request during warm-up and load. */
   headers?: Record<string, string>;
   /**
@@ -366,6 +368,7 @@ export async function runRitual(
     workDir: options.workDir,
     bootstrapPath: options.bootstrapPath,
     ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
+    ...(options.readyTimeoutMs !== undefined && { readyTimeoutMs: options.readyTimeoutMs }),
   };
   let app;
   try {

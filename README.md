@@ -123,6 +123,7 @@ Every report prints the gate it used.
 | `--idle <seconds>` | 30 | **Maximum** wait before each sample; the run continues as soon as the heap settles |
 | `--warmup <n>` | 200 | Requests before the baseline snapshot. Lower it on apps that cache per request: warm-up fills those caches and the baseline then measures the warm-up, not the app. The run says so when it happens |
 | `--max-old-space <mb>` | 512 | Heap cap of each measured process. Raise it for apps whose legitimate working set is larger, or they die under measurement |
+| `--ready-timeout <seconds>` | 60 | How long each measured process gets to start listening. Raise it for apps that boot slowly. A process that never listens reports whatever it wrote to stderr while trying |
 | `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Same cycle count as the default; what it trades away is traffic per cycle, so it sits on the noise floor and is less sensitive to slow leaks. Explicit flags override it |
 | `--no-resolve` | off | Skip the second pass on inconclusive routes |
 | `--self-check` | off | Measure a planted leak first to prove the harness works here. Costs one route's worth of time; a run that cannot detect 8 KB per request produces verdicts worth nothing |
@@ -409,6 +410,17 @@ through the build's source maps.
 
 
 - **Supported (default command):** App Router · `output: "standalone"` · Node ≥ 22 · Linux/macOS. Pages Router, non-standalone, and Windows are rejected with a clear message.
+- **Monorepos work unchanged.** A workspace build does not put `server.js` at
+  the root of `.next/standalone`: Next keeps the app's path relative to the
+  workspace root, so an app in `client/` ships its server at
+  `.next/standalone/client/server.js` with `node_modules` hoisted above it.
+  Point the tool at the app directory as usual — it looks there too. Do not
+  flatten that tree by hand: on a pnpm workspace the moved `server.js` cannot
+  resolve `next` any more, because what sits in `standalone/<app>/node_modules`
+  are relative symlinks into `../../node_modules/.pnpm/`, and a level up they
+  point outside the tree. An npm workspace survives the move — it puts no
+  `node_modules` beside the app at all — which is why the same build can serve
+  by hand and still be unmeasurable.
 - **Sample values can vary per request.** `"slug": "post-{n}"` gives every
   request its own URL — the shape of bot traffic and of a cache that never
   repeats a key. `"slug": "post-{n%200}"` cycles through exactly 200 distinct

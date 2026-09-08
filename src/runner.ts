@@ -247,6 +247,11 @@ export type RunOptions = {
   idleMs?: number;
   /** Old-space cap for each measured process (MB). Default 512. */
   maxOldSpaceMb?: number;
+  /**
+   * How long each measured process gets to start listening, in milliseconds.
+   * Default: `DEFAULT_READY_TIMEOUT_MS`.
+   */
+  readyTimeoutMs?: number;
   /** Also diff routes with a stable verdict. Default false: diffs are slow. */
   diffAll?: boolean;
   /** Only measure routes matching these templates or prefixes. */
@@ -502,6 +507,7 @@ async function measureRoute(
       : options.cycles !== undefined && { cycles: options.cycles }),
     ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
     ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
+    ...(options.readyTimeoutMs !== undefined && { readyTimeoutMs: options.readyTimeoutMs }),
     ...(headers !== undefined && { headers }),
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,

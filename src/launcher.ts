@@ -16,6 +16,19 @@ const controlFileSchema = z.object({ port: z.number(), pid: z.number() });
  */
 export const DEFAULT_MAX_OLD_SPACE_MB = 512;
 
+/**
+ * How long each startup wait gets before the route is called failed.
+ *
+ * It was 15 s, shared between waiting for the control channel and waiting for
+ * the app to listen — so a slow channel spent the app's budget too. Both
+ * numbers were also invisible: a real app that needs longer to boot than the
+ * tool was willing to wait had no way to say so, and got
+ * `timed out waiting for app` on every route (#71). 60 s is what a cold
+ * standalone bundle of a couple of thousand modules takes on a laptop with
+ * a busy disk, with room to spare; `--ready-timeout` moves it.
+ */
+export const DEFAULT_READY_TIMEOUT_MS = 60_000;
+
 export type LaunchOptions = {
   /** Absolute path to the standalone `server.js` (or any PORT/HOSTNAME-honoring server). */
   serverPath: string;
@@ -27,6 +40,10 @@ export type LaunchOptions = {
   bootstrapPath: string;
   hostname?: string;
   maxOldSpaceMb?: number;
+  /**
+   * Budget for each of the two waits below, not for the pair. Default:
+   * `DEFAULT_READY_TIMEOUT_MS`.
+   */
   readyTimeoutMs?: number;
   env?: Record<string, string>;
 };
@@ -147,11 +164,45 @@ export function explainRuntimeFailure(stderr: string, maxOldSpaceMb: number): st
   return `the measured process exited mid-run. ${explainStartupFailure(stderr)}`;
 }
 
+/**
+ * What to say when the process is alive and answering on its control channel,
+ * but never opened the app port. The old message named the port and stopped
+ * there, which reads like the tool failed to connect to something that was
+ * running. The process is up: what did not happen is the listen.
+ */
+export function appNeverListened(
+  hostname: string,
+  port: number,
+  budgetMs: number,
+  stderr: string
+): string {
+  const head =
+    `app on ${hostname}:${port} — the process started and answered on its control ` +
+    `channel, but never listened within ${Math.round(budgetMs / 1000)}s`;
+  // The app usually said why, on a stream this process has been buffering all
+  // along. It was only ever printed when the child exited, so a boot that hung
+  // instead of dying — the exact case this message covers — threw the
+  // explanation away and left the user with a port number (#71).
+  if (stderr.trim() !== "") {
+    return `${head}. It wrote this while starting:\n${stderr.trim()}`;
+  }
+  return (
+    `${head}, and wrote nothing to stderr. An app that boots slower than that ` +
+    `needs a larger budget: --ready-timeout <seconds>. Otherwise it is hanging ` +
+    `during startup — starting the same server.js by hand, with PORT set, hangs ` +
+    `the same way and can be interrupted to see where`
+  );
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * `describe` is called at the moment of the timeout, not before it: what the
+ * failure should say can depend on what the process did while being waited on.
+ */
 async function pollUntil<T>(
   deadline: number,
-  what: string,
+  describe: () => string,
   probe: () => Promise<T | undefined>,
   failed: () => string | undefined
 ): Promise<T> {
@@ -165,7 +216,7 @@ async function pollUntil<T>(
       return result;
     }
     if (Date.now() > deadline) {
-      throw new LaunchError(`timed out waiting for ${what}`);
+      throw new LaunchError(`timed out waiting for ${describe()}`);
     }
     await sleep(100);
   }
@@ -178,7 +229,7 @@ async function pollUntil<T>(
  */
 export async function launchInstrumented(options: LaunchOptions): Promise<LaunchedApp> {
   const hostname = options.hostname ?? "127.0.0.1";
-  const deadline = Date.now() + (options.readyTimeoutMs ?? 15_000);
+  const readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
 
   const child: ChildProcess = spawn(
     process.execPath,
@@ -233,8 +284,8 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
 
   try {
     const controlPort = await pollUntil(
-      deadline,
-      `control channel in ${options.workDir}`,
+      Date.now() + readyTimeoutMs,
+      () => `control channel in ${options.workDir}`,
       // Several processes may announce a channel (clustered servers); accept
       // the first one that actually answers instead of trusting a filename.
       async () => {
@@ -264,9 +315,13 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
       failed
     );
 
+    // Its own budget, started here. The control channel comes up when the
+    // bootstrap is imported, which is before the app has loaded a single
+    // module of its own — so the time the channel took says nothing about
+    // how long the app needs, and must not be deducted from it.
     await pollUntil(
-      deadline,
-      `app on ${hostname}:${options.appPort}`,
+      Date.now() + readyTimeoutMs,
+      () => appNeverListened(hostname, options.appPort, readyTimeoutMs, stderrWindow()),
       async () => {
         try {
           await fetch(`http://${hostname}:${options.appPort}/`, { method: "HEAD" });

@@ -31,6 +31,7 @@ describe("parseCliArgs", () => {
         idleSeconds: null,
         warmupRequests: null,
         maxOldSpaceMb: null,
+        readyTimeoutSeconds: null,
         quick: false,
         noResolve: false,
         selfCheck: false,
@@ -45,7 +46,8 @@ describe("parseCliArgs", () => {
   it("parses every flag", () => {
     const parsed = parseCliArgs([
       "app", "--routes", "/api,/dashboard", "--cycles", "6", "--repeat", "3", "--requests", "1000",
-      "--connections", "20", "--idle", "8", "--warmup", "50", "--max-old-space", "2048", "--quick",
+      "--connections", "20", "--idle", "8", "--warmup", "50", "--max-old-space", "2048",
+      "--ready-timeout", "120", "--quick",
       "--diff-all", "--no-resolve", "--self-check", "--write-config", "--output", "/tmp/out",
     ]);
     if (parsed.kind !== "run") {
@@ -61,6 +63,7 @@ describe("parseCliArgs", () => {
       idleSeconds: 8,
       warmupRequests: 50,
       maxOldSpaceMb: 2048,
+      readyTimeoutSeconds: 120,
       quick: true,
       noResolve: true,
       selfCheck: true,
