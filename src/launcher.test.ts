@@ -9,6 +9,9 @@ import { launchInstrumented, type LaunchedApp } from "./launcher.js";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const bootstrapPath = path.join(rootDir, "dist", "bootstrap.js");
 const fakeServer = fileURLToPath(new URL("./__fixtures__/fake-standalone-server.js", import.meta.url));
+const hangingServer = fileURLToPath(
+  new URL("./__fixtures__/hangs-without-listening.js", import.meta.url)
+);
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -33,6 +36,23 @@ afterEach(async () => {
 });
 
 describe("launchInstrumented", () => {
+  // A boot that hangs instead of dying keeps the process alive, so the exit
+  // path that prints stderr never runs. The user was left with a port number
+  // and no reason (#71); the reason was in the buffer the whole time.
+  it("reports what a hung startup wrote to stderr instead of only the port", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-hang-"));
+    const port = await freePort();
+    await expect(
+      launchInstrumented({
+        serverPath: hangingServer,
+        workDir,
+        appPort: port,
+        bootstrapPath,
+        readyTimeoutMs: 1500,
+      })
+    ).rejects.toThrow(/DATABASE_URL is not set/);
+  }, 20_000);
+
   it("boots the server with a working control channel, then tears it down", async () => {
     const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-launch-"));
     app = await launchInstrumented({

@@ -25,7 +25,11 @@ export class TargetError extends Error {
 
 export type ValidatedTarget = {
   appDir: string;
-  /** Absolute path to `.next/standalone/server.js`. */
+  /**
+   * Absolute path to the standalone `server.js`. At the root of
+   * `.next/standalone` for a single-package app; under the app's path relative
+   * to the workspace root for a monorepo.
+   */
   standaloneServer: string;
   appPaths: AppPathsManifest;
   pages: PagesManifest;
@@ -69,6 +73,46 @@ async function readManifest<T>(file: string, parse: (raw: unknown) => T): Promis
 }
 
 /**
+ * Where the standalone build actually put `server.js`.
+ *
+ * A single-package app puts it at the root of the standalone tree. A monorepo
+ * does not: Next preserves the app's path relative to the workspace root it
+ * detected, so an app in `client/` ships its server at
+ * `.next/standalone/client/server.js`, with `node_modules` hoisted one level
+ * above it. Looking only at the root of the tree told those users their build
+ * had no standalone output at all, and the only way past the message was to
+ * move the tree by hand — which is what #71 did before it could run.
+ *
+ * That suffix is the app directory's own chain, so the candidates are
+ * enumerable without walking the build: `client`, then `apps/client`, and so
+ * on. A handful of `access` calls, and no guess about which `server.js` in a
+ * tree full of dependencies is the right one.
+ */
+async function findStandaloneServer(
+  appDir: string,
+  standaloneDir: string
+): Promise<string | undefined> {
+  const atRoot = path.join(standaloneDir, "server.js");
+  if (await exists(atRoot)) {
+    return atRoot;
+  }
+  let current = path.resolve(appDir);
+  let suffix = "";
+  for (;;) {
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    suffix = suffix === "" ? path.basename(current) : path.join(path.basename(current), suffix);
+    const candidate = path.join(standaloneDir, suffix, "server.js");
+    if (await exists(candidate)) {
+      return candidate;
+    }
+    current = parent;
+  }
+}
+
+/**
  * Validates that `appDir` contains a production build with
  * `output: "standalone"` and readable route manifests. Fails fast with an
  * actionable message otherwise.
@@ -82,13 +126,13 @@ export async function validateTarget(appDir: string): Promise<ValidatedTarget> {
     );
   }
 
-  const standaloneServer = path.join(nextDir, "standalone", "server.js");
-  if (!(await exists(standaloneServer))) {
+  const standaloneServer = await findStandaloneServer(appDir, path.join(nextDir, "standalone"));
+  if (standaloneServer === undefined) {
     // This is the first wall every new user hits, so the message carries the
     // exact fix — three real apps needed hand-patching before this existed.
     throw new TargetError(
       "NO_STANDALONE",
-      `No ${standaloneServer}.\n` +
+      `No ${path.join(nextDir, "standalone", "server.js")}.\n` +
         `next-leak measures the standalone server bundle. Enable it once in next.config:\n\n` +
         `    const nextConfig = {\n` +
         `      output: "standalone",\n` +

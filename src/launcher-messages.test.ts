@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { explainRuntimeFailure, explainStartupFailure } from "./launcher.js";
+import { appNeverListened, explainRuntimeFailure, explainStartupFailure } from "./launcher.js";
 
 // Pure message functions, split from launcher.test.ts (which boots real
 // processes and is excluded from mutation runs) so mutation can judge the
@@ -81,5 +81,24 @@ describe("explainRuntimeFailure", () => {
     // The window handed to the explainer must still contain the FATAL line.
     const window = `${dump.slice(0, 4096)}\n[...]\n${dump.slice(-4096)}`;
     expect(explainRuntimeFailure(window, 512)).toContain("ran out of heap");
+  });
+});
+
+// The app port staying shut is the one failure the launcher used to describe
+// by naming the port and nothing else — while holding the process's own
+// explanation in a buffer it only printed if the process had died (#71).
+describe("appNeverListened", () => {
+  it("hands over what the process wrote while starting", () => {
+    const message = appNeverListened("127.0.0.1", 44203, 60_000, "Error: DATABASE_URL is not set\n");
+    expect(message).toContain("127.0.0.1:44203");
+    expect(message).toContain("never listened within 60s");
+    expect(message).toContain("DATABASE_URL is not set");
+  });
+
+  it("names the budget and the flag that moves it when the process said nothing", () => {
+    const message = appNeverListened("127.0.0.1", 44203, 15_000, "   \n");
+    expect(message).toContain("never listened within 15s");
+    expect(message).toContain("wrote nothing to stderr");
+    expect(message).toContain("--ready-timeout");
   });
 });

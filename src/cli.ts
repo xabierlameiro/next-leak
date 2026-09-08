@@ -254,6 +254,9 @@ async function main(): Promise<void> {
     ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),
     ...(options.warmupRequests !== null && { warmupRequests: options.warmupRequests }),
     ...(options.maxOldSpaceMb !== null && { maxOldSpaceMb: options.maxOldSpaceMb }),
+    ...(options.readyTimeoutSeconds !== null && {
+      readyTimeoutMs: options.readyTimeoutSeconds * 1000,
+    }),
     ...(options.diffAll && { diffAll: true }),
     ...(options.noResolve && { resolveInconclusive: false }),
     ...(options.output !== null && { outputDir: options.output }),
