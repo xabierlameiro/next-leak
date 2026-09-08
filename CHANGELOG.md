@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/xabierlameiro/next-leak/compare/v0.11.0...v0.11.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* measure a monorepo build where it is, and say why it never listened (thanks [@ucarno](https://github.com/ucarno)) ([#72](https://github.com/xabierlameiro/next-leak/issues/72)) ([fe61cf3](https://github.com/xabierlameiro/next-leak/commit/fe61cf37788443e07628ba25f976014996732e2f))
+
 ## [0.11.0](https://github.com/xabierlameiro/next-leak/compare/v0.10.1...v0.11.0) (2026-09-03)
 
 
