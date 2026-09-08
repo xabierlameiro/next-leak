@@ -12,6 +12,12 @@ const fakeServer = fileURLToPath(new URL("./__fixtures__/fake-standalone-server.
 const hangingServer = fileURLToPath(
   new URL("./__fixtures__/hangs-without-listening.js", import.meta.url)
 );
+const hostileRootServer = fileURLToPath(
+  new URL("./__fixtures__/hostile-root-server.js", import.meta.url)
+);
+const dropsConnectionsServer = fileURLToPath(
+  new URL("./__fixtures__/accepts-then-drops-server.js", import.meta.url)
+);
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -36,6 +42,54 @@ afterEach(async () => {
 });
 
 describe("launchInstrumented", () => {
+  // #74: the probe asked for `/` and followed its redirects, so an app whose
+  // root bounces between locales — while the measured route serves fine —
+  // spent the whole budget being called dead.
+  it("waits on the route being measured, not on the root", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-ready-path-"));
+    app = await launchInstrumented({
+      serverPath: hostileRootServer,
+      workDir,
+      appPort: await freePort(),
+      bootstrapPath,
+      readyPath: "/en/subscription",
+      readyTimeoutMs: 5000,
+    });
+
+    const response = await fetch(`http://127.0.0.1:${app.appPort}/en/subscription`);
+    expect(((await response.json()) as { ok: boolean }).ok).toBe(true);
+  }, 20_000);
+
+  // The same run, judged the old way: a redirect loop on `/` is not a closed
+  // port, and treating it as one is what withdrew a healthy route.
+  it("does not mistake a failing root for a port nobody opened", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-ready-root-"));
+    app = await launchInstrumented({
+      serverPath: hostileRootServer,
+      workDir,
+      appPort: await freePort(),
+      bootstrapPath,
+      readyTimeoutMs: 5000,
+    });
+
+    expect(app.pid).toBeGreaterThan(0);
+  }, 20_000);
+
+  // A proxy whose upstream is down accepts the connection and drops it. The
+  // port is open; whatever happens next is the load phase's to report.
+  it("treats a dropped connection as an app that is up", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-ready-drop-"));
+    app = await launchInstrumented({
+      serverPath: dropsConnectionsServer,
+      workDir,
+      appPort: await freePort(),
+      bootstrapPath,
+      readyTimeoutMs: 5000,
+    });
+
+    expect(app.pid).toBeGreaterThan(0);
+  }, 20_000);
+
   // A boot that hangs instead of dying keeps the process alive, so the exit
   // path that prints stderr never runs. The user was left with a port number
   // and no reason (#71); the reason was in the buffer the whole time.
