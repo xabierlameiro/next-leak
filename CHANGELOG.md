@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/xabierlameiro/next-leak/compare/v0.11.1...v0.11.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* stop calling a listening app dead, and wait on the measured route (thanks [@ucarno](https://github.com/ucarno)) ([#75](https://github.com/xabierlameiro/next-leak/issues/75)) ([352c88a](https://github.com/xabierlameiro/next-leak/commit/352c88a29b1c2eff1c8d753676cd22365612591e))
+
 ## [0.11.1](https://github.com/xabierlameiro/next-leak/compare/v0.11.0...v0.11.1) (2026-09-08)
 
 
