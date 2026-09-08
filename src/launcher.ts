@@ -39,6 +39,13 @@ export type LaunchOptions = {
   /** Path to the built bootstrap module loaded with `--import`. */
   bootstrapPath: string;
   hostname?: string;
+  /**
+   * Path the readiness probe asks for. Defaults to `/`, but a run should pass
+   * the route it is about to measure: an app can serve that route perfectly
+   * and still fail on `/` — an i18n redirect, an auth wall, a rewrite — and
+   * the wait would then be judging a page nobody asked about (#74).
+   */
+  readyPath?: string;
   maxOldSpaceMb?: number;
   /**
    * Budget for each of the two waits below, not for the pair. Default:
@@ -174,11 +181,16 @@ export function appNeverListened(
   hostname: string,
   port: number,
   budgetMs: number,
-  stderr: string
+  stderr: string,
+  lastFailure: string | undefined = undefined
 ): string {
+  // Naming the refusal is what keeps this message honest: it is the evidence
+  // that nothing was there, rather than an inference from a probe that failed
+  // for reasons of its own.
+  const refused = lastFailure === undefined ? "" : ` (${lastFailure})`;
   const head =
     `app on ${hostname}:${port} — the process started and answered on its control ` +
-    `channel, but never listened within ${Math.round(budgetMs / 1000)}s`;
+    `channel, but never accepted a connection${refused} within ${Math.round(budgetMs / 1000)}s`;
   // The app usually said why, on a stream this process has been buffering all
   // along. It was only ever printed when the child exited, so a boot that hung
   // instead of dying — the exact case this message covers — threw the
@@ -192,6 +204,47 @@ export function appNeverListened(
     `during startup — starting the same server.js by hand, with PORT set, hangs ` +
     `the same way and can be interrupted to see where`
   );
+}
+
+/**
+ * Connection errors that mean nothing accepted the connection. Everything
+ * else — a destroyed socket, a reset, a redirect loop, a proxy whose upstream
+ * is down — happens *after* the TCP handshake, and so is proof the port was
+ * open.
+ *
+ * The distinction is the whole point. The probe used to `catch {}` every
+ * failure into "not listening yet", which is true for exactly one of these
+ * cases and a lie for the rest: #74 was an app serving its measured route
+ * while the tool spent 60 s reporting that it never listened.
+ */
+const NOT_LISTENING_CODES = new Set([
+  "ECONNREFUSED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+]);
+
+/**
+ * `fetch` rejects with a bare `TypeError: fetch failed`; what happened is one
+ * level down, and not always as a `code` — a redirect loop arrives as a
+ * message with none.
+ */
+export function probeFailure(cause: unknown): string {
+  const inner = (cause as { cause?: unknown })?.cause;
+  const code = (inner as { code?: unknown })?.code;
+  if (typeof code === "string") {
+    return code;
+  }
+  const message = (inner as { message?: unknown })?.message;
+  if (typeof message === "string" && message !== "") {
+    return message;
+  }
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** Whether a probe failure means the port is not open yet. */
+export function meansNotListening(failure: string): boolean {
+  return NOT_LISTENING_CODES.has(failure);
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -319,15 +372,28 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
     // bootstrap is imported, which is before the app has loaded a single
     // module of its own — so the time the channel took says nothing about
     // how long the app needs, and must not be deducted from it.
+    // GET, not HEAD, and the route the run is about to measure rather than
+    // `/`: the probe should ask for what the load will ask for. `redirect:
+    // "manual"` because a 307 is already an answer — following it can leave
+    // the wait chasing a locale loop that has nothing to do with readiness.
+    let lastFailure: string | undefined;
     await pollUntil(
       Date.now() + readyTimeoutMs,
-      () => appNeverListened(hostname, options.appPort, readyTimeoutMs, stderrWindow()),
+      () => appNeverListened(hostname, options.appPort, readyTimeoutMs, stderrWindow(), lastFailure),
       async () => {
+        const url = `http://${hostname}:${options.appPort}${options.readyPath ?? "/"}`;
         try {
-          await fetch(`http://${hostname}:${options.appPort}/`, { method: "HEAD" });
+          const response = await fetch(url, { method: "GET", redirect: "manual" });
+          await response.body?.cancel();
           return true;
-        } catch {
-          return undefined;
+        } catch (cause) {
+          const failure = probeFailure(cause);
+          lastFailure = failure;
+          // Only a refused connection means "not up yet". Anything else was
+          // answered by something, so the app is listening — whatever it did
+          // afterwards is the load phase's problem to report, not a reason to
+          // call the route failed before measuring it.
+          return meansNotListening(failure) ? undefined : true;
         }
       },
       failed
