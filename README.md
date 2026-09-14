@@ -29,17 +29,17 @@ next-leak found the growth, the retaining object and the chain that holds it —
 without being told what to look for. Next.js 16.3.0 has since fixed it.
 
 **Verified against real Next.js issues**, not synthetic fixtures. Issue states
-checked 2026-09-05:
+checked 2026-09-14:
 
 | Issue | What it is | Measured | State today |
 |---|---|---|---|
-| [#97776](https://github.com/vercel/next.js/issues/97776) | `use cache`: `AbortSignal.any` composites never released (canonical issue; #97938 and #97464 are duplicates) | +705 KB per request on 16.3.3, flat on 16.2.6 (the #97938 run) | **open** — fix [#97476](https://github.com/vercel/next.js/pull/97476) merged Aug 19, in no stable release as of 16.3.4 |
-| [#97938](https://github.com/vercel/next.js/issues/97938) | `cacheComponents`: composite abort signal never released | +705 KB per request on 16.3.3, flat on 16.2.6 | closed Aug 31 as a duplicate of #97776; fix in no stable release |
+| [#97938](https://github.com/vercel/next.js/issues/97938) | `use cache` / `cacheComponents`: `AbortSignal.any` composites never released (canonical issue since Sep 9; #97776 and #97464 are duplicates) | +705 KB per request on 16.3.3, flat on 16.2.6 | fixed in **16.3.5** (Sep 11) by [#98448](https://github.com/vercel/next.js/pull/98448), the backport of [#97476](https://github.com/vercel/next.js/pull/97476); re-measured Sep 14: +709 KB per request on 16.3.4, flat on 16.3.5 |
+| [#97776](https://github.com/vercel/next.js/issues/97776) | `use cache`: the same composites, reported from production | the #97938 run above | closed Sep 9 as a duplicate of #97938; fixed in 16.3.5 |
 | [#96533](https://github.com/vercel/next.js/issues/96533) | ISR revalidation holds RSC buffers between collections | 4–5 MB of `arrayBuffers` held vs 0.32 MB retained | **open** |
-| [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | OOM after 1617 and 1525 of 2504 pages on 16.3.3; 16.2.12 finishes at 0.05 MB/page | closed Aug 31 as a duplicate of #97776; fix in no stable release |
-| [#97802](https://github.com/vercel/next.js/issues/97802) | Turbopack compilation saturates the container before rendering anything | Reporter's reproduction in a 2 CPU / 4 GB container: 16.2.12 peaks ~2 GB and finishes; 16.3.0 pins 4 GB and stalls | **open** — bisected to 16.3.0; no fix known |
+| [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | OOM after 1617 and 1525 of 2504 pages on 16.3.3; 16.2.12 finishes at 0.05 MB/page | closed Aug 31 as a duplicate; same fix, in 16.3.5 — not re-measured here yet |
+| [#97802](https://github.com/vercel/next.js/issues/97802) | Turbopack compilation saturates the container before rendering anything | Reporter's reproduction in a 2 CPU / 4 GB container: 16.2.12 peaks ~2 GB and finishes; 16.3.0 pins 4 GB and stalls | **open** — bisected to 16.3.0; two fixes from Vercel in review ([#98581](https://github.com/vercel/next.js/pull/98581), [#98611](https://github.com/vercel/next.js/pull/98611)), none merged |
 | [#92287](https://github.com/vercel/next.js/issues/92287) | Cache Components: unbounded `arrayBuffers` under load | 37.5 MB of arrayBuffers held between collections, 37x what it retains (16.3.1) | **open** |
-| [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware | 32.8 → 369.9 MB | **open** |
+| [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware: a reference cycle through undici's `Request` finalizer, closed when Turbopack's scope hoisting inlines axios's `composeSignals` | +17.02 MB/1000 req on 16.3.5 (Node 24.18), +4.62 (Node 24.21); flat with scope hoisting off | **open** — still leaks on 16.3.5 and 16.4.0-canary.29; fix proposed in undici ([nodejs/undici#5822](https://github.com/nodejs/undici/pull/5822)); workaround: `experimental: { turbopackScopeHoisting: false }` |
 | [#89091](https://github.com/vercel/next.js/issues/89091) | zlib retention on mid-stream aborts | +42.5 MB/1000 aborted req on 16.1.5; **+0.03 on 16.3.1** | closed |
 | [#95094](https://github.com/vercel/next.js/issues/95094) | Middleware `setTimeout` ids retained by the sandbox | 112 MB retained; flat after the fix | fixed in 16.3.0 |
 | [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | 26.7 → 71.9 MB | fixed in 16.3.0 |
