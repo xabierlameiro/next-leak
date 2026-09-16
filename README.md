@@ -29,7 +29,7 @@ next-leak found the growth, the retaining object and the chain that holds it —
 without being told what to look for. Next.js 16.3.0 has since fixed it.
 
 **Verified against real Next.js issues**, not synthetic fixtures. Issue states
-checked 2026-09-14:
+checked 2026-09-16:
 
 | Issue | What it is | Measured | State today |
 |---|---|---|---|
@@ -37,13 +37,34 @@ checked 2026-09-14:
 | [#97776](https://github.com/vercel/next.js/issues/97776) | `use cache`: the same composites, reported from production | the #97938 run above | closed Sep 9 as a duplicate of #97938; fixed in 16.3.5 |
 | [#96533](https://github.com/vercel/next.js/issues/96533) | ISR revalidation holds RSC buffers between collections | 4–5 MB of `arrayBuffers` held vs 0.32 MB retained | **open** |
 | [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | OOM after 1617 and 1525 of 2504 pages on 16.3.3; 16.2.12 finishes at 0.05 MB/page | closed Aug 31 as a duplicate; same fix, in 16.3.5 — not re-measured here yet |
-| [#97802](https://github.com/vercel/next.js/issues/97802) | Turbopack compilation saturates the container before rendering anything | Reporter's reproduction in a 2 CPU / 4 GB container: 16.2.12 peaks ~2 GB and finishes; 16.3.0 pins 4 GB and stalls | **open** — bisected to 16.3.0; two fixes from Vercel in review ([#98581](https://github.com/vercel/next.js/pull/98581), [#98611](https://github.com/vercel/next.js/pull/98611)), none merged |
+| [#97802](https://github.com/vercel/next.js/issues/97802) | Turbopack compilation saturates the container before rendering anything | not attributable to a version: see below | **open** — two fixes from Vercel in review ([#98581](https://github.com/vercel/next.js/pull/98581), [#98611](https://github.com/vercel/next.js/pull/98611)), none merged |
+| [#98707](https://github.com/vercel/next.js/issues/98707) | `next dev`: a route handler compiled after N pages costs ~16 MB × N | reproduced independently (10 pages, 34 handlers, Node 24.18): 851 MB on `16.3.0-canary.100`, **2,354 MB on canary.101**, 1,704 MB on 16.3.5; 1,461 MB requesting the handlers first | **open** — the reporter's bisect to `16.3.0-canary.101` holds |
 | [#92287](https://github.com/vercel/next.js/issues/92287) | Cache Components: unbounded `arrayBuffers` under load | 37.5 MB of arrayBuffers held between collections, 37x what it retains (16.3.1) | **open** |
 | [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware: a reference cycle through undici's `Request` finalizer, closed when Turbopack's scope hoisting inlines axios's `composeSignals` | +17.02 MB/1000 req on 16.3.5 (Node 24.18), +4.62 (Node 24.21); flat with scope hoisting off | **open** — still leaks on 16.3.5 and 16.4.0-canary.29; fix proposed in undici ([nodejs/undici#5822](https://github.com/nodejs/undici/pull/5822)); workaround: `experimental: { turbopackScopeHoisting: false }` |
 | [#89091](https://github.com/vercel/next.js/issues/89091) | zlib retention on mid-stream aborts | +42.5 MB/1000 aborted req on 16.1.5; **+0.03 on 16.3.1** | closed |
 | [#95094](https://github.com/vercel/next.js/issues/95094) | Middleware `setTimeout` ids retained by the sandbox | 112 MB retained; flat after the fix | fixed in 16.3.0 |
 | [#94890](https://github.com/vercel/next.js/issues/94890) | Router LRU cache doesn't count its keys | 26.7 → 71.9 MB | fixed in 16.3.0 |
 | [#94919](https://github.com/vercel/next.js/issues/94919) | Retention on client aborts | 39 → 139 MB · [with a caveat](#scope-and-limits-read-before-filing-issues) | fixed in 16.3.0 |
+
+**#97802, and a measurement of ours that did not hold up.** Earlier versions of this
+table said the regression was bisected to 16.3.0, on the strength of a 16.2.12 arm
+that peaked around 2 GB while 16.3.x pinned the 4 GB ceiling. Re-measured on
+2026-09-16 in a real cgroup, that comparison falls apart:
+`turbopackRustReactCompiler` does not exist before 16.3, so 16.2.12 rejects the key
+and silently compiles through the Babel React Compiler while every 16.3 arm uses the
+Rust one. Hold the version fixed and change only the compiler and
+`16.3.0-canary.100` goes from 4,096 MiB with 12.3M at-limit events to 2,250 MiB with
+zero. Give the Babel arms 2,400 s and neither 16.2.12 (2,180 MiB) nor 16.3.5
+(1,692 MiB) ever reaches `Compiled successfully` — the low peak was unfinished work,
+not headroom. With the compiler equalised and 6 GB of room, 16.3.5 is the only arm
+that finishes the build at all, and what kills 16.2.12 and `canary.0` happens after
+compilation, in prerendering. So this row no longer claims a version: the fixture
+does not separate 16.2 from 16.3.
+
+Two things worth taking from this if you measure builds yourself: when every arm
+pins at exactly the cgroup ceiling, the ceiling is the measurement and not the
+versions, so the peak cannot be the verdict; and an arm that never reaches the end
+of compilation is not an arm that fits, however low its peak looks.
 
 The closed ones are kept deliberately: a tool that only lists open bugs
 looks impressive until the bugs close, and what those rows show is that the
