@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { helpText, parseCliArgs } from "./cli-args.js";
 
@@ -295,6 +296,12 @@ describe("build command", () => {
     const parsed = parseCliArgs(["build", "/app", "--output", "/tmp/runs"]);
     if (parsed.kind !== "build") throw new Error("expected build");
     expect(parsed.options.output).toBe("/tmp/runs");
+  });
+
+  it("resolves a relative --output against the working directory", () => {
+    const parsed = parseCliArgs(["/app", "--output", "runs"]);
+    if (parsed.kind !== "run") throw new Error("expected run");
+    expect(parsed.options.output).toBe(path.join(process.cwd(), "runs"));
   });
 
   it("rejects load-shaping flags by name instead of ignoring them", () => {
