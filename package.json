@@ -54,7 +54,8 @@
       "fast-uri": ">=3.1.6 <4",
       "ip-address": ">=10.3.1 <11",
       "postcss": ">=8.5.23 <9",
-      "browserslist": ">=4.28.7"
+      "browserslist": ">=4.28.7",
+      "@puppeteer/browsers": "^3.2.2"
     }
   },
   "devDependencies": {
