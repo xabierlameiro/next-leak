@@ -8,8 +8,9 @@ on:
 jobs:
   sonar:
     runs-on: ubuntu-latest
-    # Forks have no access to the token; skip instead of failing their PRs.
-    if: github.event.pull_request.head.repo.fork != true
+    # Forks and Dependabot runs get no Actions secrets; skip instead of failing
+    # their PRs. A human push to a Dependabot branch still runs the scan.
+    if: github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v7
         with:
