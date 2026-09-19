@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export type CliRunOptions = {
   appDir: string;
   routes: string[] | null;
@@ -289,7 +291,11 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
       options.noResolve = true;
       return FLAG_OK;
     case "--output":
-      options.output = value;
+      // The measured server runs with its cwd in .next/standalone and receives
+      // this directory through NEXT_LEAK_DIR. Left relative, the server writes
+      // its control channel under a different directory than the CLI watches,
+      // and every route times out.
+      options.output = path.resolve(value);
       return FLAG_OK;
     default:
       return FLAG_OK;
