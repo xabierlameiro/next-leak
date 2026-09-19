@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.3](https://github.com/xabierlameiro/next-leak/compare/v0.11.2...v0.11.3) (2026-09-19)
+
+
+### Bug Fixes
+
+* **cli:** resolve a relative --output so the measured server finds it ([#83](https://github.com/xabierlameiro/next-leak/issues/83)) ([5bf3b94](https://github.com/xabierlameiro/next-leak/commit/5bf3b94a9210f49f242798b849583069dcb6aecc))
+* **deps:** override @puppeteer/browsers to 3.x to drop vulnerable extract-zip ([#82](https://github.com/xabierlameiro/next-leak/issues/82)) ([a858dee](https://github.com/xabierlameiro/next-leak/commit/a858dee28fb455c6cca39c8fe32db7732b7b620d))
+
 ## [0.11.2](https://github.com/xabierlameiro/next-leak/compare/v0.11.1...v0.11.2) (2026-09-08)
 
 
