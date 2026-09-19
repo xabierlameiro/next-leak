@@ -56,7 +56,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-## @babel/generator@7.29.7
+## @babel/generator@7.29.8
 
 License: MIT
 https://babel.dev/docs/en/next/babel-generator
@@ -184,7 +184,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-## @babel/parser@7.29.7
+## @babel/parser@7.29.8
 
 License: MIT
 https://babel.dev/docs/en/next/babel-parser
@@ -245,7 +245,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-## @babel/traverse@7.29.7
+## @babel/traverse@7.29.8
 
 License: MIT
 https://babel.dev/docs/en/next/babel-traverse
@@ -277,7 +277,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-## @babel/types@7.29.7
+## @babel/types@7.29.8
 
 License: MIT
 https://babel.dev/docs/en/next/babel-types
@@ -460,7 +460,7 @@ SOFTWARE.
 
 ---
 
-## @memlab/core@2.0.4
+## @memlab/core@2.0.5
 
 License: MIT
 https://github.com/facebook/memlab#readme
@@ -491,7 +491,7 @@ SOFTWARE.
 
 ---
 
-## @memlab/e2e@2.0.4
+## @memlab/e2e@2.0.5
 
 License: MIT
 https://github.com/facebook/memlab#readme
@@ -522,7 +522,7 @@ SOFTWARE.
 
 ---
 
-## @memlab/heap-analysis@2.0.4
+## @memlab/heap-analysis@2.0.5
 
 License: MIT
 https://github.com/facebook/memlab#readme
@@ -553,7 +553,7 @@ SOFTWARE.
 
 ---
 
-## @memlab/lens@2.0.4
+## @memlab/lens@2.0.5
 
 License: MIT
 https://github.com/facebook/memlab#readme
