@@ -29,7 +29,7 @@ next-leak found the growth, the retaining object and the chain that holds it —
 without being told what to look for. Next.js 16.3.0 has since fixed it.
 
 **Verified against real Next.js issues**, not synthetic fixtures. Issue states
-checked 2026-09-16:
+checked 2026-09-19:
 
 | Issue | What it is | Measured | State today |
 |---|---|---|---|
@@ -37,7 +37,7 @@ checked 2026-09-16:
 | [#97776](https://github.com/vercel/next.js/issues/97776) | `use cache`: the same composites, reported from production | the #97938 run above | closed Sep 9 as a duplicate of #97938; fixed in 16.3.5 |
 | [#96533](https://github.com/vercel/next.js/issues/96533) | ISR revalidation holds RSC buffers between collections | 4–5 MB of `arrayBuffers` held vs 0.32 MB retained | **open** |
 | [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | OOM after 1617 and 1525 of 2504 pages on 16.3.3; 16.2.12 finishes at 0.05 MB/page | closed Aug 31 as a duplicate; same fix, in 16.3.5 — not re-measured here yet |
-| [#97802](https://github.com/vercel/next.js/issues/97802) | Turbopack compilation saturates the container before rendering anything | not attributable to a version: see below | **open** — two fixes from Vercel in review ([#98581](https://github.com/vercel/next.js/pull/98581), [#98611](https://github.com/vercel/next.js/pull/98611)), none merged |
+| [#97802](https://github.com/vercel/next.js/issues/97802) | Turbopack compilation saturates the container before rendering anything | not attributable to a version: see below. [#98581](https://github.com/vercel/next.js/pull/98581) (merged Sep 16, in `16.4.0-canary.34`) doesn't move it: cold build peak 5,161 MB on canary.33 and 5,279 MB on canary.35 (`next-leak build`); under 4 GB neither finishes compiling in 600 s, under 5 GB both compile in about a minute | **open** — the other fix from Vercel, [#98611](https://github.com/vercel/next.js/pull/98611), is still a draft |
 | [#98707](https://github.com/vercel/next.js/issues/98707) | `next dev`: a route handler compiled after N pages costs ~16 MB × N | reproduced independently (10 pages, 34 handlers, Node 24.18): 851 MB on `16.3.0-canary.100`, **2,354 MB on canary.101**, 1,704 MB on 16.3.5; 1,461 MB requesting the handlers first | **open** — the reporter's bisect to `16.3.0-canary.101` holds |
 | [#92287](https://github.com/vercel/next.js/issues/92287) | Cache Components: unbounded `arrayBuffers` under load | 37.5 MB of arrayBuffers held between collections, 37x what it retains (16.3.1) | **open** |
 | [#84884](https://github.com/vercel/next.js/issues/84884) | axios + `AbortSignal` in middleware: a reference cycle through undici's `Request` finalizer, closed when Turbopack's scope hoisting inlines axios's `composeSignals` | +17.02 MB/1000 req on 16.3.5 (Node 24.18), +4.62 (Node 24.21); flat with scope hoisting off | **open** — still leaks on 16.3.5 and 16.4.0-canary.29; fix proposed in undici ([nodejs/undici#5822](https://github.com/nodejs/undici/pull/5822)); workaround: `experimental: { turbopackScopeHoisting: false }` |
