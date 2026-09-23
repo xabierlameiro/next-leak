@@ -139,11 +139,12 @@ function isClimbing(values: readonly number[], polled: boolean): boolean {
   if (!polled) {
     return false;
   }
-  const first = values[1];
-  const last = values.at(-1);
-  if (first === undefined || last === undefined) {
-    return false;
-  }
+  // The warm-up cycle is dropped from the net growth for the same reason the
+  // classifier drops it from the deltas. Both defaults are unreachable rather
+  // than defensive: a series too short to have them is one `classifyTrend`
+  // cannot call `leak`, and the conjunction below has already returned by then.
+  const first = values[1] ?? 0;
+  const last = values.at(-1) ?? 0;
   return (
     classifyTrend(values, { minGrowthPerCycle: PEAK_MIN_GROWTH_PER_CYCLE }).verdict === "leak" &&
     last - first >= PEAK_MIN_TOTAL_GROWTH

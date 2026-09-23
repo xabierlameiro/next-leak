@@ -214,6 +214,25 @@ describe("assessPressureVerdict", () => {
     expect(assess(flatTrend(), climbingPeaks([600, 620, 640, 660])).verdict).toBe("stable");
   });
 
+  it("holds a long slow drift below the per-cycle gate to be noise", () => {
+    // The two gates have to be able to reject a series on their own, or one of
+    // them is decoration. 80 MB of net climb clears the total, and every cycle
+    // adds 10 MB: under the 16 MB a peak needs, and comfortably over the
+    // ~256 KB the post-GC series is judged by. Only the per-cycle gate stands
+    // between this and a verdict.
+    const drift = [600, 610, 620, 630, 640, 650, 660, 670, 680];
+    expect(assess(flatTrend(), climbingPeaks(drift)).verdict).toBe("stable");
+  });
+
+  // The gate is the whole rule, and one step either side decides whether a user
+  // is told their process is heading for a ceiling. The boundary is inclusive,
+  // like the ones `assessPeakPressure` is held to above.
+  it("escalates on exactly 64 MB of net climb, and not on a megabyte less", () => {
+    // Warm-up is dropped, so the climb is measured from cycle 2: 764 - 700.
+    expect(assess(flatTrend(), climbingPeaks([600, 700, 732, 764])).verdict).toBe("pressure");
+    expect(assess(flatTrend(), climbingPeaks([600, 700, 732, 763])).verdict).toBe("stable");
+  });
+
   it("stays stable when one cycle in the middle was never polled", () => {
     // Dropping the hole would compare cycle 2 against cycle 4 as neighbours and
     // manufacture a delta no cycle produced.
