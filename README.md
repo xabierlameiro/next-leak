@@ -241,7 +241,7 @@ separates them, because each one has a different fix:
 | A route that is expensive, not leaky | `failed` under load it cannot sustain, flat once concurrency fits | Real leaks survive forced GC at any concurrency; saturation disappears when load drops |
 | Growth that pauses and resumes (stepwise) | `leak` | A healthy route gives back 20-30% of its growth; a stepwise leak gives back nothing |
 | A cache filling up under the load that measures it | `saturating` | A bounded store grows by less each cycle as new keys get rarer; a leak does not decelerate |
-| Memory a forced GC reclaims that production never reclaims in time | `pressure` | Every verdict sample is post-GC; the peaks are sampled under load, and a peak that climbs every cycle is a ceiling being approached |
+| Memory a forced GC reclaims that production never reclaims in time | `pressure` | Every verdict sample is post-GC; the peaks are sampled under load, and a ceiling every settled cycle comes back to is a regime, not an episode |
 | Native/buffer memory with a flat JS heap | `leak (external)` or an explicit RSS note | Heap, `external` and RSS are sampled and judged separately |
 | A leak in your code vs a dependency vs Next itself | `culprit: src/app/x/page.tsx (your code)` — or the package, or framework internals | Retainer chains mapped through the build's source maps |
 | A run whose own evidence is weak | `low confidence` warnings, or the verdict is withdrawn | Every run audits itself: did the load land, did the heap settle, does one cycle carry the average, did the heap run into its own ceiling |
