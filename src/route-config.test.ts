@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   boundedMarkerOf,
   loadRouteConfig,
+  mixesMarkers,
   probeRequestPath,
   resolveRoutePath,
   ROUTE_CONFIG_FILE,
@@ -222,5 +223,31 @@ describe("probeRequestPath", () => {
 
   it("leaves a path without markers alone, query string included", () => {
     expect(probeRequestPath("/posts/post-1?draft=1")).toBe("/posts/post-1?draft=1");
+  });
+});
+
+// A single value carrying both markers is rejected when the config loads, but
+// two params of the same route can each carry a different one. The load phase
+// resolves the bounded marker and leaves `{n}` in the path as a literal, so
+// those requests would ask for a URL with `%7Bn%7D` in it.
+describe("mixesMarkers", () => {
+  it("catches the two markers arriving from different params", () => {
+    expect(mixesMarkers("/a/v-{n}/b/w-{n%5}")).toBe(true);
+    expect(mixesMarkers("/a/v-{n%5}/b/w-{n}")).toBe(true);
+  });
+
+  it("passes a path that picks one cardinality", () => {
+    expect(mixesMarkers("/a/v-{n}/b/fixed")).toBe(false);
+    expect(mixesMarkers("/a/v-{n%5}/b/fixed")).toBe(false);
+    expect(mixesMarkers("/a/fixed")).toBe(false);
+  });
+
+  it("is the shape resolveRoutePath actually produces", () => {
+    const resolved = resolveRoutePath("/[lang]/posts/[slug]", {
+      routes: { "/[lang]/posts/[slug]": { lang: "es-{n%3}", slug: "post-{n}" } },
+    });
+
+    expect(resolved).toBe("/es-{n%3}/posts/post-{n}");
+    expect(mixesMarkers(resolved ?? "")).toBe(true);
   });
 });

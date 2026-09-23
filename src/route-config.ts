@@ -174,6 +174,19 @@ const restoreMarkers = (value: string): string =>
 const encodeCatchAll = (value: string): string => value.split("/").map(encodeSegment).join("/");
 
 /**
+ * Whether a request path mixes both load markers across its segments.
+ *
+ * A single sample value carrying both is rejected when the config loads, but
+ * two params of the same route can each carry a different one, and the mix has
+ * no coherent meaning: the load phase resolves the bounded marker per request
+ * and leaves `{n}` in the path as a literal, so every request asks for a URL
+ * with `%7Bn%7D` in it. The route is refused rather than measured that way.
+ */
+export function mixesMarkers(requestPath: string): boolean {
+  return requestPath.includes(UNIQUE_MARKER) && boundedMarkerOf(requestPath) !== null;
+}
+
+/**
  * A concrete path to ask for on behalf of a request path that still carries
  * load markers.
  *

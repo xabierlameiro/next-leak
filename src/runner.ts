@@ -26,6 +26,7 @@ import { extractModuleRegistry } from "./module-registry.js";
 import {
   boundedMarkerOf,
   loadRouteConfig,
+  mixesMarkers,
   resolveRoutePath,
   type RouteConfig,
 } from "./route-config.js";
@@ -462,6 +463,13 @@ function skipReason(route: DiscoveredRoute, requestPath: string | null): string 
   }
   if (requestPath === null) {
     return "needs sample params for dynamic segments (next-leak.config.json)";
+  }
+  if (mixesMarkers(requestPath)) {
+    return (
+      `mixes "{n}" and "{n%N}" across its params in next-leak.config.json — the load ` +
+      `resolves one and sends the other as a literal, so every request would ask for a ` +
+      `path with "{n}" in it. Pick one cardinality for the whole route.`
+    );
   }
   return null;
 }
