@@ -1,7 +1,12 @@
 import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendVerdict } from "./trend.js";
-import { effectiveVerdict, resolveCycles, warrantsIssueDraft } from "./confidence.js";
+import {
+  effectiveVerdict,
+  resolveCycles,
+  warrantsIssueDraft,
+  withdrawnByDisagreement,
+} from "./confidence.js";
 import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import { hasPlaceholders, renderConfigSkeleton } from "./route-guidance.js";
 import {
@@ -207,7 +212,15 @@ function confidenceLines(route: MeasuredRouteView): string[] {
   const lines: string[] = [];
   // What the instrument thinks of its own reading. Silence here would be the
   // worst outcome: confident numbers from a measurement that did not hold.
-  if (route.confidence.supersededVerdict !== undefined) {
+  //
+  // Withheld when repetitions are what withdrew the verdict: this sentence
+  // describes the audit, and saying it of a disagreement contradicts the
+  // repetition line above and the warning below, both of which already name the
+  // disagreement and list the verdicts it produced.
+  if (
+    route.confidence.supersededVerdict !== undefined &&
+    !withdrawnByDisagreement(route.confidence)
+  ) {
     lines.push(
       `      measured ${route.trend.verdict}, withdrawn: the run did not observe ` +
         `what that verdict needs`

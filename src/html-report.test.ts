@@ -234,7 +234,28 @@ describe("renderHtmlReport confidence", () => {
       supersededVerdict: "inconclusive",
     });
     expect(html).toContain(">inconclusive</span>");
-    expect(html).toContain("Measured <strong>leak</strong>, withdrawn");
+    expect(html).toContain(
+      "Measured <strong>leak</strong>, withdrawn: the run did not observe " +
+        "what that verdict needs."
+    );
+  });
+
+  it("drops that badge when repetitions are what withdrew the verdict", () => {
+    // The sentence describes the audit. A disagreement is the opposite case —
+    // the run observed what it needed — and the warning below says so already.
+    const html = withConfidence({
+      level: "low",
+      warnings: [
+        { code: "repetitions-disagree", detail: "3 repetitions disagreed (leak, stable)" },
+      ],
+      supersededVerdict: "inconclusive",
+    });
+    expect(html).not.toContain("withdrawn");
+    // Nothing at all is emitted in that slot, not merely a different sentence:
+    // the curve line and the warning list have to end up adjacent.
+    expect(html).toContain(`MB/1000 req</p><ul class="warn">`);
+    expect(html).toContain("<li>3 repetitions disagreed (leak, stable)</li>");
+    expect(html).toContain(">inconclusive</span>");
   });
 });
 

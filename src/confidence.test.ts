@@ -3,6 +3,7 @@ import {
   assessConfidence,
   effectiveVerdict,
   warrantsIssueDraft,
+  withdrawnByDisagreement,
   type ConfidenceInput,
 } from "./confidence.js";
 import type { HeapSample } from "./control-server.js";
@@ -794,5 +795,37 @@ describe("cache residency", () => {
     const report = assessConfidence(input({ trend: trend({ cacheDriven: true }) }));
 
     expect(report.warnings.map((warning) => warning.code)).not.toContain("cache-residency");
+  });
+});
+
+describe("withdrawnByDisagreement", () => {
+  it("recognises the repetition path", () => {
+    expect(
+      withdrawnByDisagreement({
+        level: "low",
+        warnings: [{ code: "repetitions-disagree", detail: "three runs, three verdicts" }],
+        supersededVerdict: "inconclusive",
+      })
+    ).toBe(true);
+  });
+
+  it("does not claim the audit path", () => {
+    // `assessConfidence` withdraws on evidence this run failed to produce, and
+    // that is the case the "did not observe what that verdict needs" wording
+    // was written for. Confusing the two is what this function exists to stop.
+    expect(
+      withdrawnByDisagreement({
+        level: "low",
+        warnings: [
+          { code: "unsettled", detail: "the heap never held still" },
+          { code: "thin-evidence", detail: "three deltas" },
+        ],
+        supersededVerdict: "inconclusive",
+      })
+    ).toBe(false);
+  });
+
+  it("is false when nothing was withdrawn at all", () => {
+    expect(withdrawnByDisagreement({ level: "high", warnings: [] })).toBe(false);
   });
 });
