@@ -190,6 +190,29 @@ describe("classifyMemoryTrend", () => {
     expect(mixed.verdict).toBe("inconclusive");
     expect(mixed.source).toBe("external");
   });
+
+  it("reports the larger rate when both memories carry the same verdict", () => {
+    // Both leak, but the buffers grow four times faster. Headlining the heap's
+    // smaller rate is how a route's arrayBuffers never reach the user — the
+    // number in the verdict has to be the one that fills the container.
+    const slowHeap = [10 * MB, 11 * MB, 12 * MB, 13 * MB];
+    const fastExternal = [1 * MB, 5 * MB, 9 * MB, 13 * MB];
+    const result = classifyMemoryTrend(slowHeap, fastExternal);
+
+    expect(result.verdict).toBe("leak");
+    expect(result.source).toBe("external");
+    expect(result.growthPerCycle).toBe(4 * MB);
+  });
+
+  it("keeps the heap on a tie when the heap is the faster of the two", () => {
+    const fastHeap = [1 * MB, 5 * MB, 9 * MB, 13 * MB];
+    const slowExternal = [10 * MB, 11 * MB, 12 * MB, 13 * MB];
+    const result = classifyMemoryTrend(fastHeap, slowExternal);
+
+    expect(result.verdict).toBe("leak");
+    expect(result.source).toBe("heap");
+    expect(result.growthPerCycle).toBe(4 * MB);
+  });
 });
 
 // vercel/next.js#95094 — "stepwise heap growth". Measured against the real
