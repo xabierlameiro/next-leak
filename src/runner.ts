@@ -475,18 +475,20 @@ async function measureRoute(
   pass: { cycles?: number; dirSuffix: string } | undefined = undefined
 ): Promise<RouteReport> {
   const { deps, options, target, workDir, routeConfig, registry, nextVersion, progress } = context;
-  // An ISR route serves its cache unless the request carries the build's own
-  // revalidation header; without it the load measures the static cache and
-  // nothing else.
-  const plan = planRevalidation(target.prerender, route.path, routeConfig.headers);
+  // An ISR route whose keys repeat serves its cache unless the request carries
+  // the build's own revalidation header; without it the load measures the
+  // static cache and nothing else. A route asked for a new key every time has
+  // no cache to bypass, and the header would only move the measurement onto
+  // Next's revalidation path — see planRevalidation.
+  const plan = planRevalidation(target.prerender, route.path, routeConfig.headers, requestPath);
   const revalidateSeconds = revalidateSecondsFor(target.prerender, route.path);
   const bounded = boundedMarkerOf(requestPath);
   const driven = plan.kind === "drive" ? plan.headers : {};
-  // Forcing a cached route to re-render for keys it has never served fills its
-  // store as a side effect of measuring. With `{n%N}` the key set is bounded
-  // and the store settles; with `{n}` it never repeats, so growth is expected
-  // and the verdict has to say so.
-  const cacheDriven = plan.kind === "drive" && bounded === null;
+  // Serving a cached route keys it has never held fills its store as a side
+  // effect of measuring. With `{n%N}` the key set is bounded and the store
+  // settles; with `{n}` it never repeats, so growth is expected and the verdict
+  // has to say so. True whether or not the load drives revalidation.
+  const cacheDriven = plan.kind === "no-cache-to-drive" || (plan.kind === "drive" && bounded === null);
   const merged = { ...driven, ...(routeConfig.headers ?? {}) };
   const headers = Object.keys(merged).length === 0 ? undefined : merged;
   const result = await deps.ritual({
@@ -580,7 +582,8 @@ async function measureRoute(
     samples: result.samples,
     memorySamples: result.memorySamples,
     peaks: result.peaks,
-    ...(revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
+    ...(plan.kind === "drive" &&
+      revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
     ...(bounded !== null && { keyCardinality: bounded.bound }),
     unreclaimedSamples: result.unreclaimedSamples,
     unreclaimedTrend: result.unreclaimedTrend,
@@ -667,7 +670,12 @@ async function routeReportFor(
     progress(`skipping ${label}: ${reason ?? "needs sample params"}`);
     return { route: route.path, status: "skipped", reason: reason ?? "needs sample params" };
   }
-  const plan = planRevalidation(context.target.prerender, route.path, routeConfig.headers);
+  const plan = planRevalidation(
+    context.target.prerender,
+    route.path,
+    routeConfig.headers,
+    requestPath
+  );
   if (plan.kind === "cannot-drive") {
     progress(`not measuring ${label}: ${plan.reason}`);
     return { route: route.path, status: "not-exercised", reason: plan.reason };

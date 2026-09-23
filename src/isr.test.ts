@@ -76,6 +76,41 @@ describe("planRevalidation", () => {
     expect(plan.headers).toEqual({});
   });
 
+  it("does not drive a route asked for a key it has never cached", () => {
+    // `{n}` never repeats, so there is no cached entry to bypass. Sending the
+    // header anyway moves the measurement onto Next's revalidation path, where
+    // the render count differs from the one the app's users provoke: measured
+    // on vercel/next.js#99077, both builds reported +1970 MB/1000 req with the
+    // header and separated 5x without it.
+    const plan = planRevalidation(ISR_MANIFEST, "/posts/[slug]", undefined, "/posts/post-{n}");
+    expect(plan.kind).toBe("no-cache-to-drive");
+  });
+
+  it("drives a route whose keys are bounded, because the cache holds them", () => {
+    // `{n%50}` revisits its keys, so from the second pass on the load would be
+    // served from the cache and reach no renderer without driving.
+    const plan = planRevalidation(ISR_MANIFEST, "/posts/[slug]", undefined, "/posts/post-{n%50}");
+    if (plan.kind !== "drive") throw new Error("expected drive");
+
+    expect(plan.headers[REVALIDATE_HEADER]).toBe("f9fe17d31dc264aa7d67957a9554580d");
+  });
+
+  it("drives a fixed path, which is the one entry the cache certainly holds", () => {
+    const plan = planRevalidation(ISR_MANIFEST, "/posts/[slug]", undefined, "/posts/post-1");
+    expect(plan.kind).toBe("drive");
+  });
+
+  it("still honours a user-supplied header on a never-cached key", () => {
+    // Someone driving a bespoke revalidation path knows more than the manifest.
+    const plan = planRevalidation(
+      ISR_MANIFEST,
+      "/posts/[slug]",
+      { [REVALIDATE_HEADER]: "mine" },
+      "/posts/post-{n}"
+    );
+    expect(plan.kind).toBe("drive");
+  });
+
   it("refuses to guess when the manifest carries no previewModeId", () => {
     // Measuring here would serve the cache and report a flat, meaningless
     // curve — the silent false negative this exists to close.

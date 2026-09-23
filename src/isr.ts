@@ -1,4 +1,16 @@
 import type { PrerenderManifest } from "./manifests.js";
+import { boundedMarkerOf, UNIQUE_MARKER } from "./route-config.js";
+
+/**
+ * Whether the load asks for a key the route has never served, every time.
+ *
+ * `{n%N}` is deliberately excluded: its key set is bounded, so from the second
+ * pass on the load hits entries the cache already holds and needs driving to
+ * reach the renderer at all.
+ */
+function keysAreNewEveryRequest(requestPath: string): boolean {
+  return requestPath.includes(UNIQUE_MARKER) && boundedMarkerOf(requestPath) === null;
+}
 
 /**
  * The header Next accepts as an authentic revalidation request.
@@ -46,6 +58,8 @@ export function revalidates(manifest: PrerenderManifest | undefined, route: stri
 export type RevalidationPlan =
   | { kind: "not-isr" }
   | { kind: "drive"; headers: Record<string, string> }
+  /** ISR, but every request asks for a key the cache has never held. */
+  | { kind: "no-cache-to-drive" }
   /** ISR, but the manifest cannot supply what an authentic request needs. */
   | { kind: "cannot-drive"; reason: string };
 
@@ -54,11 +68,24 @@ export type RevalidationPlan =
  *
  * A header the user set themselves wins untouched: someone driving a bespoke
  * revalidation path knows more about it than the manifest does.
+ *
+ * `requestPath` decides whether driving is needed at all. The header does not
+ * merely bypass the cache: it makes Next serve the request through its
+ * revalidation path instead of its normal one, and a route whose render count
+ * depends on the normal path is then measured somewhere its users never go.
+ * Measured on the vercel/next.js#99077 reproduction: with the header, the
+ * `partialPrefetching: true` and `false` builds both created 1.95 timers per
+ * request and were reported at the same +1970 MB/1000 req; without it they
+ * created 3.80 and 0.99 and separated 5x, matching the issue. So the header is
+ * sent only where it buys something — when the load revisits keys the cache
+ * can already hold. With `{n}` every request carries a key the route has never
+ * served, so there is no cache to bypass and driving only distorts.
  */
 export function planRevalidation(
   manifest: PrerenderManifest | undefined,
   route: string,
-  userHeaders: Record<string, string> | undefined
+  userHeaders: Record<string, string> | undefined,
+  requestPath?: string
 ): RevalidationPlan {
   const userSupplied = Object.keys(userHeaders ?? {}).some(
     (name) => name.toLowerCase() === REVALIDATE_HEADER
@@ -68,6 +95,9 @@ export function planRevalidation(
   }
   if (!revalidates(manifest, route)) {
     return { kind: "not-isr" };
+  }
+  if (requestPath !== undefined && keysAreNewEveryRequest(requestPath)) {
+    return { kind: "no-cache-to-drive" };
   }
   const previewModeId = manifest?.preview?.previewModeId;
   if (previewModeId === undefined || previewModeId === "") {
