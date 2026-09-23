@@ -98,6 +98,38 @@ describe("formatReport", () => {
     expect(formatReport(makeRunReport())).not.toContain("peak pressure");
   });
 
+  it("explains a pressure verdict rather than leaving a flat rate to contradict it", () => {
+    // The headline rate of a pressure route is flat or negative by definition,
+    // so the reader needs to be told which axis the verdict is on — otherwise
+    // they trust the number they recognise over the word they do not.
+    const report = makeRunReport();
+    report.parameters = { ...report.parameters, maxOldSpaceMb: 6144 };
+    const route = report.routes[0];
+    if (route?.status !== "measured") {
+      throw new Error("fixture broken");
+    }
+    route.trend = { verdict: "pressure", growthPerCycle: -2 * MB, deltas: [-1.5 * MB] };
+    route.growthPer1000Requests = -9 * MB;
+    route.peaks = [
+      {
+        phase: "cycle 1",
+        heapUsed: 3100 * MB,
+        external: 3600 * MB,
+        arrayBuffers: 3500 * MB,
+        rss: 3800 * MB,
+        polls: 60,
+      },
+    ];
+    const output = formatReport(report);
+
+    expect(output).toContain("▲ /  pressure  (-9.00 MB/1000 req)");
+    expect(output).toContain("nothing was retained between cycles");
+    expect(output).toContain("forced GC that production never runs");
+    // The peak note still carries the figure the verdict rests on.
+    expect(output).toContain("3800.0 MB");
+    expect(output).not.toContain("✔ /  ");
+  });
+
   it("reports unreclaimed retention beside a stable verdict", () => {
     // The vercel/next.js#96533 shape, measured 2026-08-18: arrayBuffers held
     // between collections against a flat 0.32 MB after one. The pre-collection

@@ -31,7 +31,8 @@ async function makeHarness(
   heapScript: number[],
   options: {
     failLoadCall?: number;
-    underLoadHeap?: number;
+    /** A scalar holds for every cycle; an array gives one reading per cycle. */
+    underLoadHeap?: number | readonly number[];
     failMemory?: boolean;
     /** Refuse the snapshot with this label, as a wedged child would. */
     failSnapshot?: string;
@@ -76,10 +77,16 @@ async function makeHarness(
       // MINIMUM of rss/external/arrayBuffers looks identical to one keeping
       // the maximum (mutation testing caught exactly that surviving).
       memPolls += 1;
+      const underLoad = options.underLoadHeap;
       response.end(
         JSON.stringify({
           ...sample,
-          heapUsed: options.underLoadHeap ?? heapUsed,
+          heapUsed:
+            underLoad === undefined
+              ? heapUsed
+              : typeof underLoad === "number"
+                ? underLoad
+                : underLoad[Math.min(cycleIndex, underLoad.length - 1)] ?? heapUsed,
           external: memPolls * MB,
           arrayBuffers: 2 * memPolls * MB,
           rss: 10 * memPolls * MB,
@@ -385,9 +392,10 @@ describe("peak capture", () => {
     expect(result.peaks.every((peak) => peak.polls > 0)).toBe(true);
   });
 
-  it("leaves the verdict to the post-GC samples", async () => {
-    // The shape a container kills and a retention verdict calls healthy:
-    // enormous under load, flat once the load stops.
+  it("leaves the verdict to the post-GC samples when the peak is level", async () => {
+    // A size is not a direction. Enormous under load, flat once the load stops,
+    // and reaching the same level every cycle: an app that sized its working
+    // set on the first cycle is entitled to hold it.
     harness = await makeHarness([29 * MB, 30 * MB, 30.1 * MB, 30 * MB], {
       underLoadHeap: 3500 * MB,
     });
@@ -396,6 +404,25 @@ describe("peak capture", () => {
     expect(result.trend.verdict).toBe("stable");
     expect(result.samples).toEqual([29 * MB, 30 * MB, 30.1 * MB, 30 * MB, 30 * MB]);
     expect(result.peaks[0]?.heapUsed).toBe(3500 * MB);
+  });
+
+  it("escalates to pressure when the peak climbs and nothing is retained", async () => {
+    // The vercel/next.js#92287 shape, and the false negative this wiring
+    // exists for: every post-GC sample lands back at baseline because a forced
+    // GC reclaims all of it, so the retention verdict is honestly flat — while
+    // the process is walking up to a ceiling production has no GC to save it
+    // from. Without this, the route printed `✔ stable` and the reader left.
+    harness = await makeHarness([29 * MB, 30 * MB, 30.1 * MB, 30 * MB], {
+      underLoadHeap: [0, 600, 1400, 2200, 3000].map((mb) => mb * MB),
+    });
+    const result = await runRitual(await baseOptions(), harness.deps);
+
+    expect(result.peaks.map((peak) => peak.heapUsed / MB)).toEqual([600, 1400, 2200, 3000]);
+    expect(result.trend.verdict).toBe("pressure");
+    // The raw measurement survives underneath: the retained-growth figure is
+    // still the flat one the post-GC samples produced, well under the gate the
+    // verdict would have needed.
+    expect(Math.abs(result.trend.growthPerCycle)).toBeLessThan(result.minGrowthPerCycle);
   });
 
   it("does not poll the warm-up phase", async () => {

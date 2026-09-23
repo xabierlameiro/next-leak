@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
+import {
+  assessPeakPressure,
+  assessPressureVerdict,
+  describePeakPressure,
+} from "./peak-pressure.js";
 import type { PeakSample } from "./ritual.js";
+import type { TrendResult, TrendVerdict } from "./trend.js";
 
 const MB = 1024 * 1024;
 
@@ -134,6 +139,124 @@ describe("assessPeakPressure", () => {
         maxOldSpaceMb: 512,
       })
     ).toBeNull();
+  });
+});
+
+describe("assessPressureVerdict", () => {
+  /** Post-GC verdict of a route that hands back everything it allocates. */
+  const flatTrend = (verdict: TrendVerdict = "stable"): TrendResult => ({
+    verdict,
+    growthPerCycle: -2 * MB,
+    deltas: [-1.5 * MB, -2.5 * MB],
+    source: "heap",
+  });
+
+  /** The #92287 shape: rss climbing every cycle while nothing is retained. */
+  const climbingPeaks = (values: readonly number[]): PeakSample[] =>
+    values.map((mb, index) =>
+      peak({ phase: `cycle ${index + 1}`, heapUsed: 100 * MB, rss: mb * MB })
+    );
+
+  const assess = (trend: TrendResult, peaks: readonly PeakSample[]): TrendResult =>
+    assessPressureVerdict({
+      trend,
+      peaks,
+      retainedHeapBytes: 30 * MB,
+      maxOldSpaceMb: 6144,
+    });
+
+  it("calls a route that retains nothing and keeps climbing a pressure finding", () => {
+    // Measured on the vercel/next.js#92287 reproduction, 2026-09-23: ~1 MB of
+    // arrayBuffers per request, over 3 GB reached, and every post-GC sample
+    // back at baseline. The old verdict was `stable` at -9.00 MB/1000 requests.
+    const result = assess(flatTrend(), climbingPeaks([600, 1400, 2200, 3000]));
+    expect(result.verdict).toBe("pressure");
+  });
+
+  it("leaves the measured growth figure alone when it escalates the verdict", () => {
+    // The raw record has to survive: only the verdict changes.
+    const trend = flatTrend();
+    const result = assess(trend, climbingPeaks([600, 1400, 2200, 3000]));
+    expect(result.growthPerCycle).toBe(trend.growthPerCycle);
+    expect(result.deltas).toEqual(trend.deltas);
+    expect(result.source).toBe("heap");
+  });
+
+  it("stays stable when the peak is high but level", () => {
+    // A size is not a direction: an app that reserves its working set on the
+    // first cycle and holds it there is doing nothing wrong.
+    expect(assess(flatTrend(), climbingPeaks([3000, 3000, 3000, 3000])).verdict).toBe(
+      "stable"
+    );
+  });
+
+  it("stays stable when climbing peaks stay proportionate to what is retained", () => {
+    const result = assessPressureVerdict({
+      trend: flatTrend(),
+      peaks: climbingPeaks([3000, 3400, 3800, 4200]),
+      retainedHeapBytes: 700 * MB,
+      maxOldSpaceMb: 6144,
+    });
+    expect(result.verdict).toBe("stable");
+  });
+
+  it("does not read allocator noise as a climb", () => {
+    // A reading taken under load jitters in megabytes: arenas, pages not yet
+    // returned to the OS, whatever the poll caught mid-request. The post-GC
+    // gate (~256 KB) would call this a climb; the peak gate does not.
+    expect(assess(flatTrend(), climbingPeaks([600, 602, 604, 606])).verdict).toBe("stable");
+  });
+
+  it("requires the climb to add up, not just to clear the gate twice", () => {
+    // Per-cycle deltas of 20 MB clear the 16 MB gate, and at the default 4
+    // cycles the peak series offers only two of them. 40 MB of net climb is not
+    // enough to spend a verdict on.
+    expect(assess(flatTrend(), climbingPeaks([600, 620, 640, 660])).verdict).toBe("stable");
+  });
+
+  it("stays stable when one cycle in the middle was never polled", () => {
+    // Dropping the hole would compare cycle 2 against cycle 4 as neighbours and
+    // manufacture a delta no cycle produced.
+    const holed = climbingPeaks([600, 1400, 2200, 3000]);
+    const gapped = holed.map((sample, index) =>
+      index === 2 ? { ...sample, polls: 0 } : sample
+    );
+    expect(assess(flatTrend(), gapped).verdict).toBe("stable");
+  });
+
+  it("escalates a saturating verdict on the same evidence", () => {
+    expect(assess(flatTrend("saturating"), climbingPeaks([600, 1400, 2200, 3000])).verdict).toBe(
+      "pressure"
+    );
+  });
+
+  it("never touches a leak, which is already the worse news", () => {
+    expect(assess(flatTrend("leak"), climbingPeaks([600, 1400, 2200, 3000])).verdict).toBe(
+      "leak"
+    );
+  });
+
+  it("never promotes an inconclusive series to an accusation", () => {
+    // A series nobody could call is a measurement that failed, not a finding.
+    expect(
+      assess(flatTrend("inconclusive"), climbingPeaks([600, 1400, 2200, 3000])).verdict
+    ).toBe("inconclusive");
+  });
+
+  it("cannot reach a verdict on three cycles", () => {
+    // Documented limit, not an oversight. There is no peak before the first
+    // load, so the peak series is one shorter than the post-GC one, and the
+    // first cycle carries compilation the later ones do not. Three cycles
+    // leave a single usable delta, which is a pair, not a trend.
+    expect(assess(flatTrend(), climbingPeaks([600, 1800, 3000])).verdict).toBe("stable");
+  });
+
+  it("says nothing when the poller never read a peak", () => {
+    const blind = climbingPeaks([600, 1400, 2200, 3000]).map((sample) => ({
+      ...sample,
+      polls: 0,
+    }));
+    expect(assess(flatTrend(), blind).verdict).toBe("stable");
   });
 });
 

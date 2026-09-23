@@ -1,4 +1,4 @@
-export type TrendVerdict = "leak" | "stable" | "inconclusive" | "saturating";
+export type TrendVerdict = "leak" | "stable" | "inconclusive" | "saturating" | "pressure";
 
 export type TrendResult = {
   verdict: TrendVerdict;
@@ -342,12 +342,16 @@ export function classifyMemoryTrend(
   const heap = classifyTrend(heapSamples, options);
   const external = classifyTrend(externalSamples, options);
   // Knowing a curve bends is better news than not knowing, and worse news
-  // than flat.
+  // than flat. `pressure` never comes out of this classifier — it is decided
+  // from peaks, which post-GC samples cannot see — but it is ranked here so
+  // the map stays exhaustive, just below `leak`: a ceiling the run actually
+  // reached is a harder fact than a series nobody could call.
   const severity: Record<TrendVerdict, number> = {
     leak: 0,
-    inconclusive: 1,
-    saturating: 2,
-    stable: 3,
+    pressure: 1,
+    inconclusive: 2,
+    saturating: 3,
+    stable: 4,
   };
 
   if (severity[external.verdict] < severity[heap.verdict]) {

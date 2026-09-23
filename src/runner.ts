@@ -553,7 +553,11 @@ async function measureRoute(
       detail: result.snapshotFailure,
     };
     progress(`no snapshot to attribute for ${route.path}: ${result.snapshotFailure}`);
-  } else if (verdict !== "stable" || options.diffAll === true) {
+  } else if ((verdict !== "stable" && verdict !== "pressure") || options.diffAll === true) {
+    // `pressure` is excluded alongside `stable`: both describe a process that
+    // retained nothing between cycles, so a baseline-to-after diff has nothing
+    // to name, and the step is not cheap — a 1.7 GB snapshot took a whole run
+    // down on the #97424 reproduction. `--diff-all` still forces it.
     progress(`diffing snapshots for ${route.path}`);
     try {
       diff = await deps.diff(result.baselineSnapshot, result.afterSnapshot);
@@ -687,6 +691,10 @@ async function routeReportFor(
  * window still growing measurably — the bend is real, but where it settles is
  * outside what was measured. A longer window is the only thing that tells a
  * store that runs out from a leak that merely eased off.
+ *
+ * `pressure` is settled, not undecided: the run observed the peak it is
+ * reporting. More cycles would only spend more traffic reaching the same
+ * ceiling again.
  */
 function reasonToResolve(verdict: TrendVerdict): string | null {
   switch (verdict) {
@@ -696,6 +704,7 @@ function reasonToResolve(verdict: TrendVerdict): string | null {
       return "growth was still decelerating when the window ran out";
     case "leak":
     case "stable":
+    case "pressure":
       return null;
   }
 }

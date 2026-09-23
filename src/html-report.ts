@@ -10,6 +10,9 @@ const VERDICT_COLOR = {
   stable: "#27ae60",
   inconclusive: "#e67e22",
   saturating: "#2980b9",
+  // Its own colour, not the leak red: nothing was retained, and nothing is
+  // green about a process that reached a ceiling it cannot come back from.
+  pressure: "#8e44ad",
 } as const satisfies Record<TrendVerdict, string>;
 
 function escapeHtml(value: string): string {

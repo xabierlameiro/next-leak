@@ -2,7 +2,12 @@ import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendVerdict } from "./trend.js";
 import { effectiveVerdict, resolveCycles, warrantsIssueDraft } from "./confidence.js";
-import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
+import {
+  assessPeakPressure,
+  describePeakPressure,
+  PEAK_MIN_GROWTH_PER_CYCLE,
+  PEAK_MIN_TOTAL_GROWTH,
+} from "./peak-pressure.js";
 import { hasPlaceholders, renderConfigSkeleton } from "./route-guidance.js";
 import {
   assessUnreclaimedRetention,
@@ -26,11 +31,16 @@ const VERDICT_ICON = {
   stable: "✔",
   inconclusive: "?",
   saturating: "~",
+  pressure: "▲",
 } as const satisfies Record<TrendVerdict, string>;
 
-/** RSS is noisier than the heap, so it needs both a trend and a real size. */
-const RSS_MIN_GROWTH_PER_CYCLE = 16 * MB;
-const RSS_MIN_TOTAL_GROWTH = 64 * MB;
+/**
+ * RSS is noisier than the heap, so it needs both a trend and a real size — the
+ * same pair of gates a peak series is judged against, and deliberately one
+ * definition: they answer the same question about the same kind of reading.
+ */
+const RSS_MIN_GROWTH_PER_CYCLE = PEAK_MIN_GROWTH_PER_CYCLE;
+const RSS_MIN_TOTAL_GROWTH = PEAK_MIN_TOTAL_GROWTH;
 
 function hasSustainedRssGrowth(memorySamples: readonly HeapSample[]): boolean {
   const rss = memorySamples.map((sample) => sample.rss);
@@ -129,6 +139,25 @@ function cacheLines(route: MeasuredRouteView): string[] {
 }
 
 /**
+ * Why a verdict sits next to a growth rate that does not support it.
+ *
+ * A `pressure` route has a flat — often negative — post-GC curve, because that
+ * is the finding: nothing is retained. Printing the headline without this line
+ * would read as the tool contradicting itself, and the reader would trust the
+ * number they recognise over the verdict they do not.
+ */
+function pressureLines(verdict: TrendVerdict): string[] {
+  if (verdict !== "pressure") {
+    return [];
+  }
+  return [
+    `      nothing was retained between cycles, so the rate above is flat: this ` +
+      `verdict is about what the process reached while serving, which every ` +
+      `sample here hides behind a forced GC that production never runs`,
+  ];
+}
+
+/**
  * Which early-disconnect experiment ran. The counters below say what the cuts
  * hit; this says what they were aiming at, and the two origins aim at
  * different leaks — mid-stream teardown against a client that was never there
@@ -180,7 +209,13 @@ function memorySourceLines(route: MeasuredRouteView, verdict: string): string[] 
   // external buffers, fragmentation) — but only when RSS actually trends
   // upward. A first attempt used the per-1000-request rate alone and fired
   // on 5 MB of ordinary jitter during short runs.
-  if (verdict === "stable" && hasSustainedRssGrowth(route.memorySamples)) {
+  // `pressure` belongs here too, and for the same reason: its heap is flat by
+  // definition, so the RSS curve is the only thing in the report that shows
+  // where the memory went.
+  if (
+    (verdict === "stable" || verdict === "pressure") &&
+    hasSustainedRssGrowth(route.memorySamples)
+  ) {
     const rssCurve = route.memorySamples.map((sample) => formatMb(sample.rss)).join(" → ");
     lines.push(
       `      note: heap is flat but RSS grows ${formatGrowth(route.rssPer1000Requests)} — ` +
@@ -295,6 +330,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
     ...repetitionLines(route),
     ...revalidationLines(route),
     ...cacheLines(route),
+    ...pressureLines(verdict),
     ...abandonLines(route),
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),
