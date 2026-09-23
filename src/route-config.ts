@@ -174,6 +174,24 @@ const restoreMarkers = (value: string): string =>
 const encodeCatchAll = (value: string): string => value.split("/").map(encodeSegment).join("/");
 
 /**
+ * A concrete path to ask for on behalf of a request path that still carries
+ * load markers.
+ *
+ * The readiness probe has to ask for what the load will ask for, but expanding
+ * the markers belongs to the load phase. Sent as they are, the probe requests a
+ * literal `/posts/post-%7Bn%7D` — a key no request of the run will ever revisit,
+ * planted in the route's cache before the baseline snapshot is taken.
+ *
+ * `0` is the value the build is most likely to have prerendered already, and it
+ * is one the bounded sequence visits anyway.
+ */
+export function probeRequestPath(requestPath: string): string {
+  const bounded = boundedMarkerOf(requestPath);
+  const withBound = bounded === null ? requestPath : requestPath.split(bounded.marker).join("0");
+  return withBound.split(UNIQUE_MARKER).join("0");
+}
+
+/**
  * Substitutes sample values into a dynamic route template and returns a
  * URL-safe request path (or null when a param has no configured value;
  * optional catch-alls without a value are dropped instead).

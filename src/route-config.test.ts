@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   boundedMarkerOf,
   loadRouteConfig,
+  probeRequestPath,
   resolveRoutePath,
   ROUTE_CONFIG_FILE,
   RouteConfigError,
@@ -199,5 +200,27 @@ describe("bounded cardinality marker", () => {
 
     await expect(loadRouteConfig(dir)).rejects.toBeInstanceOf(RouteConfigError);
     await expect(loadRouteConfig(dir)).rejects.toThrow(/cannot carry both/);
+  });
+});
+
+// The readiness probe asks for the route about to be measured. Sent with its
+// markers intact it asks for a literal `{n}`, planting a key in the route's
+// cache that no request of the run ever revisits — before the baseline
+// snapshot is taken.
+describe("probeRequestPath", () => {
+  it("resolves the unique marker to a value the build likely prerendered", () => {
+    expect(probeRequestPath("/posts/post-{n}")).toBe("/posts/post-0");
+  });
+
+  it("resolves the bounded marker, which the load sequence visits too", () => {
+    expect(probeRequestPath("/posts/post-{n%50}")).toBe("/posts/post-0");
+  });
+
+  it("resolves every marker in a path, not just the first", () => {
+    expect(probeRequestPath("/{n}/post-{n}")).toBe("/0/post-0");
+  });
+
+  it("leaves a path without markers alone, query string included", () => {
+    expect(probeRequestPath("/posts/post-1?draft=1")).toBe("/posts/post-1?draft=1");
   });
 });
