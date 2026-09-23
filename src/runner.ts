@@ -132,12 +132,18 @@ export type RouteReport =
        */
       keyCardinality?: number;
       /**
-       * Seconds of the ISR revalidation period this route was driven through,
-       * when it has one. Absent on routes not served from the ISR cache.
-       * Recorded because a curve measured against a cache and one measured
-       * against a re-render are different experiments.
+       * Seconds of this route's ISR revalidation period. Absent on routes not
+       * served from the ISR cache. Recorded because a curve measured against a
+       * cache and one measured against a re-render are different experiments.
        */
       revalidatedEverySeconds?: number;
+      /**
+       * Whether the load carried the build's own revalidation header. Set apart
+       * from the period because the two answer different questions: the period
+       * says the ISR cache is in play, this says which of Next's two paths
+       * served the requests that produced the curve.
+       */
+      revalidationDriven?: true;
       /** RSS growth per 1000 requests, computed like the heap figure. */
       rssPer1000Requests: number;
       /** Wall-clock per phase — explains where a long run spent its time. */
@@ -540,6 +546,9 @@ async function measureRoute(
     memorySamples: result.memorySamples,
     maxOldSpaceMb: options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB,
     warmupRequests: options.warmupRequests ?? RITUAL_DEFAULTS.warmupRequests,
+    // Decides whether the cache-residency remedy exists on this route: bounding
+    // the keys of an ISR route hands the requests back to the cache.
+    revalidatesFromCache: revalidateSeconds !== null,
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
     }),
@@ -590,8 +599,8 @@ async function measureRoute(
     samples: result.samples,
     memorySamples: result.memorySamples,
     peaks: result.peaks,
-    ...(plan.kind === "drive" &&
-      revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
+    ...(revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
+    ...(plan.kind === "drive" && { revalidationDriven: true as const }),
     ...(bounded !== null && { keyCardinality: bounded.bound }),
     unreclaimedSamples: result.unreclaimedSamples,
     unreclaimedTrend: result.unreclaimedTrend,
