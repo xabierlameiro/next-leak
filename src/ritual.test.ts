@@ -23,6 +23,12 @@ type Harness = {
 };
 
 /**
+ * What a real control server reports about the process it runs in. Every sample
+ * carries it, so the schema requires it and stand-ins must supply it too.
+ */
+const processIdentity = { pid: 4242, ppid: 4241, argv: ["node", "server.js"], cwd: "/app" };
+
+/**
  * Scripted stand-in for the control channel: serves the phase-0 protocol with
  * a predetermined heapUsed sequence, so verdicts are deterministic and the
  * exact ritual order is observable.
@@ -51,7 +57,14 @@ async function makeHarness(
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://control.local");
     const heapUsed = heapScript[Math.min(cycleIndex, heapScript.length - 1)] ?? 0;
-    const sample = { gcExposed: true, heapUsed, rss: 1, external: 1, arrayBuffers: 1 };
+    const sample = {
+      gcExposed: true,
+      heapUsed,
+      rss: 1,
+      external: 1,
+      arrayBuffers: 1,
+      ...processIdentity,
+    };
     response.setHeader("content-type", "application/json");
     if (url.pathname === "/gc") {
       events.push("gc");

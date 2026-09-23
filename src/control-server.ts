@@ -28,6 +28,26 @@ export type HeapSample = {
   rss: number;
   external: number;
   arrayBuffers: number;
+  /**
+   * Identity of the process that produced this sample. Optional in the type so
+   * fixtures stay readable; the wire schema in `control-client.ts` requires it,
+   * so a real sample always carries it.
+   */
+  pid?: number;
+  ppid?: number;
+  argv?: readonly string[];
+  cwd?: string;
+  /**
+   * HTTP requests this process has served since boot, counted by the probe in
+   * `bootstrap.ts`. A sample from a process that served nothing is a sample of
+   * the wrong process. `undefined` when the probe was not installed.
+   */
+  servedRequests?: number | undefined;
+};
+
+/** Where `bootstrap.ts` publishes the served-request count. */
+export const requestProbe = globalThis as typeof globalThis & {
+  __nextLeakServedRequests?: number;
 };
 
 function sampleMemory(gcExposed: boolean): HeapSample {
@@ -38,6 +58,13 @@ function sampleMemory(gcExposed: boolean): HeapSample {
     rss: usage.rss,
     external: usage.external,
     arrayBuffers: usage.arrayBuffers,
+    pid: process.pid,
+    ppid: process.ppid,
+    argv: process.argv,
+    cwd: process.cwd(),
+    ...(requestProbe.__nextLeakServedRequests === undefined
+      ? {}
+      : { servedRequests: requestProbe.__nextLeakServedRequests }),
   };
 }
 
