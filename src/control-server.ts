@@ -39,8 +39,10 @@ export type HeapSample = {
   cwd?: string;
   /**
    * HTTP requests this process has served since boot, counted by the probe in
-   * `bootstrap.ts`. A sample from a process that served nothing is a sample of
-   * the wrong process. `undefined` when the probe was not installed.
+   * `bootstrap.ts`. Recorded as evidence of how much traffic reached the
+   * process behind a reading, not checked anywhere: a clustered server counts
+   * in whichever process took the connection. `undefined` when the probe was
+   * not installed.
    */
   servedRequests?: number | undefined;
 };
