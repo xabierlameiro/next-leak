@@ -392,21 +392,24 @@ describe("peak capture", () => {
     expect(result.peaks.every((peak) => peak.polls > 0)).toBe(true);
   });
 
-  it("leaves the verdict to the post-GC samples when the peak is level", async () => {
-    // A size is not a direction. Enormous under load, flat once the load stops,
-    // and reaching the same level every cycle: an app that sized its working
-    // set on the first cycle is entitled to hold it.
+  it("escalates a level peak that dwarfs what the route retains", async () => {
+    // 3500 MB under load, 30 MB once the load stops, every cycle. The level is
+    // the point: an app entitled to hold a working set that size would still be
+    // holding it after the forced GC, and this one hands it all back. Measured
+    // on the vercel/next.js#92287 reproduction, the peak never climbs — it
+    // converges, because each cycle starts from the same baseline and runs the
+    // same traffic — so requiring a slope here left the verdict unreachable.
     harness = await makeHarness([29 * MB, 30 * MB, 30.1 * MB, 30 * MB], {
       underLoadHeap: 3500 * MB,
     });
     const result = await runRitual(await baseOptions(), harness.deps);
 
-    expect(result.trend.verdict).toBe("stable");
+    expect(result.trend.verdict).toBe("pressure");
     expect(result.samples).toEqual([29 * MB, 30 * MB, 30.1 * MB, 30 * MB, 30 * MB]);
     expect(result.peaks[0]?.heapUsed).toBe(3500 * MB);
   });
 
-  it("escalates to pressure when the peak climbs and nothing is retained", async () => {
+  it("escalates to pressure when every cycle reaches the ceiling and nothing is retained", async () => {
     // The vercel/next.js#92287 shape, and the false negative this wiring
     // exists for: every post-GC sample lands back at baseline because a forced
     // GC reclaims all of it, so the retention verdict is honestly flat — while

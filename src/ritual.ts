@@ -8,7 +8,7 @@ import {
   type AbandonPhaseResult,
 } from "./abandon-load.js";
 import { runLoadPhase } from "./load.js";
-import { assessPressureVerdict } from "./peak-pressure.js";
+import { assessPressureVerdict, retainedAfterLoad } from "./peak-pressure.js";
 import { classifyMemoryTrend, minGrowthFor, type TrendResult } from "./trend.js";
 
 export type RitualOptions = {
@@ -559,7 +559,7 @@ export async function runRitual(
       trend: assessPressureVerdict({
         trend: classifyMemoryTrend(samples, externalSamples, trendOptions),
         peaks,
-        retainedHeapBytes: memorySamples.at(-1)?.heapUsed ?? 0,
+        retainedHeapBytes: retainedAfterLoad(memorySamples) ?? 0,
         maxOldSpaceMb: options.maxOldSpaceMb ?? RITUAL_DEFAULTS.maxOldSpaceMb,
       }),
       requestsPerCycle: loadRequests,

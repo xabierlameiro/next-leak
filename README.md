@@ -284,13 +284,16 @@ separates them, because each one has a different fix:
   structurally blind to memory a full collection *does* reclaim but that the
   runtime does not reclaim fast enough on its own. This is that case: the
   post-GC curve is flat or falling, the peak sampled under load is far above
-  what the route retains, **and** that peak climbs every cycle. On the
-  reproduction for [#92287](https://github.com/vercel/next.js/issues/92287) the
-  app allocated about 1 MB of `arrayBuffers` per request, passed 3 GB and was
-  OOM-killed — and the old verdict was `stable`, which is precisely the trap
+  what the route retains, **and** every settled cycle reaches that height. On
+  the reproduction for [#92287](https://github.com/vercel/next.js/issues/92287)
+  the app allocated about 1 MB of `arrayBuffers` per request, passed 3 GB and
+  was OOM-killed — and the old verdict was `stable`, which is precisely the trap
   this tool exists to warn other people about. A single high peak is *not* this:
-  an app that reserves its working set on the first cycle and holds that level
-  stays `stable` with a peak note, because a size is not a direction. These
+  one cycle that reached a ceiling for a reason that did not repeat stays
+  `stable` with a peak note, because an episode is not a regime. What separates
+  this from an app entitled to a large working set is not the shape of the
+  curve, it is that a working set survives the forced collection and lands in
+  what the route retains, which acquits it on the ratio alone. These
   routes are not measured again (the run already saw the ceiling it is
   reporting) and get no issue draft: the finding is real, but it is not
   retention, so there is nothing for a snapshot diff to name. The fix is
@@ -325,12 +328,23 @@ retained, so the shape has not gone anywhere. The note fires when the peak heap 
 and above 512 MB. A peak is the highest value *sampled* (every 250 ms), so it
 is a lower bound.
 
-A single high peak stays a note and leaves the verdict alone: a size is not a
-direction, and an app that sizes its working set on the first cycle and holds
-that level is doing nothing wrong. When the peak **keeps climbing cycle after
-cycle** the verdict becomes [`pressure`](#reading-the-verdicts) instead, because
-at that point the run has watched the process walk toward a ceiling rather than
-settle under one.
+A single high peak stays a note and leaves the verdict alone: one cycle that
+reached a ceiling may have reached it for a reason that will not happen again.
+When **every settled cycle** comes back to that height the verdict becomes
+[`pressure`](#reading-the-verdicts) instead, because at that point the run is no
+longer describing an episode, it is describing what the route does under load —
+which is the number a container is sized against. The peak is not required to
+climb, and asking it to would make the verdict unreachable: each cycle is
+preceded by a forced collection and runs the same traffic, so the peak converges
+on traffic × cost-per-request rather than ramping. Measured on the #92287
+reproduction on 2026-09-24, the rss peaks across four cycles were 1229, 1344,
+1369 and 1379 MB — an asymptote.
+
+What the route retains, for this ratio, is the **floor** of its post-GC cycle
+samples rather than the last of them. Those samples follow a forced collection
+but can still carry memory the collector had not reached yet, and on that same
+reproduction they swung between 45 MB and 217 MB inside a single run, which by
+itself decided whether the note appeared at all.
 
 If the measured process dies at the limit instead of merely approaching it,
 the route fails saying exactly that, with the limit in force and how to raise

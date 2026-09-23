@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { FindingAttribution } from "./attribution.js";
-import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
+import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import type { MeasuredRoute, RunReport } from "./runner.js";
 
 const MB = 1024 * 1024;
@@ -85,7 +85,7 @@ export function renderIssueMarkdown(route: MeasuredRoute, run: RunReport): strin
 
   // Retention is the claim; the peak is what a container is sized against.
   // A maintainer reading a leak report is better served by both.
-  const retainedHeap = route.memorySamples.at(-1)?.heapUsed;
+  const retainedHeap = retainedAfterLoad(route.memorySamples);
   const pressure =
     retainedHeap === undefined || route.peaks === undefined
       ? null

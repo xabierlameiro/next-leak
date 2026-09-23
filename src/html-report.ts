@@ -1,5 +1,5 @@
 import { effectiveVerdict } from "./confidence.js";
-import { assessPeakPressure, describePeakPressure } from "./peak-pressure.js";
+import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
 import type { TrendVerdict } from "./trend.js";
 
@@ -73,7 +73,7 @@ function peakBlock(
   route: Extract<RouteReport, { status: "measured" }>,
   parameters: RunParameters
 ): string {
-  const retained = route.memorySamples.at(-1)?.heapUsed;
+  const retained = retainedAfterLoad(route.memorySamples);
   if (retained === undefined || route.peaks === undefined) {
     return "";
   }

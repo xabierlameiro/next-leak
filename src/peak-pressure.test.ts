@@ -3,7 +3,9 @@ import {
   assessPeakPressure,
   assessPressureVerdict,
   describePeakPressure,
+  retainedAfterLoad,
 } from "./peak-pressure.js";
+import type { HeapSample } from "./control-server.js";
 import type { PeakSample } from "./ritual.js";
 import type { TrendResult, TrendVerdict } from "./trend.js";
 
@@ -17,6 +19,35 @@ const peak = (overrides: Partial<PeakSample> = {}): PeakSample => ({
   rss: 60 * MB,
   polls: 40,
   ...overrides,
+});
+
+describe("retainedAfterLoad", () => {
+  const sample = (heapUsedMb: number): HeapSample => ({
+    gcExposed: true,
+    heapUsed: heapUsedMb * MB,
+    rss: 600 * MB,
+    external: 1 * MB,
+    arrayBuffers: 1 * MB,
+  });
+
+  it("takes the floor of the cycle samples, not the last of them", () => {
+    // Measured on the vercel/next.js#92287 reproduction, 2026-09-24. Every one
+    // of these follows a forced GC and they still swing by 5x, so the last one
+    // is a coin toss: 194.9 MB here, 41.0 MB on the next run of the same app.
+    const samples = [55.6, 217.1, 125.0, 45.2, 194.9].map(sample);
+    expect(retainedAfterLoad(samples)).toBe(45.2 * MB);
+  });
+
+  it("ignores the baseline, which precedes any traffic", () => {
+    // A route retains nothing before it has served anything. Dividing by that
+    // would make every route on earth look disproportionate to its peak.
+    expect(retainedAfterLoad([sample(10), sample(200), sample(300)])).toBe(200 * MB);
+  });
+
+  it("says nothing when no cycle was sampled", () => {
+    expect(retainedAfterLoad([sample(10)])).toBeUndefined();
+    expect(retainedAfterLoad([])).toBeUndefined();
+  });
 });
 
 describe("assessPeakPressure", () => {
@@ -151,7 +182,7 @@ describe("assessPressureVerdict", () => {
     source: "heap",
   });
 
-  /** The #92287 shape: rss climbing every cycle while nothing is retained. */
+  /** The #92287 shape: rss reaching far past what is retained, cycle after cycle. */
   const climbingPeaks = (values: readonly number[]): PeakSample[] =>
     values.map((mb, index) =>
       peak({ phase: `cycle ${index + 1}`, heapUsed: 100 * MB, rss: mb * MB })
@@ -165,7 +196,7 @@ describe("assessPressureVerdict", () => {
       maxOldSpaceMb: 6144,
     });
 
-  it("calls a route that retains nothing and keeps climbing a pressure finding", () => {
+  it("calls a route that retains nothing and keeps reaching the ceiling a pressure finding", () => {
     // Measured on the vercel/next.js#92287 reproduction, 2026-09-23: ~1 MB of
     // arrayBuffers per request, over 3 GB reached, and every post-GC sample
     // back at baseline. The old verdict was `stable` at -9.00 MB/1000 requests.
@@ -182,11 +213,14 @@ describe("assessPressureVerdict", () => {
     expect(result.source).toBe("heap");
   });
 
-  it("stays stable when the peak is high but level", () => {
-    // A size is not a direction: an app that reserves its working set on the
-    // first cycle and holds it there is doing nothing wrong.
+  it("calls a level peak pressure too, because the regime is what kills", () => {
+    // Measured on the same reproduction: under this ritual the peak cannot
+    // climb, because every cycle is preceded by a forced collection and runs
+    // the same traffic, so it converges on traffic x cost-per-request. A run
+    // that returns to the ceiling every cycle is describing what it does under
+    // load, and that is the number a container is sized against.
     expect(assess(flatTrend(), climbingPeaks([3000, 3000, 3000, 3000])).verdict).toBe(
-      "stable"
+      "pressure"
     );
   });
 
@@ -200,37 +234,53 @@ describe("assessPressureVerdict", () => {
     expect(result.verdict).toBe("stable");
   });
 
-  it("does not read allocator noise as a climb", () => {
-    // A reading taken under load jitters in megabytes: arenas, pages not yet
-    // returned to the OS, whatever the poll caught mid-request. The post-GC
-    // gate (~256 KB) would call this a climb; the peak gate does not.
-    expect(assess(flatTrend(), climbingPeaks([600, 602, 604, 606])).verdict).toBe("stable");
+  it("stays stable when only one cycle reached the ceiling", () => {
+    // An episode, not a regime: the note still fires on the 3000 MB high-water
+    // mark, but one cycle that reached it for a reason that did not repeat is
+    // not something to accuse a route of.
+    expect(assess(flatTrend(), climbingPeaks([600, 3000, 200, 180])).verdict).toBe("stable");
   });
 
-  it("requires the climb to add up, not just to clear the gate twice", () => {
-    // Per-cycle deltas of 20 MB clear the 16 MB gate, and at the default 4
-    // cycles the peak series offers only two of them. 40 MB of net climb is not
-    // enough to spend a verdict on.
-    expect(assess(flatTrend(), climbingPeaks([600, 620, 640, 660])).verdict).toBe("stable");
+  it("does not count the warm-up cycle towards the regime", () => {
+    // The first cycle carries compilation and lazy initialisation the later
+    // ones do not, so it is dropped here exactly as the classifier drops it.
+    expect(assess(flatTrend(), climbingPeaks([3000, 200, 180, 190])).verdict).toBe("stable");
   });
 
-  it("holds a long slow drift below the per-cycle gate to be noise", () => {
-    // The two gates have to be able to reject a series on their own, or one of
-    // them is decoration. 80 MB of net climb clears the total, and every cycle
-    // adds 10 MB: under the 16 MB a peak needs, and comfortably over the
-    // ~256 KB the post-GC series is judged by. Only the per-cycle gate stands
-    // between this and a verdict.
-    const drift = [600, 610, 620, 630, 640, 650, 660, 670, 680];
-    expect(assess(flatTrend(), climbingPeaks(drift)).verdict).toBe("stable");
+  it("stays stable when the last cycle comes back down", () => {
+    // Whatever the run reached, it is not what this route does under load.
+    expect(assess(flatTrend(), climbingPeaks([3000, 3000, 3000, 200])).verdict).toBe("stable");
   });
 
-  // The gate is the whole rule, and one step either side decides whether a user
-  // is told their process is heading for a ceiling. The boundary is inclusive,
-  // like the ones `assessPeakPressure` is held to above.
-  it("escalates on exactly 64 MB of net climb, and not on a megabyte less", () => {
-    // Warm-up is dropped, so the climb is measured from cycle 2: 764 - 700.
-    expect(assess(flatTrend(), climbingPeaks([600, 700, 732, 764])).verdict).toBe("pressure");
-    expect(assess(flatTrend(), climbingPeaks([600, 700, 732, 763])).verdict).toBe("stable");
+  it("needs a second settled cycle before it can say the word again", () => {
+    // Two cycles in total leave one settled cycle, which cannot repeat itself.
+    expect(assess(flatTrend(), climbingPeaks([600, 3000])).verdict).toBe("stable");
+  });
+
+  it("judges each cycle against the heap ceiling when that is the class", () => {
+    // The two classes are different readings against different limits, so the
+    // per-cycle rule has to branch the same way `assessPeakPressure` does.
+    const heapPeaks = [3000, 3100, 3200, 3300].map((mb, index) =>
+      peak({ phase: `cycle ${index + 1}`, heapUsed: mb * MB, rss: 100 * MB })
+    );
+    const sustained = assessPressureVerdict({
+      trend: flatTrend(),
+      peaks: heapPeaks,
+      retainedHeapBytes: 30 * MB,
+      maxOldSpaceMb: 4096,
+    });
+    expect(sustained.verdict).toBe("pressure");
+
+    // One settled cycle back under 75% of 4096 MB, and the regime is broken.
+    const dips = [...heapPeaks];
+    dips[2] = peak({ phase: "cycle 3", heapUsed: 1000 * MB, rss: 100 * MB });
+    const broken = assessPressureVerdict({
+      trend: flatTrend(),
+      peaks: dips,
+      retainedHeapBytes: 30 * MB,
+      maxOldSpaceMb: 4096,
+    });
+    expect(broken.verdict).toBe("stable");
   });
 
   it("stays stable when one cycle in the middle was never polled", () => {
@@ -262,12 +312,12 @@ describe("assessPressureVerdict", () => {
     ).toBe("inconclusive");
   });
 
-  it("cannot reach a verdict on three cycles", () => {
-    // Documented limit, not an oversight. There is no peak before the first
-    // load, so the peak series is one shorter than the post-GC one, and the
-    // first cycle carries compilation the later ones do not. Three cycles
-    // leave a single usable delta, which is a pair, not a trend.
-    expect(assess(flatTrend(), climbingPeaks([600, 1800, 3000])).verdict).toBe("stable");
+  it("can reach a verdict on the three cycles the CLI allows at minimum", () => {
+    // Three cycles leave two settled ones, which is enough to say the process
+    // came back. The old four-cycle floor was there because the verdict rested
+    // on deltas and the peak series has no baseline row to supply the first
+    // one; with no deltas left to take, that floor had no argument behind it.
+    expect(assess(flatTrend(), climbingPeaks([600, 1800, 3000])).verdict).toBe("pressure");
   });
 
   it("says nothing when the poller never read a peak", () => {

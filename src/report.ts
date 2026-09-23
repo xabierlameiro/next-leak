@@ -2,12 +2,7 @@ import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendVerdict } from "./trend.js";
 import { effectiveVerdict, resolveCycles, warrantsIssueDraft } from "./confidence.js";
-import {
-  assessPeakPressure,
-  describePeakPressure,
-  PEAK_MIN_GROWTH_PER_CYCLE,
-  PEAK_MIN_TOTAL_GROWTH,
-} from "./peak-pressure.js";
+import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import { hasPlaceholders, renderConfigSkeleton } from "./route-guidance.js";
 import {
   assessUnreclaimedRetention,
@@ -35,12 +30,15 @@ const VERDICT_ICON = {
 } as const satisfies Record<TrendVerdict, string>;
 
 /**
- * RSS is noisier than the heap, so it needs both a trend and a real size — the
- * same pair of gates a peak series is judged against, and deliberately one
- * definition: they answer the same question about the same kind of reading.
+ * RSS is noisier than the heap, so it needs both a trend and a real size.
+ *
+ * Not the post-GC gate, which is ~256 KB: that one is calibrated on the
+ * quietest reading a process gives. RSS carries allocator arenas and pages not
+ * yet returned to the OS, and jitters in megabytes, so judging it against the
+ * heap's gate would promote ordinary noise to a note.
  */
-const RSS_MIN_GROWTH_PER_CYCLE = PEAK_MIN_GROWTH_PER_CYCLE;
-const RSS_MIN_TOTAL_GROWTH = PEAK_MIN_TOTAL_GROWTH;
+const RSS_MIN_GROWTH_PER_CYCLE = 16 * MB;
+const RSS_MIN_TOTAL_GROWTH = 64 * MB;
 
 function hasSustainedRssGrowth(memorySamples: readonly HeapSample[]): boolean {
   const rss = memorySamples.map((sample) => sample.rss);
@@ -261,7 +259,7 @@ function findingLines(route: MeasuredRouteView): string[] {
  * still be OOM-killed for what it reached.
  */
 function peakPressureLines(route: MeasuredRouteView, parameters: RunParameters): string[] {
-  const retained = route.memorySamples.at(-1)?.heapUsed;
+  const retained = retainedAfterLoad(route.memorySamples);
   if (retained === undefined) {
     return [];
   }
