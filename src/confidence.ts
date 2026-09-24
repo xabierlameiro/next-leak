@@ -68,12 +68,44 @@ export type ConfidenceReport = {
   warnings: MeasurementWarning[];
   /**
    * Verdict the evidence actually supports, when the measurement is not merely
-   * noisy but invalid. Only ever downgrades `leak`: accusing an app of leaking
-   * on evidence that does not hold is the expensive error — it sends someone
-   * chasing a ghost and ends as an issue against this tool.
+   * noisy but invalid.
+   *
+   * Two different mechanisms set this, and they mean different things.
+   * `assessConfidence` sets it when a run did not observe what its own verdict
+   * requires, and only ever downgrades `leak`: accusing an app of leaking on
+   * evidence that does not hold is the expensive error — it sends someone
+   * chasing a ghost and ends as an issue against this tool. `aggregateRepetitions`
+   * sets it for *any* verdict when repetitions of the same route disagreed,
+   * which is not a flaw in this run at all. `withdrawnByDisagreement` below
+   * tells the two apart; anything that explains a withdrawal to a reader has to.
    */
   supersededVerdict?: TrendVerdict;
 };
+
+/**
+ * Whether a withdrawal came from repetitions disagreeing rather than from this
+ * run failing its own audit.
+ *
+ * The distinction matters to anyone phrasing it. An audited withdrawal means
+ * the run never observed what the verdict needs — it never settled, the
+ * disconnects cut nothing, the deltas were too thin. A disagreement means the
+ * opposite: this run observed exactly what it needed, and another run of the
+ * same route observed something else. Telling a reader the run "did not observe
+ * what that verdict needs" in the second case is simply untrue, and the
+ * disagreement already carries its own warning naming the verdicts it produced.
+ *
+ * Both can be true of one report, and then this answers `true` and the audit's
+ * sentence is dropped along with the disagreement's. `aggregateRepetitions`
+ * keeps the winning pass's own warnings and overwrites only `supersededVerdict`,
+ * which both mechanisms set to `inconclusive`, so no reading is lost: the
+ * audit's warning still prints its own detail, which names the cause the generic
+ * sentence never did. Separating the two would mean carrying the winner's
+ * withdrawal reason through the aggregation, and it would buy the reader a
+ * sentence they already have in a more specific form.
+ */
+export function withdrawnByDisagreement(confidence: ConfidenceReport): boolean {
+  return confidence.warnings.some((warning) => warning.code === "repetitions-disagree");
+}
 
 export type ConfidenceInput = {
   trend: TrendResult;

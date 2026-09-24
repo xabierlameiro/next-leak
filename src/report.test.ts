@@ -346,6 +346,46 @@ describe("formatReport confidence", () => {
     expect(output).toContain("measured leak, withdrawn");
   });
 
+  it("does not blame the run when repetitions are what withdrew the verdict", () => {
+    // Measured with --repeat 3 on the vercel/next.js#92287 reproduction: this
+    // run observed exactly what its verdict needs, and other runs of the same
+    // route observed something else. Saying the run failed its own audit here
+    // contradicts the warning printed right below it.
+    const output = withConfidence({
+      level: "low",
+      warnings: [
+        {
+          code: "repetitions-disagree",
+          detail: "3 repetitions of this route disagreed (leak, stable, inconclusive)",
+        },
+      ],
+      supersededVerdict: "inconclusive",
+    });
+    expect(output).not.toContain("withdrawn");
+    // The reason is still on the page, with the verdicts that produced it.
+    expect(output).toContain("⚠ low confidence: 3 repetitions of this route disagreed");
+    // And the headline still carries the verdict the evidence supports.
+    expect(output).toContain("? /leaky  inconclusive");
+  });
+
+  it("still blames the run when the audit is what withdrew the verdict", () => {
+    // The two paths have to stay distinguishable: a run that never settled is
+    // a run that did not observe what `leak` requires, and that is worth saying.
+    const output = withConfidence({
+      level: "low",
+      warnings: [
+        { code: "unsettled", detail: "never settled" },
+        { code: "load-incomplete", detail: "cycle 1 landed 400 of 5000 requests" },
+      ],
+      supersededVerdict: "inconclusive",
+    });
+    // The whole sentence, because the clause is the part that has to be true:
+    // this is the one path where the run really did fail its own audit.
+    expect(output).toContain(
+      "measured leak, withdrawn: the run did not observe what that verdict needs"
+    );
+  });
+
   it("routes a withdrawn verdict into the inconclusive re-run hint", () => {
     const output = withConfidence({
       level: "low",

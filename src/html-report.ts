@@ -1,4 +1,4 @@
-import { effectiveVerdict } from "./confidence.js";
+import { effectiveVerdict, withdrawnByDisagreement } from "./confidence.js";
 import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
 import type { TrendVerdict } from "./trend.js";
@@ -113,8 +113,12 @@ function measuredSection(route: RouteReport, parameters: RunParameters): string 
   }
   const verdict = effectiveVerdict(route);
   const color = VERDICT_COLOR[verdict];
+  // Only the audited withdrawal is phrased this way. When repetitions withdrew
+  // the verdict the run did observe what it needed, and the warning list below
+  // already carries the disagreement and the verdicts it produced.
   const withdrawn =
-    route.confidence.supersededVerdict === undefined
+    route.confidence.supersededVerdict === undefined ||
+    withdrawnByDisagreement(route.confidence)
       ? ""
       : `<p class="warn">Measured <strong>${route.trend.verdict}</strong>, withdrawn: ` +
         `the run did not observe what that verdict needs.</p>`;
