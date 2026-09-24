@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1](https://github.com/xabierlameiro/next-leak/compare/v0.12.0...v0.12.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **report:** name the reason a verdict was withdrawn instead of blaming the run ([7bee8de](https://github.com/xabierlameiro/next-leak/commit/7bee8de523e51a8c946302cd212695c5b2df0d76))
+* **report:** name the reason a verdict was withdrawn instead of blaming the run ([a75ffd0](https://github.com/xabierlameiro/next-leak/commit/a75ffd0ded4655f1590fe1ca71b1ce5ac9226bb4))
+
 ## [0.12.0](https://github.com/xabierlameiro/next-leak/compare/v0.11.3...v0.12.0) (2026-09-24)
 
 
