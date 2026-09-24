@@ -8,6 +8,7 @@ import {
   type AbandonPhaseResult,
 } from "./abandon-load.js";
 import { runLoadPhase } from "./load.js";
+import { assessPressureVerdict, retainedAfterLoad } from "./peak-pressure.js";
 import { probeRequestPath } from "./route-config.js";
 import { classifyMemoryTrend, minGrowthFor, type TrendResult } from "./trend.js";
 
@@ -554,7 +555,16 @@ export async function runRitual(
       baselineSnapshot,
       afterSnapshot,
       ...(snapshotFailure !== undefined && { snapshotFailure }),
-      trend: classifyMemoryTrend(samples, externalSamples, trendOptions),
+      // A forced GC runs before every sample above, and production runs none.
+      // The peaks are the only readings in this result taken under load, so
+      // this is the one place that can tell a route which retains nothing from
+      // a route which retains nothing and dies anyway.
+      trend: assessPressureVerdict({
+        trend: classifyMemoryTrend(samples, externalSamples, trendOptions),
+        peaks,
+        retainedHeapBytes: retainedAfterLoad(memorySamples) ?? 0,
+        maxOldSpaceMb: options.maxOldSpaceMb ?? RITUAL_DEFAULTS.maxOldSpaceMb,
+      }),
       requestsPerCycle: loadRequests,
       minGrowthPerCycle,
     };

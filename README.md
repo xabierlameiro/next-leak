@@ -241,6 +241,7 @@ separates them, because each one has a different fix:
 | A route that is expensive, not leaky | `failed` under load it cannot sustain, flat once concurrency fits | Real leaks survive forced GC at any concurrency; saturation disappears when load drops |
 | Growth that pauses and resumes (stepwise) | `leak` | A healthy route gives back 20-30% of its growth; a stepwise leak gives back nothing |
 | A cache filling up under the load that measures it | `saturating` | A bounded store grows by less each cycle as new keys get rarer; a leak does not decelerate |
+| Memory a forced GC reclaims that production never reclaims in time | `pressure` | Every verdict sample is post-GC; the peaks are sampled under load, and a ceiling every settled cycle comes back to is a regime, not an episode |
 | Native/buffer memory with a flat JS heap | `leak (external)` or an explicit RSS note | Heap, `external` and RSS are sampled and judged separately |
 | A leak in your code vs a dependency vs Next itself | `culprit: src/app/x/page.tsx (your code)` — or the package, or framework internals | Retainer chains mapped through the build's source maps |
 | A run whose own evidence is weak | `low confidence` warnings, or the verdict is withdrawn | Every run audits itself: did the load land, did the heap settle, does one cycle carry the average, did the heap run into its own ceiling |
@@ -277,6 +278,27 @@ separates them, because each one has a different fix:
   draft is generated. When the load was driving a cache with keys it had never
   served, the report says so on any growing route and points at `{n%N}` to
   bound the key set — measure again that way before believing the number.
+- **`pressure`** — nothing is retained, and the process is still heading for a
+  ceiling. Every sample a verdict is computed from is taken after a forced GC,
+  and production runs none of those, so the retention verdicts above are
+  structurally blind to memory a full collection *does* reclaim but that the
+  runtime does not reclaim fast enough on its own. This is that case: the
+  post-GC curve is flat or falling, the peak sampled under load is far above
+  what the route retains, **and** every settled cycle reaches that height. On
+  the reproduction for [#92287](https://github.com/vercel/next.js/issues/92287)
+  the app allocated about 1 MB of `arrayBuffers` per request, passed 3 GB and
+  was OOM-killed — and the old verdict was `stable`, which is precisely the trap
+  this tool exists to warn other people about. A single high peak is *not* this:
+  one cycle that reached a ceiling for a reason that did not repeat stays
+  `stable` with a peak note, because an episode is not a regime. What separates
+  this from an app entitled to a large working set is not the shape of the
+  curve, it is that a working set survives the forced collection and lands in
+  what the route retains, which acquits it on the ratio alone. These
+  routes are not measured again (the run already saw the ceiling it is
+  reporting) and get no issue draft: the finding is real, but it is not
+  retention, so there is nothing for a snapshot diff to name. The fix is
+  usually allocation rate, response size or concurrency, not a missing
+  `delete`.
 - **`inconclusive`** — the evidence does not decide. The run does not stop there: any inconclusive route is **measured again automatically**, with twice the cycles, and the second pass is what you see (`resolved at 8 cycles` next to the verdict). On the reproduction for [#95094](https://github.com/vercel/next.js/issues/95094), `--quick` alone reports `inconclusive` on three deltas and then comes back with the leak. `--no-resolve` turns the second pass off; when even that is undecided, the re-run command is still printed.
 - **`failed`** — the route errored under load (auth redirects, POST-only endpoints). >1% non-2xx aborts measurement instead of measuring garbage. That's by design. A process that died of **heap exhaustion** is not one of these: it reports `leak`, because a route that could not survive its own load did not fail to be measured — it was measured right up to the point where it stopped fitting. The verdict comes from that outcome, not from the shape of the truncated curve, which is the same rule `next-leak build` applies to a static-generation worker that dies. The run prints the cycles it survived and the growth up to the death, and exits 0 with a finding rather than 1 with an error.
 
@@ -303,9 +325,26 @@ That is a real measurement of the reproduction in
 app on 16.3.1 under a shorter profile still reaches 544 MB against 33.8 MB
 retained, so the shape has not gone anywhere. The note fires when the peak heap comes within
 75% of `--max-old-space`, or when peak RSS is at least 8× the retained heap
-and above 512 MB. It never changes the verdict — retention and peak are
-different questions, and only one of them is a leak. A peak is the highest
-value *sampled* (every 250 ms), so it is a lower bound.
+and above 512 MB. A peak is the highest value *sampled* (every 250 ms), so it
+is a lower bound.
+
+A single high peak stays a note and leaves the verdict alone: one cycle that
+reached a ceiling may have reached it for a reason that will not happen again.
+When **every settled cycle** comes back to that height the verdict becomes
+[`pressure`](#reading-the-verdicts) instead, because at that point the run is no
+longer describing an episode, it is describing what the route does under load —
+which is the number a container is sized against. The peak is not required to
+climb, and asking it to would make the verdict unreachable: each cycle is
+preceded by a forced collection and runs the same traffic, so the peak converges
+on traffic × cost-per-request rather than ramping. Measured on the #92287
+reproduction on 2026-09-24, the rss peaks across four cycles were 1229, 1344,
+1369 and 1379 MB — an asymptote.
+
+What the route retains, for this ratio, is the **floor** of its post-GC cycle
+samples rather than the last of them. Those samples follow a forced collection
+but can still carry memory the collector had not reached yet, and on that same
+reproduction they swung between 45 MB and 217 MB inside a single run, which by
+itself decided whether the note appeared at all.
 
 If the measured process dies at the limit instead of merely approaching it,
 the route fails saying exactly that, with the limit in force and how to raise
