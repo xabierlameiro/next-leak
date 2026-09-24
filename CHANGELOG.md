@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.12.0](https://github.com/xabierlameiro/next-leak/compare/v0.11.3...v0.12.0) (2026-09-24)
+
+
+### Features
+
+* **control:** carry process identity and served requests on every sample ([2584bda](https://github.com/xabierlameiro/next-leak/commit/2584bda5b807977d9f8197544c9294692fd9dfd5))
+* **verdict:** name the pressure a forced GC hides, so stable stops meaning safe ([#88](https://github.com/xabierlameiro/next-leak/issues/88)) ([7cc046b](https://github.com/xabierlameiro/next-leak/commit/7cc046b4decc6ada2714a58db5fda43e2b8566b3))
+
+
+### Bug Fixes
+
+* **confidence:** withhold the draft when an ISR route's growth may be its cache ([dcc1d95](https://github.com/xabierlameiro/next-leak/commit/dcc1d959254c1e4d0c0fe5c2c24c715db011db58))
+* **isr:** stop driving revalidation when every key is new ([4f771af](https://github.com/xabierlameiro/next-leak/commit/4f771af2382af7e036ac93830b319bcddae30fc4))
+* **ritual:** resolve load markers before the readiness probe asks ([fa3229e](https://github.com/xabierlameiro/next-leak/commit/fa3229eb8b80dc8f24d90fd96687dc08b5db3208))
+* **runner:** measure the path users take, and withhold drafts the cache explains ([c554bea](https://github.com/xabierlameiro/next-leak/commit/c554beaa10e259239dbff7952a7d94cc579c525e))
+* **runner:** refuse a route that mixes {n} and {n%N} across its params ([b8ad76a](https://github.com/xabierlameiro/next-leak/commit/b8ad76ac5a4bf93da077e80b53f74fb64e48adfe))
+* **trend:** headline the faster memory when both carry the same verdict ([7dd83cb](https://github.com/xabierlameiro/next-leak/commit/7dd83cb54afcc507a3de746b1c7d2fd6a1571a88))
+
 ## [0.11.3](https://github.com/xabierlameiro/next-leak/compare/v0.11.2...v0.11.3) (2026-09-19)
 
 
