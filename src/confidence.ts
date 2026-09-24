@@ -33,6 +33,22 @@ export type WarningCode =
   | "near-heap-ceiling"
   | "warm-up-baseline"
   /**
+   * The load filled a cache the route never had to hold, and the run has no
+   * second experiment that would settle how much of the growth that was.
+   *
+   * A cache filling up and memory going missing both retain and both climb;
+   * only a bounded-key re-measurement tells them apart. On an ISR route that
+   * re-measurement is not available: a bounded key set is served from the
+   * cache, so the run drives revalidation to reach the renderer and lands on a
+   * different path of Next's. Measured on the vercel/next.js#99077
+   * reproduction, `/plain` — the same app with the leak taken out — reported
+   * `leak (+180.39 MB/1000 req)` with a fresh key per request and `stable
+   * (+1.81)` bounded, and the two builds that retain 7x apart came out at
+   * +1809.97 and +1815.05 once driven. The number stands as measured; what
+   * cannot stand is a paste-ready draft built on it.
+   */
+  | "cache-residency"
+  /**
    * Repeated measurements of the same route did not agree.
    *
    * More cycles watch one process for longer; repetitions watch different
@@ -75,6 +91,11 @@ export type ConfidenceInput = {
   maxOldSpaceMb?: number;
   /** Warm-up requests the run sent before the baseline, for the warm-up check. */
   warmupRequests?: number;
+  /**
+   * Whether this route is served from the ISR cache. Decides whether the
+   * cache-residency remedy exists — see `cacheResidencyWarnings`.
+   */
+  revalidatesFromCache?: boolean;
 };
 
 /**
@@ -112,6 +133,7 @@ const VERDICT_WEAKENING: ReadonlySet<WarningCode> = new Set([
   "spiky-growth",
   "thin-evidence",
   "repetitions-disagree",
+  "cache-residency",
 ]);
 
 /**
@@ -422,6 +444,41 @@ function thinEvidenceWarnings(
   }];
 }
 
+/**
+ * Growth a route earned by storing what it was asked to store, on a route where
+ * no second run settles how much of it that was.
+ *
+ * Narrow on purpose. A `use cache` route asked for a fresh key per request is a
+ * real shape a real deployment has, and bounding its keys does isolate the
+ * cache — the draft's own callout says to do exactly that, and measuring one on
+ * 2026-08-27 gave +603 MB/1000 requests against +88 once the payload was
+ * removed. That advice is sound there, so those routes keep their draft.
+ *
+ * It is not sound on an ISR route, which is what this catches: bounding the
+ * keys there hands the requests to the cache, so the run drives revalidation
+ * and measures a different path instead of a cleaner version of the same one.
+ * The remedy the draft recommends does not exist, and the draft is written to
+ * be pasted into someone else's tracker.
+ */
+function cacheResidencyWarnings(
+  trend: TrendResult,
+  revalidatesFromCache: boolean | undefined
+): MeasurementWarning[] {
+  if (trend.cacheDriven !== true || trend.verdict !== "leak" || revalidatesFromCache !== true) {
+    return [];
+  }
+  return [{
+    code: "cache-residency",
+    detail:
+      `every request asked this ISR route for a key it had never cached, so ` +
+      `storing them is part of the ${mb(trend.growthPerCycle)}/cycle — and here ` +
+      `the usual remedy does not apply: bounding the keys ({n%N}) hands the ` +
+      `requests back to the ISR cache, so the run would drive revalidation and ` +
+      `measure Next's other path rather than a cleaner version of this one. ` +
+      `Run it both ways and compare before attributing this to anyone`,
+  }];
+}
+
 function isVerdictInvalid(input: ConfidenceInput): boolean {
   if (input.trend.verdict !== "leak") {
     return false;
@@ -457,6 +514,7 @@ export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
     ...growthShapeWarnings(input.trend),
     ...noiseFloorWarnings(input.trend, minGrowth),
     ...thinEvidenceWarnings(input.trend, minGrowth),
+    ...cacheResidencyWarnings(input.trend, input.revalidatesFromCache),
     ...heapCeilingWarnings(input),
     ...warmUpBaselineWarnings(input),
   ];

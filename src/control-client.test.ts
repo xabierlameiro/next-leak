@@ -55,7 +55,17 @@ describe("control channel errors", () => {
   it("refuses samples from a process running without --expose-gc", async () => {
     // Such samples are not settled: reporting them as post-GC numbers would
     // be the classic false measurement the ritual exists to prevent.
-    const sample = { gcExposed: false, heapUsed: 1, rss: 1, external: 0, arrayBuffers: 0 };
+    const sample = {
+      gcExposed: false,
+      heapUsed: 1,
+      rss: 1,
+      external: 0,
+      arrayBuffers: 0,
+      pid: 4242,
+      ppid: 4241,
+      argv: ["node", "server.js"],
+      cwd: "/app",
+    };
     const port = await listen((req, res) => {
       if (req.url?.startsWith("/snapshot")) {
         res.end(JSON.stringify({ file: "/x.heapsnapshot", sample }));

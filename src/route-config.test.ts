@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   boundedMarkerOf,
   loadRouteConfig,
+  mixesMarkers,
+  probeRequestPath,
   resolveRoutePath,
   ROUTE_CONFIG_FILE,
   RouteConfigError,
@@ -199,5 +201,53 @@ describe("bounded cardinality marker", () => {
 
     await expect(loadRouteConfig(dir)).rejects.toBeInstanceOf(RouteConfigError);
     await expect(loadRouteConfig(dir)).rejects.toThrow(/cannot carry both/);
+  });
+});
+
+// The readiness probe asks for the route about to be measured. Sent with its
+// markers intact it asks for a literal `{n}`, planting a key in the route's
+// cache that no request of the run ever revisits — before the baseline
+// snapshot is taken.
+describe("probeRequestPath", () => {
+  it("resolves the unique marker to a value the build likely prerendered", () => {
+    expect(probeRequestPath("/posts/post-{n}")).toBe("/posts/post-0");
+  });
+
+  it("resolves the bounded marker, which the load sequence visits too", () => {
+    expect(probeRequestPath("/posts/post-{n%50}")).toBe("/posts/post-0");
+  });
+
+  it("resolves every marker in a path, not just the first", () => {
+    expect(probeRequestPath("/{n}/post-{n}")).toBe("/0/post-0");
+  });
+
+  it("leaves a path without markers alone, query string included", () => {
+    expect(probeRequestPath("/posts/post-1?draft=1")).toBe("/posts/post-1?draft=1");
+  });
+});
+
+// A single value carrying both markers is rejected when the config loads, but
+// two params of the same route can each carry a different one. The load phase
+// resolves the bounded marker and leaves `{n}` in the path as a literal, so
+// those requests would ask for a URL with `%7Bn%7D` in it.
+describe("mixesMarkers", () => {
+  it("catches the two markers arriving from different params", () => {
+    expect(mixesMarkers("/a/v-{n}/b/w-{n%5}")).toBe(true);
+    expect(mixesMarkers("/a/v-{n%5}/b/w-{n}")).toBe(true);
+  });
+
+  it("passes a path that picks one cardinality", () => {
+    expect(mixesMarkers("/a/v-{n}/b/fixed")).toBe(false);
+    expect(mixesMarkers("/a/v-{n%5}/b/fixed")).toBe(false);
+    expect(mixesMarkers("/a/fixed")).toBe(false);
+  });
+
+  it("is the shape resolveRoutePath actually produces", () => {
+    const resolved = resolveRoutePath("/[lang]/posts/[slug]", {
+      routes: { "/[lang]/posts/[slug]": { lang: "es-{n%3}", slug: "post-{n}" } },
+    });
+
+    expect(resolved).toBe("/es-{n%3}/posts/post-{n}");
+    expect(mixesMarkers(resolved ?? "")).toBe(true);
   });
 });

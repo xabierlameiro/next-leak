@@ -713,7 +713,11 @@ describe("drafts and the saturating verdict", () => {
     expect(warrantsIssueDraft(report)).toBe(false);
   });
 
-  it("still warrants one for a leak on a cache-driven route, which the draft must disclose", () => {
+  // A `use cache` route asked for a fresh key per request still warrants one:
+  // the draft's own callout says to bound the keys, and there that isolates the
+  // cache. Measured 2026-08-27, one such route gave +603 MB/1000 requests and
+  // +88 once the payload came out — the remedy works, so the draft stands.
+  it("still warrants one for a leak on a cache-driven route Next does not serve from ISR", () => {
     const report = {
       trend: {
         verdict: "leak" as const,
@@ -721,8 +725,74 @@ describe("drafts and the saturating verdict", () => {
         deltas: [],
         cacheDriven: true as const,
       },
-      confidence: { level: "high" as const, warnings: [] },
+      confidence: assessConfidence(
+        input({ trend: trend({ cacheDriven: true, growthPerCycle: 4 * 1024 * 1024 }) })
+      ),
     };
     expect(warrantsIssueDraft(report)).toBe(true);
+  });
+});
+
+// vercel/next.js#99077, measured: `/plain` — the same app with the leak taken
+// out — reported `leak (+180.39 MB/1000 req)` with a fresh key per request and
+// `stable (+1.81)` with the keys bounded. A full cache and a leak both climb.
+describe("cache residency", () => {
+  it("weakens a leak earned by storing keys the route had never cached", () => {
+    const report = assessConfidence(
+      input({
+        trend: trend({ cacheDriven: true, deltas: [5 * MB, 5 * MB, 5 * MB, 5 * MB, 5 * MB] }),
+        revalidatesFromCache: true,
+      })
+    );
+
+    expect(report.warnings.map((warning) => warning.code)).toContain("cache-residency");
+    expect(report.level).toBe("low");
+  });
+
+  it("leaves the verdict as measured — the growth is real, its cause is not settled", () => {
+    const measured = {
+      trend: trend({ cacheDriven: true }),
+      confidence: assessConfidence(
+        input({ trend: trend({ cacheDriven: true }), revalidatesFromCache: true })
+      ),
+    };
+
+    expect(effectiveVerdict(measured)).toBe("leak");
+  });
+
+  it("withholds the issue draft, so an unattributable number stays out of a tracker", () => {
+    const measured = {
+      trend: trend({ cacheDriven: true }),
+      confidence: assessConfidence(
+        input({ trend: trend({ cacheDriven: true }), revalidatesFromCache: true })
+      ),
+    };
+
+    expect(warrantsIssueDraft(measured)).toBe(false);
+  });
+
+  it("says nothing when the route was asked for keys it already held", () => {
+    const report = assessConfidence(input({ trend: trend(), revalidatesFromCache: true }));
+
+    expect(report.warnings.map((warning) => warning.code)).not.toContain("cache-residency");
+  });
+
+  it("says nothing on a route that did not grow", () => {
+    const report = assessConfidence(
+      input({
+        trend: trend({ verdict: "stable", cacheDriven: true, growthPerCycle: 0 }),
+        revalidatesFromCache: true,
+      })
+    );
+
+    expect(report.warnings.map((warning) => warning.code)).not.toContain("cache-residency");
+  });
+
+  // The remedy the draft recommends — bound the keys — works on a route Next
+  // does not serve from ISR, so nothing is withheld there.
+  it("says nothing on a cache-driven route outside ISR, where bounding the keys does isolate it", () => {
+    const report = assessConfidence(input({ trend: trend({ cacheDriven: true }) }));
+
+    expect(report.warnings.map((warning) => warning.code)).not.toContain("cache-residency");
   });
 });

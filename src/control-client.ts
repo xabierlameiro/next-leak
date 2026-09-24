@@ -10,6 +10,11 @@ const sampleSchema = z.object({
   rss: z.number(),
   external: z.number(),
   arrayBuffers: z.number(),
+  pid: z.number(),
+  ppid: z.number(),
+  argv: z.array(z.string()),
+  cwd: z.string(),
+  servedRequests: z.number().optional(),
 });
 
 const snapshotResponseSchema = z.object({ file: z.string(), sample: sampleSchema });

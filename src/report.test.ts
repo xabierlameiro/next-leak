@@ -387,14 +387,67 @@ describe("formatReport for ISR routes driven through revalidation", () => {
     const route = report.routes[0];
     if (route?.status !== "measured") throw new Error("fixture broken");
     route.revalidatedEverySeconds = 3600;
+    route.revalidationDriven = true;
     const output = formatReport(report);
 
     expect(output).toContain("driven through ISR revalidation");
     expect(output).toContain("revalidates every 3600s");
   });
 
+  it("warns that a driven curve is not the path the users take", () => {
+    // Next serves a revalidation request through a different path than a normal
+    // one. Measured on vercel/next.js#99077, two builds retaining 7x apart both
+    // came out at ~+1810 MB/1000 req when driven.
+    const report = makeRunReport();
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("fixture broken");
+    route.revalidatedEverySeconds = 3600;
+    route.revalidationDriven = true;
+
+    expect(formatReport(report)).toContain("path your users take is not in this number");
+  });
+
+  it("says an ISR route was not driven, and why, when every key is fresh", () => {
+    const report = makeRunReport();
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("fixture broken");
+    route.revalidatedEverySeconds = 3600;
+    const output = formatReport(report);
+
+    expect(output).toContain("not driven (revalidates every 3600s)");
+    expect(output).toContain("through the path your users take");
+  });
+
   it("says nothing for a route that is not ISR", () => {
     expect(formatReport(makeRunReport())).not.toContain("ISR revalidation");
+  });
+});
+
+// The cache-residency line tells the reader to bound the keys. On an ISR route
+// that advice buys a different measurement rather than a cleaner one, because a
+// bounded key set is served from the cache and the run then drives
+// revalidation. Measured on vercel/next.js#99077: +1809.97 and +1815.05 driven,
+// +2.34 and +343.05 undriven, for two builds retaining 7x apart.
+describe("formatReport on bounding keys of an ISR route", () => {
+  it("qualifies the advice when the route is served from the ISR cache", () => {
+    const report = makeRunReport();
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("fixture broken");
+    route.trend = { ...route.trend, cacheDriven: true, growthPerCycle: 5 * 1024 * 1024 };
+    route.revalidatedEverySeconds = 3600;
+
+    expect(formatReport(report)).toContain("{n%N} does not isolate that");
+  });
+
+  it("gives the advice unqualified on a route with no ISR cache behind it", () => {
+    const report = makeRunReport();
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("fixture broken");
+    route.trend = { ...route.trend, cacheDriven: true, growthPerCycle: 5 * 1024 * 1024 };
+    const output = formatReport(report);
+
+    expect(output).toContain("bound it with {n%N}");
+    expect(output).not.toContain("does not isolate that");
   });
 });
 

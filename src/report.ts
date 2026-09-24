@@ -71,17 +71,32 @@ function ownerLabel(attribution: FindingAttribution): string | null {
 }
 
 /**
- * An ISR route serves its cache unless the load carries the build's own
- * revalidation header. Saying so distinguishes a curve measured against a
- * re-render from one measured against a static file — the difference between a
- * verdict and a flat line that means nothing.
+ * Which of Next's two paths served the requests behind the curve.
+ *
+ * An ISR route whose keys repeat serves its cache unless the load carries the
+ * build's own revalidation header, so the header is the difference between a
+ * verdict and a flat line that means nothing. But it is not free: Next serves a
+ * revalidation request through a different path than a normal one, and a leak
+ * that lives on the normal path is invisible there. Measured on the
+ * vercel/next.js#99077 reproduction, the `partialPrefetching: true` and `false`
+ * builds created 1.95 timers per request each when driven, and 3.80 and 0.99
+ * when not. Whichever path ran, the reader has to be told which one.
  */
 function revalidationLines(route: MeasuredRouteView): string[] {
-  return route.revalidatedEverySeconds === undefined
-    ? []
+  if (route.revalidatedEverySeconds === undefined) {
+    return [];
+  }
+  const every = `revalidates every ${route.revalidatedEverySeconds}s`;
+  return route.revalidationDriven === true
+    ? [
+        `      driven through ISR revalidation (${every}; without it the load would ` +
+          `serve the cache) — this is Next's revalidation path, so a leak that only ` +
+          `happens on the path your users take is not in this number`,
+      ]
     : [
-        `      driven through ISR revalidation (revalidates every ` +
-          `${route.revalidatedEverySeconds}s; without it the load would serve the cache)`,
+        `      not driven (${every}), because every request asks for a key this route ` +
+          `has never cached — the load reached the renderer through the path your ` +
+          `users take`,
       ];
 }
 
@@ -132,6 +147,20 @@ function cacheLines(route: MeasuredRouteView): string[] {
       `      the load served keys this route had never cached, so some of this ` +
         `growth is cache residency; bound it with {n%N} in next-leak.config.json`
     );
+    // On an ISR route the same advice buys a different measurement, not a
+    // cleaner one: a bounded key set is served from the cache, so the run
+    // drives revalidation to reach the renderer at all and lands on Next's
+    // revalidation path. Measured on the vercel/next.js#99077 reproduction,
+    // two builds retaining 7x apart came out at +1809.97 and +1815.05
+    // MB/1000 req that way, and at +2.34 and +343.05 undriven.
+    if (route.revalidatedEverySeconds !== undefined) {
+      lines.push(
+        `      on this route {n%N} does not isolate that: a bounded key set is ` +
+          `served from the ISR cache, so the run would drive revalidation and ` +
+          `measure a different path. Compare the two runs rather than trusting ` +
+          `either number alone`
+      );
+    }
   }
   return lines;
 }

@@ -9,6 +9,7 @@ import {
 } from "./abandon-load.js";
 import { runLoadPhase } from "./load.js";
 import { assessPressureVerdict, retainedAfterLoad } from "./peak-pressure.js";
+import { probeRequestPath } from "./route-config.js";
 import { classifyMemoryTrend, minGrowthFor, type TrendResult } from "./trend.js";
 
 export type RitualOptions = {
@@ -370,8 +371,10 @@ export async function runRitual(
     bootstrapPath: options.bootstrapPath,
     // Wait on the route this ritual is about to measure. `/` is a different
     // page with different failure modes, and readiness judged on it withdrew
-    // routes that were serving fine (#74).
-    readyPath: options.route,
+    // routes that were serving fine (#74). Markers resolved, so the probe asks
+    // for a key the load will also ask for rather than planting a literal
+    // `{n}` in the route's cache.
+    readyPath: probeRequestPath(options.route),
     ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(options.readyTimeoutMs !== undefined && { readyTimeoutMs: options.readyTimeoutMs }),
   };

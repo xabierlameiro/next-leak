@@ -26,6 +26,7 @@ import { extractModuleRegistry } from "./module-registry.js";
 import {
   boundedMarkerOf,
   loadRouteConfig,
+  mixesMarkers,
   resolveRoutePath,
   type RouteConfig,
 } from "./route-config.js";
@@ -131,12 +132,18 @@ export type RouteReport =
        */
       keyCardinality?: number;
       /**
-       * Seconds of the ISR revalidation period this route was driven through,
-       * when it has one. Absent on routes not served from the ISR cache.
-       * Recorded because a curve measured against a cache and one measured
-       * against a re-render are different experiments.
+       * Seconds of this route's ISR revalidation period. Absent on routes not
+       * served from the ISR cache. Recorded because a curve measured against a
+       * cache and one measured against a re-render are different experiments.
        */
       revalidatedEverySeconds?: number;
+      /**
+       * Whether the load carried the build's own revalidation header. Set apart
+       * from the period because the two answer different questions: the period
+       * says the ISR cache is in play, this says which of Next's two paths
+       * served the requests that produced the curve.
+       */
+      revalidationDriven?: true;
       /** RSS growth per 1000 requests, computed like the heap figure. */
       rssPer1000Requests: number;
       /** Wall-clock per phase — explains where a long run spent its time. */
@@ -463,6 +470,13 @@ function skipReason(route: DiscoveredRoute, requestPath: string | null): string 
   if (requestPath === null) {
     return "needs sample params for dynamic segments (next-leak.config.json)";
   }
+  if (mixesMarkers(requestPath)) {
+    return (
+      `mixes "{n}" and "{n%N}" across its params in next-leak.config.json — the load ` +
+      `resolves one and sends the other as a literal, so every request would ask for a ` +
+      `path with "{n}" in it. Pick one cardinality for the whole route.`
+    );
+  }
   return null;
 }
 
@@ -475,18 +489,20 @@ async function measureRoute(
   pass: { cycles?: number; dirSuffix: string } | undefined = undefined
 ): Promise<RouteReport> {
   const { deps, options, target, workDir, routeConfig, registry, nextVersion, progress } = context;
-  // An ISR route serves its cache unless the request carries the build's own
-  // revalidation header; without it the load measures the static cache and
-  // nothing else.
-  const plan = planRevalidation(target.prerender, route.path, routeConfig.headers);
+  // An ISR route whose keys repeat serves its cache unless the request carries
+  // the build's own revalidation header; without it the load measures the
+  // static cache and nothing else. A route asked for a new key every time has
+  // no cache to bypass, and the header would only move the measurement onto
+  // Next's revalidation path — see planRevalidation.
+  const plan = planRevalidation(target.prerender, route.path, routeConfig.headers, requestPath);
   const revalidateSeconds = revalidateSecondsFor(target.prerender, route.path);
   const bounded = boundedMarkerOf(requestPath);
   const driven = plan.kind === "drive" ? plan.headers : {};
-  // Forcing a cached route to re-render for keys it has never served fills its
-  // store as a side effect of measuring. With `{n%N}` the key set is bounded
-  // and the store settles; with `{n}` it never repeats, so growth is expected
-  // and the verdict has to say so.
-  const cacheDriven = plan.kind === "drive" && bounded === null;
+  // Serving a cached route keys it has never held fills its store as a side
+  // effect of measuring. With `{n%N}` the key set is bounded and the store
+  // settles; with `{n}` it never repeats, so growth is expected and the verdict
+  // has to say so. True whether or not the load drives revalidation.
+  const cacheDriven = plan.kind === "no-cache-to-drive" || (plan.kind === "drive" && bounded === null);
   const merged = { ...driven, ...(routeConfig.headers ?? {}) };
   const headers = Object.keys(merged).length === 0 ? undefined : merged;
   const result = await deps.ritual({
@@ -530,6 +546,9 @@ async function measureRoute(
     memorySamples: result.memorySamples,
     maxOldSpaceMb: options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB,
     warmupRequests: options.warmupRequests ?? RITUAL_DEFAULTS.warmupRequests,
+    // Decides whether the cache-residency remedy exists on this route: bounding
+    // the keys of an ISR route hands the requests back to the cache.
+    revalidatesFromCache: revalidateSeconds !== null,
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
     }),
@@ -585,6 +604,7 @@ async function measureRoute(
     memorySamples: result.memorySamples,
     peaks: result.peaks,
     ...(revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
+    ...(plan.kind === "drive" && { revalidationDriven: true as const }),
     ...(bounded !== null && { keyCardinality: bounded.bound }),
     unreclaimedSamples: result.unreclaimedSamples,
     unreclaimedTrend: result.unreclaimedTrend,
@@ -671,7 +691,12 @@ async function routeReportFor(
     progress(`skipping ${label}: ${reason ?? "needs sample params"}`);
     return { route: route.path, status: "skipped", reason: reason ?? "needs sample params" };
   }
-  const plan = planRevalidation(context.target.prerender, route.path, routeConfig.headers);
+  const plan = planRevalidation(
+    context.target.prerender,
+    route.path,
+    routeConfig.headers,
+    requestPath
+  );
   if (plan.kind === "cannot-drive") {
     progress(`not measuring ${label}: ${plan.reason}`);
     return { route: route.path, status: "not-exercised", reason: plan.reason };
