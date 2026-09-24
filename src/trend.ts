@@ -353,5 +353,14 @@ export function classifyMemoryTrend(
   if (severity[external.verdict] < severity[heap.verdict]) {
     return { ...external, source: "external" };
   }
+  // Same verdict from both: the headline number must be the worse of the two,
+  // or a route whose buffers grow faster than its heap is reported at the
+  // heap's smaller rate and the arrayBuffers behind it never reach the user.
+  if (
+    severity[external.verdict] === severity[heap.verdict] &&
+    external.growthPerCycle > heap.growthPerCycle
+  ) {
+    return { ...external, source: "external" };
+  }
   return heap;
 }
