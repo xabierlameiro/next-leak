@@ -7,9 +7,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
-import type { Server } from "node:net";
 import path from "node:path";
 import { requestProbe, startControlServer } from "./control-server.js";
+import { countServedRequests } from "./request-probe.js";
 
 const workDir = process.env["NEXT_LEAK_DIR"];
 
@@ -26,21 +26,8 @@ const workDir = process.env["NEXT_LEAK_DIR"];
  */
 function installRequestProbe(): void {
   requestProbe.__nextLeakServedRequests = 0;
-  // `http.createServer` and `https.createServer` have different signatures, so
-  // there is no shared type to borrow. Only the return value is touched, and
-  // the arguments are forwarded untyped and unchanged.
-  const patch = <T extends { createServer: (...args: never[]) => Server }>(module: T): void => {
-    const original = module.createServer;
-    module.createServer = function patched(this: unknown, ...args: never[]): Server {
-      const server = original.apply(this, args);
-      server.on("request", () => {
-        requestProbe.__nextLeakServedRequests = (requestProbe.__nextLeakServedRequests ?? 0) + 1;
-      });
-      return server;
-    };
-  };
-  patch(http);
-  patch(https);
+  countServedRequests(http);
+  countServedRequests(https);
 }
 
 if (workDir !== undefined && workDir !== "") {
