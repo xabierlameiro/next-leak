@@ -57,6 +57,12 @@ cpSync(path.join(rootDir, "src", "__fixtures__", "e2e-app"), appDir, { recursive
 
 console.log("· measuring the fixture app with the installed binary");
 const binary = path.join(installDir, "node_modules", ".bin", "next-leak");
+// /cached is a bounded store filling up. Whatever else it is called, it is
+// never a leak — and the asserts below used to look only at /leaky and /, so
+// the one route whose shape is easy to get wrong was the one nobody checked.
+// It was coming out `leak` at 300 requests and `stable` at 600 and 3000.
+const CACHED_LEAK = /✖ \/cached\s+leak/;
+
 const output = execFileSync(
   binary,
   [appDir, "--requests", "300", "--connections", "10", "--idle", "3"],
@@ -66,6 +72,7 @@ console.log(output);
 
 assert(/✖ \/leaky\s+leak/.test(output), "installed binary did not flag the leaky route");
 assert(/✔ \/\s+stable/.test(output), "installed binary did not report the healthy route stable");
+assert(!CACHED_LEAK.test(output), `/cached was accused at 300 requests per cycle:\n${output}`);
 assert(/growth gate \d+ KiB\/cycle/.test(output), "the report did not state the gate it used");
 
 const stamp = readdirSync(path.join(appDir, ".next-leak"))[0];
@@ -94,6 +101,10 @@ for (const requests of [600, 3000]) {
   assert(
     /✔ \/\s+stable/.test(runOutput),
     `/ came out non-stable at ${requests} requests per cycle:\n${runOutput}`
+  );
+  assert(
+    !CACHED_LEAK.test(runOutput),
+    `/cached was accused at ${requests} requests per cycle:\n${runOutput}`
   );
 }
 
