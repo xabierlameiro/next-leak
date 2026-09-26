@@ -1,4 +1,8 @@
-import type { BuildAttribution } from "./build-attribution.js";
+import {
+  isAttributionGap,
+  type BuildAttribution,
+  type BuildAttributionGap,
+} from "./build-attribution.js";
 import type { BuildRunResult } from "./build-run.js";
 
 const MB = 1024 * 1024;
@@ -42,9 +46,18 @@ const MAX_REPORTED_FINDINGS = 3;
  * findings without that number invites the reader to treat them as the whole
  * story.
  */
-function attributionLines(attribution: BuildAttribution | null): string[] {
+function attributionLines(attribution: BuildAttribution | BuildAttributionGap | null): string[] {
   if (attribution === null) {
     return [];
+  }
+  // Silence belongs to the run that never asked. A run that asked and came
+  // back empty has a finding of its own, and it is not "nothing grew".
+  if (isAttributionGap(attribution)) {
+    return [
+      "",
+      `  no attribution: ${attribution.detail}.`,
+      `  This does not say nothing grew — the comparison was never made.`,
+    ];
   }
   const { diff, attributed, bracketed } = attribution;
   const findings = [...diff.grownNodes, ...diff.newNodes];
@@ -90,7 +103,7 @@ function attributionLines(attribution: BuildAttribution | null): string[] {
  */
 export function formatBuildReport(
   result: BuildRunResult,
-  attribution: BuildAttribution | null = null
+  attribution: BuildAttribution | BuildAttributionGap | null = null
 ): string {
   const lines: string[] = [`next-leak build · ${result.appDir}`, ""];
 

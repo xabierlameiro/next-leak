@@ -82,6 +82,15 @@ export type BuildRunResult = {
    * produced whether or not capture worked.
    */
   capture: BuildCapture | null;
+  /**
+   * Whether this run was asked to capture at all. Without it a null `capture`
+   * is ambiguous — nobody asked, or it was asked and missed — and the report
+   * has to choose between staying silent on a lost measurement and nagging
+   * every run that never wanted one.
+   */
+  captureRequested: boolean;
+  /** How far capture got before giving up, when it was requested and missed. */
+  captureFailure: string | null;
   strippedCapWarning: string | null;
   exitCode: number | null;
   output: string;
@@ -180,6 +189,38 @@ type CollectOptions = {
  * not finish. A half-captured worker leaves a snapshot behind in the user's
  * project, and nothing in the report would ever refer to it.
  */
+/**
+ * How far capture got, in words, for a run that asked for one and has none.
+ *
+ * The stage is the only record of which step failed, and it is local to the
+ * measurement. Without it the report can say a build has no attribution but
+ * not whether the worker was never found, never grew enough to snapshot, or
+ * grew past what a snapshot can be read back from — which is the difference
+ * between a run to repeat and a run to repeat differently.
+ */
+function describeCaptureFailure(
+  stage: CaptureStage,
+  pid: number | null,
+  mismatchedWorker: boolean
+): string | null {
+  if (mismatchedWorker) {
+    return "the snapshot pair belongs to a worker other than the one judged";
+  }
+  if (pid === null) {
+    return "no static-generation worker was seen to capture from";
+  }
+  switch (stage) {
+    case "waiting":
+      return `worker ${pid} never grew enough to snapshot`;
+    case "baseline-taken":
+      return `worker ${pid} was snapshotted once and never reached a second point`;
+    case "missed":
+      return `capture gave up on worker ${pid} before it had a pair`;
+    case "pair-taken":
+      return `the pair captured from worker ${pid} could not be collected from disk`;
+  }
+}
+
 async function collectCapture(options: CollectOptions): Promise<BuildCapture | null> {
   const { appDir, workDir, pid, stage, baselineRssBytes, afterRssBytes } = options;
   if (workDir === undefined || pid === null) {
@@ -390,6 +431,11 @@ export async function runBuildMeasurement(
       retentionPerPageBytes: null,
       heapExhausted,
       capture: workerCapture,
+      captureRequested: capturing,
+      captureFailure:
+        workerCapture === null
+          ? describeCaptureFailure(captureStage, capturePid, false)
+          : null,
       strippedCapWarning,
       exitCode,
       output,
@@ -441,6 +487,15 @@ export async function runBuildMeasurement(
     // A pair belonging to a worker other than the one judged supports no claim
     // about the verdict above, so it is dropped rather than reported next to it.
     capture: workerCapture !== null && workerCapture.pid === worst?.pid ? workerCapture : null,
+    captureRequested: capturing,
+    captureFailure:
+      workerCapture !== null && workerCapture.pid === worst?.pid
+        ? null
+        : describeCaptureFailure(
+            captureStage,
+            capturePid,
+            workerCapture !== null && workerCapture.pid !== worst?.pid
+          ),
     strippedCapWarning,
     exitCode,
     output,

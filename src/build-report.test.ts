@@ -19,6 +19,8 @@ const baseResult: BuildRunResult = {
   retentionPerPageBytes: 0.97 * MB,
   heapExhausted: true,
   capture: null,
+  captureRequested: false,
+  captureFailure: null,
   strippedCapWarning: null,
   exitCode: 1,
   output: "",
@@ -222,6 +224,29 @@ describe("formatBuildReport attribution", () => {
     const output = formatBuildReport(baseResult);
 
     expect(output).not.toContain("what it retained");
+    expect(output).not.toContain("no attribution");
+  });
+
+  // The build path loses attribution hardest on the builds worth measuring: a
+  // snapshot past roughly a gigabyte of worker rss cannot be read back. Silence
+  // there reads as "nothing grew", which is the opposite of what was found.
+  it("says a requested attribution went missing instead of omitting the section", () => {
+    const output = formatBuildReport(baseResult, {
+      reason: "snapshot-unreadable",
+      detail: "heap snapshot is 2388 MB, past the 512 MB a string can hold",
+    });
+
+    expect(output).toContain("no attribution: heap snapshot is 2388 MB");
+    expect(output).toContain("This does not say nothing grew");
+  });
+
+  it("names how far capture got when it was asked for and missed", () => {
+    const output = formatBuildReport(baseResult, {
+      reason: "capture-missed",
+      detail: "worker 97155 was snapshotted once and never reached a second point",
+    });
+
+    expect(output).toContain("never reached a second point");
   });
 });
 

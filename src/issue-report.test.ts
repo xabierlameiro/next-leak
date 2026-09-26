@@ -180,6 +180,35 @@ describe("renderIssueMarkdown without a diff", () => {
     expect(markdown).toContain("(no findings above thresholds)");
     expect(markdown).not.toContain("Stryker");
   });
+
+  // The draft is the artefact that reaches a maintainer. "No findings" for a
+  // snapshot nobody could read is a claim the run never made, and the snapshots
+  // that go unread are the ones from the largest leaks.
+  it("says the attribution is missing, not that nothing grew, when the snapshot could not be read", () => {
+    const route = leakyRoute();
+    route.diff = null;
+    route.attributionGap = {
+      reason: "snapshot-unreadable",
+      detail: "heap snapshot parses 1225 MB of its 1674 MB, past the 512 MB a single string can hold",
+    };
+    const markdown = renderIssueMarkdown(route, makeRunReport());
+    expect(markdown).toContain("**Attribution unavailable**");
+    expect(markdown).toContain("the heap snapshots could not be read");
+    expect(markdown).toContain("heap snapshot parses 1225 MB of its 1674 MB");
+    expect(markdown).not.toContain("(no findings above thresholds)");
+  });
+
+  it("distinguishes a snapshot that was never taken from one that could not be read", () => {
+    const route = leakyRoute();
+    route.diff = null;
+    route.attributionGap = {
+      reason: "snapshot-unavailable",
+      detail: "the process exited before it handed over a final snapshot",
+    };
+    const markdown = renderIssueMarkdown(route, makeRunReport());
+    expect(markdown).toContain("the final heap snapshot was never taken");
+    expect(markdown).not.toContain("(no findings above thresholds)");
+  });
 });
 
 // This file gets pasted into someone else's tracker. What the run could not

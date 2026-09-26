@@ -206,6 +206,41 @@ describe("renderHtmlReport peaks", () => {
   });
 });
 
+// An empty findings table reads as "nothing grew". It has to stop reading that
+// way when the diff never ran, which is what happens on the largest leaks.
+describe("renderHtmlReport attribution gap", () => {
+  const withGap = (gap: unknown) => {
+    const run = makeRunReport();
+    const leaky = run.routes[1];
+    if (leaky?.status !== "measured") throw new Error("fixture broken");
+    leaky.diff = null;
+    leaky.attributionGap = gap as never;
+    return renderHtmlReport(run);
+  };
+
+  it("says why a measured route has no findings table, escaping the detail", () => {
+    const html = withGap({
+      reason: "snapshot-unreadable",
+      detail: "heap snapshot parses 1225 MB of its 1674 MB <limit>",
+    });
+    expect(html).toContain("No attribution: the heap snapshots could not be read");
+    expect(html).toContain("heap snapshot parses 1225 MB of its 1674 MB &lt;limit&gt;");
+  });
+
+  it("names a snapshot that was never taken as its own cause", () => {
+    const html = withGap({ reason: "snapshot-unavailable", detail: "the process exited first" });
+    expect(html).toContain("No attribution: the final heap snapshot was never taken");
+  });
+
+  it("stays silent when a route simply had nothing above the thresholds", () => {
+    const run = makeRunReport();
+    const leaky = run.routes[1];
+    if (leaky?.status !== "measured") throw new Error("fixture broken");
+    leaky.diff = null;
+    expect(renderHtmlReport(run)).not.toContain("No attribution:");
+  });
+});
+
 describe("renderHtmlReport confidence", () => {
   const withConfidence = (confidence: unknown) => {
     const run = makeRunReport();
