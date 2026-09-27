@@ -320,6 +320,15 @@ describe("build command", () => {
     }
   });
 
+  it("rejects --attribute on a run instead of ignoring it", () => {
+    // The same rule in the other direction: a run attributes on its own, and
+    // someone who typed the flag is expecting it to change something.
+    const parsed = parseCliArgs(["/app", "--attribute"]);
+    if (parsed.kind !== "error") throw new Error("expected error");
+    expect(parsed.message).toContain("--attribute");
+    expect(parsed.message).toContain("next-leak build");
+  });
+
   it("shows help when the command has no directory", () => {
     expect(parseCliArgs(["build"]).kind).toBe("help");
   });

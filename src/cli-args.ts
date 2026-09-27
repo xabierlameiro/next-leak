@@ -404,5 +404,11 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       },
     };
   }
+  if (options.attributeBuild) {
+    return {
+      kind: "error",
+      message: `option "--attribute" applies only to "next-leak build": a run already names what it retains — see --help`,
+    };
+  }
   return { kind: "run", options };
 }
