@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.0](https://github.com/xabierlameiro/next-leak/compare/v0.12.2...v0.13.0) (2026-09-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **control:** the control channel answers 403 without the `x-next-leak-token` header. Library callers pass `{ port, token }` where they passed a port: `RitualDeps.readMemory` takes a `ControlChannel`, and `LaunchedApp` carries `controlToken` next to `controlPort`.
+* **cli:** `--attribute` on a run used to be ignored and now ends the command with an error. The option belongs to `next-leak build`; drop it from run commands.
+
+### Bug Fixes
+
+* **cli:** reject --attribute outside the build command ([#99](https://github.com/xabierlameiro/next-leak/issues/99)) ([a1cc1cf](https://github.com/xabierlameiro/next-leak/commit/a1cc1cfdafec28510e9fe44c5bbc13366148779e))
+* **control:** require a per-run token on the control channel ([#102](https://github.com/xabierlameiro/next-leak/issues/102)) ([3f6aa5a](https://github.com/xabierlameiro/next-leak/commit/3f6aa5a46d0671948e36cd67d3cb5829b1522bc5))
+* **issue-report:** keep package names and failure paths safe to publish ([#98](https://github.com/xabierlameiro/next-leak/issues/98)) ([7e669f1](https://github.com/xabierlameiro/next-leak/commit/7e669f1f304236ef07ecfb2c78098f9b46b5aa87))
+* **pressure:** judge the regime per class, not by the highest reading ([#103](https://github.com/xabierlameiro/next-leak/issues/103)) ([554a81d](https://github.com/xabierlameiro/next-leak/commit/554a81de0f297dc184c1762af4378933abc1645c))
+* **report:** keep the measured app's control characters off the terminal ([#101](https://github.com/xabierlameiro/next-leak/issues/101)) ([fd2611c](https://github.com/xabierlameiro/next-leak/commit/fd2611c3ab05e07ad02f75c61131dfbec72f8319))
+
 ## [0.12.2](https://github.com/xabierlameiro/next-leak/compare/v0.12.1...v0.12.2) (2026-09-27)
 
 
