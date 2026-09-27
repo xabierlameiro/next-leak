@@ -108,23 +108,26 @@ export function assessPeakPressure(input: PeakPressureInput): PeakPressure | nul
   const peakHeap = maxOf(sampled, (peak) => peak.heapUsed);
   const peakRss = maxOf(sampled, (peak) => peak.rss);
 
-  if (reachesHeapCeiling(peakHeap, heapLimitBytes)) {
-    return {
-      class: "heap",
-      peakBytes: peakHeap,
-      retainedBytes: input.retainedHeapBytes,
-      heapLimitBytes,
-    };
+  // A regime names its own class. Only without one is the class whichever
+  // ceiling the highest reading came close to, heap first. The other order put
+  // a heap spike that happened once above an rss ceiling reached every cycle,
+  // and the note then described the episode next to a verdict about the regime.
+  const pressureClass =
+    sustainedClass(input) ??
+    (reachesHeapCeiling(peakHeap, heapLimitBytes)
+      ? "heap"
+      : reachesRssCeiling(peakRss, input.retainedHeapBytes)
+        ? "rss"
+        : null);
+  if (pressureClass === null) {
+    return null;
   }
-  if (reachesRssCeiling(peakRss, input.retainedHeapBytes)) {
-    return {
-      class: "rss",
-      peakBytes: peakRss,
-      retainedBytes: input.retainedHeapBytes,
-      heapLimitBytes,
-    };
-  }
-  return null;
+  return {
+    class: pressureClass,
+    peakBytes: pressureClass === "heap" ? peakHeap : peakRss,
+    retainedBytes: input.retainedHeapBytes,
+    heapLimitBytes,
+  };
 }
 
 export type PressureVerdictInput = {
@@ -145,11 +148,11 @@ export type PressureVerdictInput = {
  */
 const PRESSURE_MIN_SETTLED_CYCLES = 2;
 
-/** Applies the ceiling rule for the reported class to a single cycle. */
+/** Applies the ceiling rule for one class to a single cycle. */
 const reachesCeiling = (
   peak: PeakSample,
   pressureClass: PeakPressureClass,
-  input: PressureVerdictInput
+  input: PeakPressureInput
 ): boolean =>
   pressureClass === "heap"
     ? reachesHeapCeiling(peak.heapUsed, input.maxOldSpaceMb * MB)
@@ -181,7 +184,7 @@ const reachesCeiling = (
  * have reached anything, and treating it as if it had would turn a hole in the
  * measurement into evidence.
  */
-function isSustained(input: PressureVerdictInput, pressureClass: PeakPressureClass): boolean {
+function isSustained(input: PeakPressureInput, pressureClass: PeakPressureClass): boolean {
   if (!input.peaks.every((peak) => peak.polls > 0)) {
     return false;
   }
@@ -190,6 +193,24 @@ function isSustained(input: PressureVerdictInput, pressureClass: PeakPressureCla
     return false;
   }
   return settled.every((peak) => reachesCeiling(peak, pressureClass, input));
+}
+
+const PRESSURE_CLASSES: readonly PeakPressureClass[] = ["heap", "rss"];
+
+/**
+ * The class whose ceiling every settled cycle reached, or null.
+ *
+ * Each class is asked on its own. The class used to be taken from the highest
+ * reading of the run, warm-up included, and the regime was then asked of that
+ * class alone: a heap spike at 400 MB of a 512 MB limit on the first cycle,
+ * followed by three cycles at 600 MB of rss while retaining 5 MB, came out
+ * `stable`. The same three cycles without the spike came out `pressure`.
+ *
+ * It is still one ceiling, reached every time. Heap on one cycle and rss on
+ * the next is two episodes.
+ */
+function sustainedClass(input: PeakPressureInput): PeakPressureClass | null {
+  return PRESSURE_CLASSES.find((pressureClass) => isSustained(input, pressureClass)) ?? null;
 }
 
 /**
@@ -204,17 +225,17 @@ function isSustained(input: PressureVerdictInput, pressureClass: PeakPressureCla
  * requests, because a forced GC handed all of it back before every sample. That
  * is the trap next-leak exists to warn other people about.
  *
- * Three conditions, and no threshold of its own: the ceiling rules are
+ * Two conditions, and no threshold of its own: the ceiling rules are
  * `assessPeakPressure`'s, asked of each cycle instead of the highest reading.
  *
  * - **The post-GC verdict is `stable` or `saturating`.** `leak` is already the
  *   worse news and `inconclusive` is an admission that the series did not
  *   decide — promoting *that* to an accusation would be inventing a finding out
  *   of a measurement that failed.
- * - **The peak is far enough from what the route retains to be remarked on** —
- *   `assessPeakPressure`, thresholds unchanged.
- * - **Every settled cycle reached that ceiling**, not just the highest one.
- *   This is the condition that makes the verdict safe. A single high peak is an
+ * - **Every settled cycle reached the same ceiling**, not just the highest one.
+ *   This is the condition that makes the verdict safe, and it contains the one
+ *   that used to stand beside it: if every settled cycle reached a ceiling, so
+ *   did the highest reading of the run. A single high peak is an
  *   episode and gets only the note; a process that returns to the ceiling every
  *   time it serves traffic is describing what it does under load, which is the
  *   thing a container is sized against.
@@ -226,15 +247,7 @@ export function assessPressureVerdict(input: PressureVerdictInput): TrendResult 
   if (input.trend.verdict !== "stable" && input.trend.verdict !== "saturating") {
     return input.trend;
   }
-  const pressure = assessPeakPressure({
-    peaks: input.peaks,
-    retainedHeapBytes: input.retainedHeapBytes,
-    maxOldSpaceMb: input.maxOldSpaceMb,
-  });
-  if (pressure === null) {
-    return input.trend;
-  }
-  if (!isSustained(input, pressure.class)) {
+  if (sustainedClass(input) === null) {
     return input.trend;
   }
   // `source` is left as measured. It names which post-GC series produced the
