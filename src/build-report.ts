@@ -4,6 +4,7 @@ import {
   type BuildAttributionGap,
 } from "./build-attribution.js";
 import type { BuildRunResult } from "./build-run.js";
+import { terminalSafe } from "./terminal-text.js";
 
 const MB = 1024 * 1024;
 
@@ -101,7 +102,7 @@ function attributionLines(attribution: BuildAttribution | BuildAttributionGap | 
  * still the honest axis here — it is what a CI runner's limit is enforced
  * against and what the OOM killer reads.
  */
-export function formatBuildReport(
+function buildReportText(
   result: BuildRunResult,
   attribution: BuildAttribution | BuildAttributionGap | null = null
 ): string {
@@ -206,4 +207,16 @@ function parentPeakLines(result: BuildRunResult): string[] {
     `  spike shorter than the polling interval is not observed`
   );
   return lines.join("\n");
+}
+
+/**
+ * The report as it is written to the terminal. The build's output and the
+ * names in the attribution come from the measured app, so the text goes
+ * through `terminalSafe` whichever branch produced it.
+ */
+export function formatBuildReport(
+  result: BuildRunResult,
+  attribution: BuildAttribution | BuildAttributionGap | null = null
+): string {
+  return terminalSafe(buildReportText(result, attribution));
 }

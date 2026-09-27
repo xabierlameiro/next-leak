@@ -18,6 +18,7 @@ import { discoverPagesRoutes, discoverRoutes } from "./manifests.js";
 import { hasPlaceholders, renderConfigSkeleton } from "./route-guidance.js";
 import { runMeasurement, freePort } from "./runner.js";
 import { TargetError, validateTarget } from "./target.js";
+import { terminalSafe } from "./terminal-text.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -127,10 +128,10 @@ async function runBuildCommand(
     // is worth asking for, not worth risking every run for.
     ...(attribute && { workDir }),
     signal: aborter.signal,
-    onProgress: (message) => console.error(`· ${message}`),
+    onProgress: (message) => console.error(`· ${terminalSafe(message)}`),
   });
   const attribution = await attributeBuildCapture(result, appDir, (message) =>
-    console.error(`· ${message}`)
+    console.error(`· ${terminalSafe(message)}`)
   );
   console.log(formatBuildReport(result, attribution));
   if (aborter.signal.aborted) {
@@ -231,9 +232,9 @@ async function main(): Promise<void> {
       ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),
       ...(options.maxOldSpaceMb !== null && { maxOldSpaceMb: options.maxOldSpaceMb }),
     });
-    console.error(`· ${check.summary}`);
+    console.error(`· ${terminalSafe(check.summary)}`);
     if (!check.passed) {
-      console.error(`error: ${check.summary}`);
+      console.error(`error: ${terminalSafe(check.summary)}`);
       process.exitCode = 1;
       return;
     }
@@ -260,7 +261,7 @@ async function main(): Promise<void> {
     ...(options.diffAll && { diffAll: true }),
     ...(options.noResolve && { resolveInconclusive: false }),
     ...(options.output !== null && { outputDir: options.output }),
-    onProgress: (message) => console.error(`· ${message}`),
+    onProgress: (message) => console.error(`· ${terminalSafe(message)}`),
   });
   console.log(formatReport(report));
   if (aborter.signal.aborted) {
@@ -286,7 +287,7 @@ try {
   await main();
 } catch (cause: unknown) {
   if (cause instanceof TargetError || cause instanceof RouteConfigError) {
-    console.error(`error: ${cause.message}`);
+    console.error(`error: ${terminalSafe(cause.message)}`);
   } else {
     console.error(cause);
   }
