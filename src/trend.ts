@@ -175,10 +175,8 @@ function isStepwiseGrowth(
  *
  * Three conditions, and each one earns its place:
  *
- * - **Every delta strictly positive.** A store that runs out stores *less*; it
- *   does not stop. A series reaching zero has hit a wall, which is a staircase
- *   and belongs to stepwise detection — `[8, 3, 0] MB` and the #95094 climb
- *   both end that way and both are leaks.
+ * - **Growth stops at most once, and does not come back.** See
+ *   `hasArrivedWithoutResuming`.
  * - **The opening cycle clears the gate.** Growth that never reached the leak
  *   rate has nothing to decelerate from.
  * - **It arrives somewhere, and it is heading there.** The final delta at most
@@ -202,13 +200,53 @@ function isSaturating(deltas: readonly number[], minGrowth: number): boolean {
   if (first === undefined || last === undefined || first < minGrowth) {
     return false;
   }
-  if (!deltas.every((delta) => delta > 0)) {
+  if (!hasArrivedWithoutResuming(deltas, minGrowth)) {
     return false;
   }
   if (last > first * SATURATION_MAX_FINAL_RATIO) {
     return false;
   }
   return isHeadingDown(deltas);
+}
+
+/**
+ * Whether growth ran out, and stayed out.
+ *
+ * A store that finishes filling ends on cycles that are flat or a hair
+ * negative, and every one of those deltas used to disqualify it: the rule was
+ * that a series reaching zero had hit a wall, and a wall is a staircase.
+ * That reading is right about a staircase, whose flat cycle is a pause —
+ * #95094 landed three of its seven deltas on zero and climbed from 28.7 MB to
+ * 139 MB around them — and wrong about an arrival, whose flat cycles are the
+ * end of the curve. What tells the two apart is whether growth comes back,
+ * not the zero itself.
+ *
+ * So growth may stop once, and the approach to the stop is what earns it. A
+ * store running out of new keys passes *through* small growth on its way to
+ * none, so the cycle before the stop is already under the gate; a leak that
+ * pauses drops from its full rate to nothing in one step. `[8, 3, 0] MB` and
+ * `[8, 7, 4, 9, 3, 0] MB` both approach at 3 MB and stay leaks. And after the
+ * stop, no cycle may reach the gate again, which is the other half of what
+ * keeps #95094 out.
+ *
+ * Measured on the fixture's /cached route, 2026-09-26, at 300 requests per
+ * cycle: deltas of 1255, 427, 186, 67, 38, 21 and −5 KB were reported `leak`.
+ * Nothing about that curve is a leak, but a curve that flattens hands nothing
+ * back, so its drawdown clears stepwise detection, which claimed it. The same
+ * route came out `stable` at 600 and 3000 requests, where the per-request
+ * equivalent of the fixed 256 KiB gate is lower — a verdict that moved with
+ * the traffic the caller happened to ask for.
+ */
+function hasArrivedWithoutResuming(deltas: readonly number[], minGrowth: number): boolean {
+  const stop = deltas.findIndex((delta) => delta <= 0);
+  if (stop === -1) {
+    return true;
+  }
+  const approach = deltas[stop - 1];
+  if (approach === undefined || approach >= minGrowth) {
+    return false;
+  }
+  return deltas.slice(stop).every((delta) => delta < minGrowth);
 }
 
 /**
