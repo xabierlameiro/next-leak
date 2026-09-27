@@ -743,9 +743,20 @@ describe("harness verification in the summary", () => {
       ...allStable(),
       harness: { verified: true, growthPer1000Requests: 8.16 * MB },
     });
-    expect(output).toContain("harness verified this session");
+    expect(output).toContain("harness detected a planted leak this session");
     expect(output).toContain("8.16 MB/1000 req");
     expect(output).not.toContain("nothing verified the harness");
+  });
+
+  // A positive control proves sensitivity. Read as a warranty on the figures
+  // beside it, it travels into someone else's tracker attached to a number
+  // nothing checked.
+  it("does not let the control read as a check on the measured figures", () => {
+    const output = formatReport({
+      ...allStable(),
+      harness: { verified: true, growthPer1000Requests: 8.16 * MB },
+    });
+    expect(output).toContain("that is not a check on the figures above");
   });
 
   it("stays quiet on an unverified run that found a leak", () => {

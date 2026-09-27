@@ -104,7 +104,9 @@ export async function runSelfCheck(
       verdict: result.trend.verdict,
       growthPer1000Requests,
       summary: passed
-        ? `harness verified: the planted leak was detected at ${rate}`
+        ? `harness detected the planted leak at ${rate} — it responds to ` +
+          `retention in this environment; the routes' own figures are not ` +
+          `checked by this`
         : `harness NOT verified: a leak of ${PLANTED_LEAK_BYTES_PER_REQUEST} bytes per ` +
           `request came back ${result.trend.verdict} at ${rate}. Verdicts measured in ` +
           `this environment cannot be trusted — a flat curve here means the measurement ` +

@@ -479,15 +479,27 @@ function attributionGapLine(report: RunReport): string[] {
  * What vouched for the instrument, on the runs where it matters.
  *
  * A page of `stable` verdicts is the one output that reads the same whether
- * the app is healthy or the measurement never worked. Saying so there is
- * useful; saying it under a leak would be noise, since a harness that just
- * caught one is not the harness in question.
+ * the app is healthy or the measurement never worked, so the absence of a
+ * control is worth saying there. The control itself is reported on every run,
+ * under leaks included — it was paid for, and a reader deciding how much to
+ * trust a run should not have to infer whether it happened. What it is worth
+ * is a separate question, which is why the line says what it establishes.
  */
 function harnessLine(report: RunReport): string[] {
   const measured = report.routes.filter((route) => route.status === "measured");
   if (report.harness.verified) {
     const rate = formatGrowth(report.harness.growthPer1000Requests);
-    return [`harness verified this session: a planted leak measured ${rate}`];
+    // What a positive control establishes is sensitivity, not accuracy: it
+    // says the instrument moves when memory is retained, and says nothing
+    // about whether the figures above are the right size. Measured on the
+    // #99077 reproduction 2026-09-23, the seal printed next to a route
+    // reported at +1969 MB/1000 req that retained 0.55 MiB/req — both true of
+    // the same run. A reader who takes the seal for a warranty on the numbers
+    // beside it carries that error into someone else's tracker.
+    return [
+      `harness detected a planted leak this session at ${rate} — it can see ` +
+        `retention here; that is not a check on the figures above`,
+    ];
   }
   const allStable = measured.length > 0 && measured.every((route) => effectiveVerdict(route) === "stable");
   if (!allStable) {

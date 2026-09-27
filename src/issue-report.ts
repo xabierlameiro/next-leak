@@ -23,6 +23,32 @@ function blamedParty(owner: string, culprit: { source?: string | null; packageNa
   return `the dependency **${culprit?.packageName ?? "a dependency"}**`;
 }
 
+/**
+ * What the evidence section says when it has no rows to show.
+ *
+ * An empty diff and a diff that was never computed both arrive here as zero
+ * findings, and they are opposite claims: one says nothing grew enough to
+ * name, the other says the evidence could not be read. This draft gets pasted
+ * into someone else's tracker, so reporting the second as "no findings" hands
+ * a maintainer a negative the run never established — and it does so hardest
+ * on the biggest leaks, which are exactly the snapshots too large to parse.
+ */
+function missingEvidence(route: MeasuredRoute): string {
+  if (route.attributionGap === undefined) {
+    return "- (no findings above thresholds)";
+  }
+  const cause =
+    route.attributionGap.reason === "snapshot-unavailable"
+      ? "the final heap snapshot was never taken"
+      : "the heap snapshots could not be read";
+  return (
+    `- **Attribution unavailable** — ${cause}, so this run cannot name what ` +
+    `retains the memory. This is not a finding that nothing grew: the diff was ` +
+    `never computed. The growth figure above is unaffected.\n` +
+    `  - ${route.attributionGap.detail}`
+  );
+}
+
 function evidenceRows(route: MeasuredRoute): string {
   const findings = [...(route.diff?.grownNodes ?? []), ...(route.diff?.newNodes ?? [])];
   return findings
@@ -159,7 +185,7 @@ The first cycle is excluded from the verdict (engine warm-up).
 
 ### Heap evidence
 
-${evidenceRows(route) || "- (no findings above thresholds)"}
+${evidenceRows(route) || missingEvidence(route)}
 ${signatures === "" ? "" : `\n**Matched known causes:**\n${signatures}\n`}${peakSection}${caveats}
 ### Verify it yourself
 

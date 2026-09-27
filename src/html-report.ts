@@ -107,6 +107,29 @@ function peakBlock(
   );
 }
 
+/**
+ * Why a measured route shows no findings table.
+ *
+ * An empty table reads as "nothing grew enough to name". When the diff never
+ * ran, that reading is wrong in the one direction that matters: the snapshots
+ * that go unread are the ones from the largest leaks, so silence here is
+ * loudest exactly where the evidence is worth the most.
+ */
+function attributionGapBlock(route: RouteReport): string {
+  if (route.status !== "measured" || route.attributionGap === undefined) {
+    return "";
+  }
+  const cause =
+    route.attributionGap.reason === "snapshot-unavailable"
+      ? "the final heap snapshot was never taken"
+      : "the heap snapshots could not be read";
+  return (
+    `<p class="warn">No attribution: ${cause}, so this run cannot name what ` +
+    `retains the memory. The curve above is unaffected. ` +
+    `${escapeHtml(route.attributionGap.detail)}</p>`
+  );
+}
+
 function measuredSection(route: RouteReport, parameters: RunParameters): string {
   if (route.status !== "measured") {
     return "";
@@ -151,7 +174,7 @@ function measuredSection(route: RouteReport, parameters: RunParameters): string 
     warnings +
     peakBlock(route, parameters) +
     (findingRows === ""
-      ? ""
+      ? attributionGapBlock(route)
       : `<table><tr><th>kind</th><th>type</th><th>node</th><th>retained</th><th>owner</th></tr>${findingRows}</table>`) +
     `</section>`
   );
