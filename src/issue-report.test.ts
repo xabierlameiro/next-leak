@@ -168,7 +168,59 @@ describe("renderIssueMarkdown fallbacks", () => {
   it("names the snapshot files and work directory for verification", () => {
     const markdown = renderIssueMarkdown(leakyRoute(), makeRunReport());
     expect(markdown).toContain("`baseline.heapsnapshot` / `after.heapsnapshot`");
-    expect(markdown).toContain("/apps/shop/.next-leak/2026-07-20T12-00-00-000Z");
+    expect(markdown).toContain("in `.next-leak/2026-07-20T12-00-00-000Z`");
+  });
+});
+
+describe("renderIssueMarkdown as something pasted into a public tracker", () => {
+  function withFinding(overrides: { name?: string; retainerChain?: string }): MeasuredRoute {
+    const route = leakyRoute();
+    if (route.diff === null) throw new Error("fixture broken");
+    const first = route.diff.grownNodes[0];
+    if (first === undefined) throw new Error("fixture broken");
+    route.diff.grownNodes = [{ ...first, ...overrides }];
+    return route;
+  }
+
+  it("keeps a backtick in a heap name inside its code span", () => {
+    const markdown = renderIssueMarkdown(
+      withFinding({ name: "x` **forged** `y" }),
+      makeRunReport()
+    );
+    expect(markdown).toContain("**grown** ``[object] x` **forged** `y`` 1.65 MB retained");
+  });
+
+  it("fences past the longest run of backticks in the value", () => {
+    const markdown = renderIssueMarkdown(
+      withFinding({ retainerChain: "a``b <- c`d" }),
+      makeRunReport()
+    );
+    expect(markdown).toContain("retainers: ```a``b <- c`d```");
+  });
+
+  it("pads a value that starts or ends with a backtick", () => {
+    const markdown = renderIssueMarkdown(withFinding({ retainerChain: "`edge" }), makeRunReport());
+    expect(markdown).toContain("retainers: `` `edge ``");
+  });
+
+  it("flattens line breaks so a heap string cannot start a new block", () => {
+    const markdown = renderIssueMarkdown(
+      withFinding({ retainerChain: "a\n\n> [!WARNING]\r\nforged" }),
+      makeRunReport()
+    );
+    expect(markdown).toContain("retainers: `a > [!WARNING] forged`");
+  });
+
+  it("does not publish the absolute path of the app", () => {
+    const markdown = renderIssueMarkdown(leakyRoute(), makeRunReport());
+    expect(markdown).not.toContain("/apps/shop");
+  });
+
+  it("names only the directory when the output lives outside the app", () => {
+    const run = { ...makeRunReport(), workDir: "/Users/someone/leaks/2026-07-20T12-00-00-000Z" };
+    const markdown = renderIssueMarkdown(leakyRoute(), run);
+    expect(markdown).toContain("in `2026-07-20T12-00-00-000Z`");
+    expect(markdown).not.toContain("/Users/someone");
   });
 });
 
