@@ -283,6 +283,75 @@ describe("assessPressureVerdict", () => {
     expect(broken.verdict).toBe("stable");
   });
 
+  // The class used to be picked from the highest reading of the run, warm-up
+  // included, and the regime was then asked of that class alone. A heap spike
+  // that happened once decided which ceiling every later cycle was judged
+  // against, and the cycles that kept reaching the other one were acquitted.
+  describe("when the highest reading and the regime are in different classes", () => {
+    const rssRegime = (first: Partial<PeakSample>): PeakSample[] => [
+      peak({ phase: "cycle 1", ...first }),
+      peak({ phase: "cycle 2", heapUsed: 50 * MB, rss: 600 * MB }),
+      peak({ phase: "cycle 3", heapUsed: 50 * MB, rss: 600 * MB }),
+      peak({ phase: "cycle 4", heapUsed: 50 * MB, rss: 600 * MB }),
+    ];
+    const judge = (peaks: readonly PeakSample[]): TrendResult =>
+      assessPressureVerdict({
+        trend: flatTrend(),
+        peaks,
+        retainedHeapBytes: 5 * MB,
+        maxOldSpaceMb: 512,
+      });
+
+    it("finds the rss regime without the spike, as the control", () => {
+      expect(judge(rssRegime({ heapUsed: 50 * MB, rss: 420 * MB })).verdict).toBe("pressure");
+    });
+
+    it("finds it behind a heap spike in the warm-up", () => {
+      // 400 MB is past 75% of a 512 MB limit, and it never came back.
+      expect(judge(rssRegime({ heapUsed: 400 * MB, rss: 420 * MB })).verdict).toBe("pressure");
+    });
+
+    it("finds it behind a heap spike in a settled cycle", () => {
+      const peaks = rssRegime({ heapUsed: 50 * MB, rss: 420 * MB });
+      peaks[2] = peak({ phase: "cycle 3", heapUsed: 400 * MB, rss: 600 * MB });
+      expect(judge(peaks).verdict).toBe("pressure");
+    });
+
+    it("still needs every settled cycle to reach the same ceiling", () => {
+      // Heap on one cycle and rss on the next is two episodes, not a regime.
+      const peaks = [
+        peak({ phase: "cycle 1", heapUsed: 50 * MB, rss: 100 * MB }),
+        peak({ phase: "cycle 2", heapUsed: 400 * MB, rss: 100 * MB }),
+        peak({ phase: "cycle 3", heapUsed: 50 * MB, rss: 600 * MB }),
+      ];
+      expect(judge(peaks).verdict).toBe("stable");
+    });
+
+    it("names the class of the regime in the note, so the two agree", () => {
+      const pressure = assessPeakPressure({
+        peaks: rssRegime({ heapUsed: 400 * MB, rss: 420 * MB }),
+        retainedHeapBytes: 5 * MB,
+        maxOldSpaceMb: 512,
+      });
+      expect(pressure?.class).toBe("rss");
+      expect(pressure?.peakBytes).toBe(600 * MB);
+    });
+
+    it("keeps naming the highest reading when there is no regime", () => {
+      const pressure = assessPeakPressure({
+        peaks: [
+          peak({ phase: "cycle 1", heapUsed: 400 * MB, rss: 420 * MB }),
+          peak({ phase: "cycle 2", heapUsed: 50 * MB, rss: 600 * MB }),
+          peak({ phase: "cycle 3", heapUsed: 50 * MB, rss: 100 * MB }),
+        ],
+        retainedHeapBytes: 5 * MB,
+        maxOldSpaceMb: 512,
+      });
+      expect(pressure?.class).toBe("heap");
+      expect(pressure?.peakBytes).toBe(400 * MB);
+    });
+  });
+
   it("stays stable when one cycle in the middle was never polled", () => {
     // Dropping the hole would compare cycle 2 against cycle 4 as neighbours and
     // manufacture a delta no cycle produced.
