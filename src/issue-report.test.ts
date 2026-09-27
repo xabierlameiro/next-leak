@@ -126,7 +126,7 @@ describe("renderIssueMarkdown fidelity", () => {
       route: { owner: "dependency", source: null, packageName: "heavy-lib", dominance: 1 },
     };
     const markdown = renderIssueMarkdown(route, makeRunReport());
-    expect(markdown).toContain("the dependency **heavy-lib**");
+    expect(markdown).toContain("the dependency **`heavy-lib`**");
     expect(markdown).toContain("do **not** file this against Next.js");
   });
 });
@@ -221,6 +221,63 @@ describe("renderIssueMarkdown as something pasted into a public tracker", () => 
     const markdown = renderIssueMarkdown(leakyRoute(), run);
     expect(markdown).toContain("in `2026-07-20T12-00-00-000Z`");
     expect(markdown).not.toContain("/Users/someone");
+  });
+
+  // A package name is read out of a source-map path, which the measured app's
+  // build wrote. It is no more trusted than a heap name.
+  it("keeps a package name inside a code span, in the banner and in the rows", () => {
+    const route = leakyRoute();
+    route.attribution = {
+      findings: [{ owner: "dependency", source: null, packageName: "lib** [x](http://evil) **" }],
+      route: {
+        owner: "dependency",
+        source: null,
+        packageName: "lib** [x](http://evil) **",
+        dominance: 1,
+      },
+    };
+    const markdown = renderIssueMarkdown(route, makeRunReport());
+    expect(markdown).toContain("the dependency **`lib** [x](http://evil) **`**");
+    expect(markdown).toContain("(dependency — `lib** [x](http://evil) **`)");
+  });
+
+  it("shows the snapshot that could not be read relative to the app", () => {
+    const route = leakyRoute();
+    route.diff = null;
+    route.attributionGap = {
+      reason: "snapshot-unreadable",
+      detail:
+        "heap snapshot is missing: " +
+        "/apps/shop/.next-leak/2026-07-20T12-00-00-000Z/leaky/after.heapsnapshot",
+    };
+    const markdown = renderIssueMarkdown(route, makeRunReport());
+    expect(markdown).toContain(
+      "heap snapshot is missing: .next-leak/2026-07-20T12-00-00-000Z/leaky/after.heapsnapshot"
+    );
+    expect(markdown).not.toContain("/apps/shop");
+  });
+
+  it("does not publish the app's path from a failure outside the run directory", () => {
+    const route = leakyRoute();
+    route.diff = null;
+    route.attributionGap = {
+      reason: "snapshot-unavailable",
+      detail: "ENOENT: no such file or directory, open '/apps/shop/.next/standalone/server.js'",
+    };
+    const markdown = renderIssueMarkdown(route, makeRunReport());
+    expect(markdown).toContain("open '<app-dir>/.next/standalone/server.js'");
+    expect(markdown).not.toContain("/apps/shop");
+  });
+
+  it("keeps a failure message with line breaks inside its list item", () => {
+    const route = leakyRoute();
+    route.diff = null;
+    route.attributionGap = {
+      reason: "snapshot-unavailable",
+      detail: "first line\n\n# forged heading\r\nlast line",
+    };
+    const markdown = renderIssueMarkdown(route, makeRunReport());
+    expect(markdown).toContain("  - first line # forged heading last line");
   });
 });
 
