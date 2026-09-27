@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { CONTROL_TOKEN_HEADER } from "./control-server.js";
 
 const controlFileSchema = z.object({ port: z.number(), pid: z.number() });
 
@@ -59,6 +61,8 @@ export type LaunchedApp = {
   pid: number;
   appPort: number;
   controlPort: number;
+  /** Secret the control channel expects on every request; generated per launch. */
+  controlToken: string;
   /**
    * Why the measured process is gone, or null while it is alive. Without it
    * a child that died mid-run surfaces as "fetch failed", which reads like a
@@ -283,6 +287,9 @@ async function pollUntil<T>(
 export async function launchInstrumented(options: LaunchOptions): Promise<LaunchedApp> {
   const hostname = options.hostname ?? "127.0.0.1";
   const readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+  // Handed over in the environment and never written next to the port: the
+  // control file is readable by anyone who can list the work directory.
+  const controlToken = randomBytes(32).toString("hex");
 
   const child: ChildProcess = spawn(
     process.execPath,
@@ -302,6 +309,7 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
         PORT: String(options.appPort),
         HOSTNAME: hostname,
         NEXT_LEAK_DIR: options.workDir,
+        NEXT_LEAK_TOKEN: controlToken,
       },
       stdio: ["ignore", "ignore", "pipe"],
     }
@@ -355,7 +363,9 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
             const parsed = controlFileSchema.parse(
               JSON.parse(await readFile(path.join(options.workDir, entry), "utf8"))
             );
-            const response = await fetch(`http://127.0.0.1:${parsed.port}/gc`);
+            const response = await fetch(`http://127.0.0.1:${parsed.port}/gc`, {
+              headers: { [CONTROL_TOKEN_HEADER]: controlToken },
+            });
             if (response.ok) {
               return parsed.port;
             }
@@ -403,6 +413,7 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
       pid: child.pid ?? -1,
       appPort: options.appPort,
       controlPort,
+      controlToken,
       explainExit: () => {
         if (!exited) {
           return null;

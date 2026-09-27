@@ -30,6 +30,8 @@ function listen(handler: http.RequestListener): Promise<number> {
   });
 }
 
+const channel = (port: number): { port: number; token: string } => ({ port, token: "test-token" });
+
 afterEach(async () => {
   await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
   server = undefined;
@@ -41,13 +43,45 @@ afterEach(async () => {
 describe("control channel errors", () => {
   it("names the operation and the likely cause when nothing answers", async () => {
     // A port nothing listens on: the same shape as a measured process that died.
-    await expect(requestGc(1)).rejects.toThrow(/control channel \/gc on port 1/);
-    await expect(requestGc(1)).rejects.toThrow(/gone or its event loop is blocked/);
-    await expect(requestMemory(1)).rejects.toThrow(/\/mem/);
+    await expect(requestGc(channel(1))).rejects.toThrow(/control channel \/gc on port 1/);
+    await expect(requestGc(channel(1))).rejects.toThrow(/gone or its event loop is blocked/);
+    await expect(requestMemory(channel(1))).rejects.toThrow(/\/mem/);
+  });
+
+  it("carries the run's token on every operation", async () => {
+    const sample = {
+      gcExposed: true,
+      heapUsed: 1,
+      rss: 1,
+      external: 0,
+      arrayBuffers: 0,
+      pid: 4242,
+      ppid: 4241,
+      argv: ["node", "server.js"],
+      cwd: "/app",
+    };
+    const seen: Array<[string | undefined, unknown]> = [];
+    const port = await listen((req, res) => {
+      seen.push([req.url, req.headers["x-next-leak-token"]]);
+      res.end(
+        JSON.stringify(req.url?.startsWith("/snapshot") ? { file: "/x.heapsnapshot", sample } : sample)
+      );
+    });
+    const control = { port, token: "the-run-token" };
+
+    await requestGc(control);
+    await requestMemory(control);
+    await requestSnapshot(control, "after");
+
+    expect(seen).toEqual([
+      ["/gc", "the-run-token"],
+      ["/mem", "the-run-token"],
+      ["/snapshot?name=after", "the-run-token"],
+    ]);
   });
 
   it("is a named error type, so reports can distinguish it from app failures", async () => {
-    const failure = await requestGc(1).catch((cause: Error) => cause);
+    const failure = await requestGc(channel(1)).catch((cause: Error) => cause);
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).name).toBe("ControlError");
   });
@@ -73,13 +107,13 @@ describe("control channel errors", () => {
       }
       res.end(JSON.stringify(sample));
     });
-    await expect(requestGc(port)).rejects.toThrow(/without --expose-gc/);
-    await expect(requestSnapshot(port, "after")).rejects.toThrow(/without --expose-gc/);
+    await expect(requestGc(channel(port))).rejects.toThrow(/without --expose-gc/);
+    await expect(requestSnapshot(channel(port), "after")).rejects.toThrow(/without --expose-gc/);
   });
 
   it("rejects malformed JSON with the channel named", async () => {
     const port = await listen((_req, res) => res.end("not json"));
-    await expect(requestWithDeadline(port, "/gc")).rejects.toThrow(/malformed JSON/);
+    await expect(requestWithDeadline(channel(port), "/gc")).rejects.toThrow(/malformed JSON/);
   });
 
   it("reports non-200 answers by status", async () => {
@@ -87,7 +121,7 @@ describe("control channel errors", () => {
       res.statusCode = 500;
       res.end("{}");
     });
-    await expect(requestWithDeadline(port, "/gc")).rejects.toThrow(/responded 500/);
+    await expect(requestWithDeadline(channel(port), "/gc")).rejects.toThrow(/responded 500/);
   });
 });
 
@@ -109,7 +143,7 @@ describe("control channel deadlines", () => {
     const port = await listen(() => {
       // Accept the request, never respond: the wedged-child shape.
     });
-    await expect(requestWithDeadline(port, "/gc", 200)).rejects.toThrow(
+    await expect(requestWithDeadline(channel(port), "/gc", 200)).rejects.toThrow(
       /did not answer within 0s — the measured process is wedged or its event loop is blocked/
     );
   });
@@ -122,7 +156,7 @@ describe("control channel deadlines", () => {
         res.end(JSON.stringify({ ok: true }));
       }, 300).unref();
     });
-    await expect(requestWithDeadline(port, "/snapshot?name=x", 5000)).resolves.toEqual({
+    await expect(requestWithDeadline(channel(port), "/snapshot?name=x", 5000)).resolves.toEqual({
       ok: true,
     });
   });
@@ -135,7 +169,7 @@ describe("control channel deadlines", () => {
       const trickle = setInterval(() => res.write(" "), 50);
       trickle.unref();
     });
-    await expect(requestWithDeadline(port, "/mem", 300)).rejects.toThrow(/within 0s/);
+    await expect(requestWithDeadline(channel(port), "/mem", 300)).rejects.toThrow(/within 0s/);
   }, 10_000);
 });
 
@@ -215,7 +249,7 @@ describe("snapshot waits judged by progress on disk", () => {
     await grow();
     const growing = setInterval(() => void grow(), 10);
     try {
-      const answer = await requestWatchingFile(port, "/snapshot?name=after", 60_000, {
+      const answer = await requestWatchingFile(channel(port), "/snapshot?name=after", 60_000, {
         file,
         stallMs: 100,
         hardCapMs: 60_000,
@@ -235,7 +269,7 @@ describe("snapshot waits judged by progress on disk", () => {
       // Accept and never answer: the wedged-child shape.
     });
     await expect(
-      requestWatchingFile(port, "/snapshot?name=after", 60_000, {
+      requestWatchingFile(channel(port), "/snapshot?name=after", 60_000, {
         file,
         stallMs: 100,
         hardCapMs: 60_000,
@@ -254,7 +288,7 @@ describe("snapshot waits judged by progress on disk", () => {
     const growing = setInterval(() => void grow(), 10);
     try {
       await expect(
-        requestWatchingFile(port, "/snapshot?name=after", 60_000, {
+        requestWatchingFile(channel(port), "/snapshot?name=after", 60_000, {
           file,
           stallMs: 60_000,
           hardCapMs: 200,
@@ -272,7 +306,7 @@ describe("snapshot waits judged by progress on disk", () => {
       // Accept and never answer, with no file ever created.
     });
     await expect(
-      requestWatchingFile(port, "/snapshot?name=after", 60_000, {
+      requestWatchingFile(channel(port), "/snapshot?name=after", 60_000, {
         file: snapshotPathFor(workDir, "after"),
         stallMs: 100,
         hardCapMs: 60_000,

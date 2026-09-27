@@ -2,7 +2,10 @@ import { stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { z } from "zod";
-import type { HeapSample } from "./control-server.js";
+import { CONTROL_TOKEN_HEADER, type HeapSample } from "./control-server.js";
+
+/** Where a measured process listens for control requests, and the secret it expects. */
+export type ControlChannel = { port: number; token: string };
 
 const sampleSchema = z.object({
   gcExposed: z.boolean(),
@@ -127,7 +130,7 @@ function describeDuration(ms: number): string {
  * matters — how long the caller has been waiting.
  */
 function get(
-  port: number,
+  { port, token }: ControlChannel,
   pathname: string,
   deadlineMs: number,
   watch?: SnapshotWatch
@@ -146,7 +149,8 @@ function get(
         reject(outcome.error);
       }
     };
-    const request = http.get({ host: "127.0.0.1", port, path: pathname }, (response) => {
+    const headers = { [CONTROL_TOKEN_HEADER]: token };
+    const request = http.get({ host: "127.0.0.1", port, path: pathname, headers }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk: Buffer) => chunks.push(chunk));
       response.once("end", () =>
@@ -232,12 +236,12 @@ function get(
 }
 
 async function request(
-  port: number,
+  control: ControlChannel,
   pathname: string,
   deadlineMs = deadlineFor(pathname),
   watch?: SnapshotWatch
 ): Promise<unknown> {
-  const response = await get(port, pathname, deadlineMs, watch);
+  const response = await get(control, pathname, deadlineMs, watch);
   if (response.status !== 200) {
     throw new ControlError(`control channel ${pathname} responded ${response.status}`);
   }
@@ -249,8 +253,8 @@ async function request(
 }
 
 /** Forces GC in the measured process and returns a settled memory sample. */
-export async function requestGc(port: number): Promise<HeapSample> {
-  const sample = sampleSchema.parse(await request(port, "/gc"));
+export async function requestGc(control: ControlChannel): Promise<HeapSample> {
+  const sample = sampleSchema.parse(await request(control, "/gc"));
   if (!sample.gcExposed) {
     throw new ControlError(
       "the measured process is running without --expose-gc; samples would be meaningless"
@@ -263,8 +267,8 @@ export async function requestGc(port: number): Promise<HeapSample> {
  * Reads memory without collecting. Used to poll a process under load, where a
  * forced GC would change the number being read.
  */
-export async function requestMemory(port: number): Promise<HeapSample> {
-  return sampleSchema.parse(await request(port, "/mem"));
+export async function requestMemory(control: ControlChannel): Promise<HeapSample> {
+  return sampleSchema.parse(await request(control, "/mem"));
 }
 
 /**
@@ -276,14 +280,14 @@ export async function requestMemory(port: number): Promise<HeapSample> {
  * snapshot from a wedged process.
  */
 export async function requestSnapshot(
-  port: number,
+  control: ControlChannel,
   name: string,
   workDir?: string
 ): Promise<{ file: string; sample: HeapSample }> {
   const pathname = `/snapshot?name=${encodeURIComponent(name)}`;
   const parsed = snapshotResponseSchema.parse(
     await request(
-      port,
+      control,
       pathname,
       deadlineFor(pathname),
       workDir === undefined ? undefined : productionWatch(snapshotPathFor(workDir, name))

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { writeHeapSnapshot } from "node:v8";
@@ -70,9 +71,14 @@ function sampleMemory(gcExposed: boolean): HeapSample {
   };
 }
 
+/** Header that carries the shared secret on every control request. */
+export const CONTROL_TOKEN_HEADER = "x-next-leak-token";
+
 export type ControlServerOptions = {
   /** Directory where heap snapshots are written. */
   snapshotDir: string;
+  /** Secret the launcher generated for this run; a request without it is refused. */
+  token: string;
   /** Injectable for tests; defaults to `v8.writeHeapSnapshot`. */
   writeSnapshot?: (file: string) => string;
 };
@@ -89,9 +95,27 @@ export type ControlServer = {
  * - `GET /mem` — respond with a memory sample WITHOUT collecting.
  * - `GET /snapshot?name=<label>` — force GC, write `<label>.heapsnapshot`
  *   into `snapshotDir`, respond `{ file, sample }` only once fully written.
+ *
+ * Every request must carry the run's token. The socket is bound to loopback,
+ * which keeps other machines out and nobody else: any local process can reach
+ * it, and so can a web page open in a browser on the same machine. Without
+ * the token either could read the process's argv and working directory, or
+ * ask for heap snapshots until the disk is full.
  */
 export async function startControlServer(options: ControlServerOptions): Promise<ControlServer> {
+  if (options.token === "") {
+    throw new Error("the control server needs a token and was given an empty one");
+  }
   const write = options.writeSnapshot ?? writeHeapSnapshot;
+  const expected = Buffer.from(options.token);
+  const carriesToken = (request: http.IncomingMessage): boolean => {
+    const header = request.headers[CONTROL_TOKEN_HEADER];
+    if (typeof header !== "string") {
+      return false;
+    }
+    const given = Buffer.from(header);
+    return given.length === expected.length && timingSafeEqual(given, expected);
+  };
 
   const server = http.createServer((request, response) => {
     void handle(request, response);
@@ -106,6 +130,11 @@ export async function startControlServer(options: ControlServerOptions): Promise
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(body));
     };
+
+    if (!carriesToken(request)) {
+      respond(403, { error: `missing or wrong ${CONTROL_TOKEN_HEADER} header` });
+      return;
+    }
 
     try {
       if (url.pathname === "/gc") {

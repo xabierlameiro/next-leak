@@ -19,7 +19,10 @@ describe("control server lifecycle", () => {
     execFileSync(
       process.execPath,
       ["--import", `file://${pathModule.join(rootDir, "dist", "bootstrap.js")}`, "-e", "0"],
-      { env: { ...process.env, NEXT_LEAK_DIR: workDir }, timeout: 20_000 }
+      {
+        env: { ...process.env, NEXT_LEAK_DIR: workDir, NEXT_LEAK_TOKEN: "test-token" },
+        timeout: 20_000,
+      }
     );
     // Without unref() this never returns.
     expect(Date.now() - started).toBeLessThan(15_000);
@@ -37,7 +40,7 @@ describe("control server lifecycle", () => {
     const bootstrap = `file://${pathModule.join(rootDir, "dist", "bootstrap.js")}`;
     for (let i = 0; i < 2; i += 1) {
       execFileSync(process.execPath, ["--import", bootstrap, "-e", "0"], {
-        env: { ...process.env, NEXT_LEAK_DIR: workDir },
+        env: { ...process.env, NEXT_LEAK_DIR: workDir, NEXT_LEAK_TOKEN: "test-token" },
         timeout: 20_000,
       });
     }

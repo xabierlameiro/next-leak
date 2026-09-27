@@ -1,7 +1,8 @@
 /**
  * Entry loaded into the measured app's process via `node --import`. Boots the
  * internal control channel and announces its port by writing `control.json`
- * into `$NEXT_LEAK_DIR`. Inert when the env var is absent, and never breaks
+ * into `$NEXT_LEAK_DIR`. The channel answers only to `$NEXT_LEAK_TOKEN`, which
+ * is never written to disk. Inert when the directory is absent, and never breaks
  * the host app: failures are logged to stderr only.
  */
 import { mkdir, writeFile } from "node:fs/promises";
@@ -12,6 +13,7 @@ import { requestProbe, startControlServer } from "./control-server.js";
 import { countServedRequests } from "./request-probe.js";
 
 const workDir = process.env["NEXT_LEAK_DIR"];
+const token = process.env["NEXT_LEAK_TOKEN"];
 
 /**
  * Counts the requests the host app serves, so the run record shows how much
@@ -33,7 +35,12 @@ function installRequestProbe(): void {
 if (workDir !== undefined && workDir !== "") {
   try {
     await mkdir(workDir, { recursive: true });
-    const server = await startControlServer({ snapshotDir: workDir });
+    // Refused rather than started open: a channel anyone on the machine can
+    // drive is worse than a run that stops and says why.
+    if (token === undefined || token === "") {
+      throw new Error("NEXT_LEAK_TOKEN is not set, and the channel does not start without it");
+    }
+    const server = await startControlServer({ snapshotDir: workDir, token });
     installRequestProbe();
     // One file per process, not a single shared one: `next start` (and any
     // clustered server) loads this bootstrap into several processes, and a
