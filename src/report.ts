@@ -14,6 +14,7 @@ import {
   describeUnreclaimedRetention,
 } from "./unreclaimed-retention.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
+import { terminalSafe } from "./terminal-text.js";
 
 type MeasuredRouteView = Extract<RouteReport, { status: "measured" }>;
 
@@ -557,5 +558,5 @@ export function formatReport(report: RunReport): string {
       `  next-leak ${report.appDir} --routes ${routeList} --cycles ${moreCycles}`
     );
   }
-  return lines.join("\n");
+  return terminalSafe(lines.join("\n"));
 }
