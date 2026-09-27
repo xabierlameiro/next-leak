@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.2](https://github.com/xabierlameiro/next-leak/compare/v0.12.1...v0.12.2) (2026-09-27)
+
+
+### Bug Fixes
+
+* **attribution:** skip a sourcemap that does not decode instead of failing the run ([#96](https://github.com/xabierlameiro/next-leak/issues/96)) ([dc26a50](https://github.com/xabierlameiro/next-leak/commit/dc26a50390eeb9293bde205b490736b94204de28))
+* **build:** report a lost attribution instead of omitting the section ([9572dd0](https://github.com/xabierlameiro/next-leak/commit/9572dd0da12424837ce766fda734147c7b8a0935))
+* **report:** escape measured strings in the issue draft and drop the absolute path ([#97](https://github.com/xabierlameiro/next-leak/issues/97)) ([76376e8](https://github.com/xabierlameiro/next-leak/commit/76376e84e4d1262eb55db778a2673906b879fa04))
+* **report:** say what the self-check seal proves, not that the run is right ([90a9b5b](https://github.com/xabierlameiro/next-leak/commit/90a9b5bac803cc9f39f5c98e3b975168304fcd2a))
+* **report:** say when attribution is missing, not that nothing grew ([69c5cd9](https://github.com/xabierlameiro/next-leak/commit/69c5cd98b0df43f612cda055501064347b9879bc))
+* **report:** say when evidence is missing instead of reporting no findings ([3da38ec](https://github.com/xabierlameiro/next-leak/commit/3da38ec52d3c06e30bea71dc556a52be87ab8b23))
+* **trend:** stop calling a curve that decelerates into its own noise a leak ([8464642](https://github.com/xabierlameiro/next-leak/commit/84646424873c9d93ebb5c94cf5e26330e1395961))
+* **trend:** stop calling a curve that decelerates into its own noise a leak ([d732276](https://github.com/xabierlameiro/next-leak/commit/d732276e83762febdb6b25e981179bd7c1c1bf4f))
+
 ## [0.12.1](https://github.com/xabierlameiro/next-leak/compare/v0.12.0...v0.12.1) (2026-09-24)
 
 
