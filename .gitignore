@@ -2,6 +2,7 @@ node_modules/
 dist/
 .next-leak/
 reports/
+coverage/
 .stryker-tmp/
 *.tgz
 *.log
