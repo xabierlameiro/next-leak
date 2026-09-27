@@ -40,10 +40,32 @@ describe("bootstrap failure branches", () => {
       process.execPath,
       ["--import", bootstrap, "-e", "console.log('host survived')"],
       {
-        env: { ...process.env, NEXT_LEAK_DIR: path.join("/dev/null", "next-leak") },
+        env: {
+          ...process.env,
+          NEXT_LEAK_DIR: path.join("/dev/null", "next-leak"),
+          NEXT_LEAK_TOKEN: "test-token",
+        },
         timeout: 20_000,
       }
     );
     expect(stderr).toContain("[next-leak] control channel failed to start");
+  }, 30_000);
+
+  it("does not open the channel when no token was handed over", async () => {
+    // Started by hand, or by a launcher older than the token: an open channel
+    // would answer to anything on the machine.
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-no-token-"));
+    const environment: NodeJS.ProcessEnv = { ...process.env, NEXT_LEAK_DIR: workDir };
+    delete environment["NEXT_LEAK_TOKEN"];
+
+    const { stdout, stderr } = await run(
+      process.execPath,
+      ["--import", bootstrap, "-e", "console.log('host survived')"],
+      { env: environment, timeout: 20_000 }
+    );
+
+    expect(stdout).toContain("host survived");
+    expect(stderr).toContain("NEXT_LEAK_TOKEN is not set");
+    expect((await readdir(workDir)).filter((name) => name.startsWith("control-"))).toEqual([]);
   }, 30_000);
 });

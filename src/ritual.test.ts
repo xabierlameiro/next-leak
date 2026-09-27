@@ -132,6 +132,7 @@ async function makeHarness(
     pid: 1,
     appPort: 65_000,
     controlPort,
+    controlToken: "test-token",
     explainExit: () => null,
     close: async () => {
       closed = true;

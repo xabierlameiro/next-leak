@@ -8,6 +8,32 @@ user data present in the process at capture time). Treat `.next-leak/`
 output directories as sensitive and do not attach raw snapshots to public
 issues — `run.json` is enough.
 
+## The control channel
+
+While a route is measured, next-leak loads a small HTTP server into your
+app's process through `--import`. It is how the run forces collection, reads
+memory and asks for heap snapshots.
+
+- **It listens on `127.0.0.1`**, on a port the operating system picks, and it
+  lives as long as the measured process does.
+- **Every request must carry a token.** next-leak generates one for each
+  process it launches (32 random bytes), hands it over in the environment as
+  `NEXT_LEAK_TOKEN`, and never writes it to disk. A request without it gets a
+  403 before anything runs.
+- **Loopback alone is not enough**, which is why the token exists. It keeps
+  other machines out, but any local process can reach the port, and so can a
+  web page open in a browser on the same machine.
+- **What the token does not cover**: the measured app and anything it starts
+  can read it, and on most systems so can another process running as the same
+  user. It separates the run from other users and from the browser, not from
+  code already running as you.
+- **What the channel can do**: force a collection, report memory figures
+  along with the process's `argv` and working directory, and write a heap
+  snapshot into the run's own directory. It cannot read files, run code, write
+  anywhere else or send a snapshot's content back.
+- `next-leak build` does not use it. It reads the process table and signals
+  the worker instead.
+
 ## Supply chain
 
 What an installed copy of next-leak can and cannot do is deliberately

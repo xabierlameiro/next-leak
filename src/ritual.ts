@@ -1,5 +1,10 @@
 import { mkdir } from "node:fs/promises";
-import { requestGc, requestMemory, requestSnapshot } from "./control-client.js";
+import {
+  requestGc,
+  requestMemory,
+  requestSnapshot,
+  type ControlChannel,
+} from "./control-client.js";
 import type { HeapSample } from "./control-server.js";
 import { launchInstrumented } from "./launcher.js";
 import {
@@ -190,7 +195,7 @@ export type RitualDeps = {
   abandon: typeof runAbandonPhase;
   sleep: (ms: number) => Promise<void>;
   /** GC-free read, polled while the app is under load. */
-  readMemory: (port: number) => Promise<HeapSample>;
+  readMemory: (control: ControlChannel) => Promise<HeapSample>;
 };
 
 const SETTLE_POLL_MS = 2000;
@@ -230,7 +235,7 @@ export function unreclaimedSettleFor(idleMs: number): number {
  * cycle: when the app is gone, the caller surfaces the real failure.
  */
 function pollPeak(
-  controlPort: number,
+  control: ControlChannel,
   phase: string,
   deps: RitualDeps
 ): { stop: () => Promise<PeakSample> } {
@@ -251,7 +256,7 @@ function pollPeak(
       }
       let sample: HeapSample;
       try {
-        sample = await deps.readMemory(controlPort);
+        sample = await deps.readMemory(control);
       } catch {
         return;
       }
@@ -281,7 +286,7 @@ function pollPeak(
  * guarantee and returns as soon as it holds.
  */
 async function waitUntilSettled(
-  controlPort: number,
+  control: ControlChannel,
   maxIdleMs: number,
   deps: RitualDeps
 ): Promise<{ status: SettleStatus; polls: number }> {
@@ -292,7 +297,7 @@ async function waitUntilSettled(
     await deps.sleep(Math.min(SETTLE_POLL_MS, Math.max(deadline - Date.now(), 0)));
     let current: number;
     try {
-      current = (await requestGc(controlPort)).heapUsed;
+      current = (await requestGc(control)).heapUsed;
     } catch {
       return { status: "unknown", polls }; // the app is gone; the caller surfaces the real failure
     }
@@ -387,6 +392,7 @@ export async function runRitual(
     }
     app = await deps.launch({ ...launchOptions, appPort: options.appPort + 1 });
   }
+  const control: ControlChannel = { port: app.controlPort, token: app.controlToken };
 
   const timings: PhaseTiming[] = [];
   const loadOutcomes: LoadOutcome[] = [];
@@ -464,7 +470,7 @@ export async function runRitual(
       })
     );
     const baseline = await timed("baseline snapshot", () =>
-      requestSnapshot(app.controlPort, "baseline", options.workDir)
+      requestSnapshot(control, "baseline", options.workDir)
     );
 
     memorySamples.push(baseline.sample);
@@ -473,7 +479,7 @@ export async function runRitual(
       // Warm-up is deliberately not polled: its memory is not a claim the
       // report makes, and the baseline is taken after it.
       await timed(`cycle ${cycle} load`, async () => {
-        const poller = pollPeak(app.controlPort, `cycle ${cycle}`, deps);
+        const poller = pollPeak(control, `cycle ${cycle}`, deps);
         try {
           await loadCycle(`cycle ${cycle}`, loadRequests);
         } finally {
@@ -488,7 +494,7 @@ export async function runRitual(
       await timed(`cycle ${cycle} unreclaimed read`, async () => {
         await deps.sleep(unreclaimedSettleMs);
         try {
-          unreclaimedSamples.push(await deps.readMemory(app.controlPort));
+          unreclaimedSamples.push(await deps.readMemory(control));
         } catch {
           // A missed reading leaves a hole, and a hole makes every later delta
           // span two cycles instead of one. Drop the series rather than report
@@ -499,7 +505,7 @@ export async function runRitual(
       });
 
       const settle = await timed(`cycle ${cycle} settle`, () =>
-        waitUntilSettled(app.controlPort, idleMs - unreclaimedSettleMs, deps)
+        waitUntilSettled(control, idleMs - unreclaimedSettleMs, deps)
       );
       settleOutcomes.push({ phase: `cycle ${cycle}`, ...settle });
 
@@ -510,16 +516,16 @@ export async function runRitual(
         // lost. Same trade the diff step already makes one stage later.
         try {
           const after = await timed("after snapshot", () =>
-            requestSnapshot(app.controlPort, "after", options.workDir)
+            requestSnapshot(control, "after", options.workDir)
           );
           afterSnapshot = after.file;
           memorySamples.push(after.sample);
         } catch (cause) {
           snapshotFailure = cause instanceof Error ? cause.message : String(cause);
-          memorySamples.push(await requestGc(app.controlPort));
+          memorySamples.push(await requestGc(control));
         }
       } else {
-        memorySamples.push(await requestGc(app.controlPort));
+        memorySamples.push(await requestGc(control));
       }
       cyclesCompleted = cycle;
     }

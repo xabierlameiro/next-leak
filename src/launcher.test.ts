@@ -120,13 +120,22 @@ describe("launchInstrumented", () => {
     expect(((await appResponse.json()) as { ok: boolean }).ok).toBe(true);
 
     // GC really is exposed in the child (--expose-gc).
-    const gc = await fetch(`http://127.0.0.1:${app.controlPort}/gc`);
+    const gc = await fetch(`http://127.0.0.1:${app.controlPort}/gc`, {
+      headers: { "x-next-leak-token": app.controlToken },
+    });
     const gcBody = (await gc.json()) as { gcExposed: boolean; heapUsed: number };
+
+    // And it answers only to the launcher that started it.
+    const stranger = await fetch(`http://127.0.0.1:${app.controlPort}/gc`);
+    expect(stranger.status).toBe(403);
+    expect(app.controlToken).toMatch(/^[0-9a-f]{64}$/);
     expect(gcBody.gcExposed).toBe(true);
     expect(gcBody.heapUsed).toBeGreaterThan(0);
 
     // A real heap snapshot lands in the work dir.
-    const snapshot = await fetch(`http://127.0.0.1:${app.controlPort}/snapshot?name=probe`);
+    const snapshot = await fetch(`http://127.0.0.1:${app.controlPort}/snapshot?name=probe`, {
+      headers: { "x-next-leak-token": app.controlToken },
+    });
     const snapshotBody = (await snapshot.json()) as { file: string };
     expect(snapshotBody.file).toBe(path.join(workDir, "probe.heapsnapshot"));
     const stats = await stat(snapshotBody.file);
