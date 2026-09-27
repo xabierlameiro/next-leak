@@ -38,7 +38,10 @@ describe("runSelfCheck", () => {
     expect(result.verdict).toBe("leak");
     // 12 MB per cycle over 5000 requests is 2.4 MB per 1000.
     expect(result.growthPer1000Requests).toBeCloseTo(2.4 * MB, -4);
-    expect(result.summary).toContain("harness verified");
+    expect(result.summary).toContain("harness detected the planted leak");
+    // Sensitivity is all a positive control buys. The summary has to stop
+    // short of vouching for the figures it gets printed beside.
+    expect(result.summary).toContain("not checked by this");
   });
 
   it("fails loudly when a planted leak comes back stable", async () => {
