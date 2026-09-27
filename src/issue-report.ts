@@ -41,8 +41,21 @@ function ownerLabel(attribution: FindingAttribution | undefined): string {
     return "unattributed";
   }
   const source = attribution.source ? ` — ${codeSpan(attribution.source)}` : "";
-  const packageName = attribution.packageName ? ` — ${attribution.packageName}` : "";
+  const packageName = attribution.packageName ? ` — ${codeSpan(attribution.packageName)}` : "";
   return `${attribution.owner}${source}${packageName}`;
+}
+
+/**
+ * A failure message as it can be shown in public. These messages name the
+ * file that failed by its absolute path, which carries the user's home
+ * directory. The run directory goes first: it usually sits inside the app, and
+ * replacing the app's path first would leave it half rewritten.
+ */
+function publicDetail(detail: string, run: RunReport): string {
+  return detail
+    .replaceAll(run.workDir, publicWorkDir(run))
+    .replaceAll(run.appDir, "<app-dir>")
+    .replaceAll(/[\r\n]+/g, " ");
 }
 
 /** Who the warning banner points at when the leak is not upstream's. */
@@ -50,7 +63,8 @@ function blamedParty(owner: string, culprit: { source?: string | null; packageNa
   if (owner === "app") {
     return `**your own code** (${codeSpan(culprit?.source ?? "app code")})`;
   }
-  return `the dependency **${culprit?.packageName ?? "a dependency"}**`;
+  const packageName = culprit?.packageName;
+  return `the dependency **${packageName ? codeSpan(packageName) : "a dependency"}**`;
 }
 
 /**
@@ -63,7 +77,7 @@ function blamedParty(owner: string, culprit: { source?: string | null; packageNa
  * a maintainer a negative the run never established — and it does so hardest
  * on the biggest leaks, which are exactly the snapshots too large to parse.
  */
-function missingEvidence(route: MeasuredRoute): string {
+function missingEvidence(route: MeasuredRoute, run: RunReport): string {
   if (route.attributionGap === undefined) {
     return "- (no findings above thresholds)";
   }
@@ -75,7 +89,7 @@ function missingEvidence(route: MeasuredRoute): string {
     `- **Attribution unavailable** — ${cause}, so this run cannot name what ` +
     `retains the memory. This is not a finding that nothing grew: the diff was ` +
     `never computed. The growth figure above is unaffected.\n` +
-    `  - ${route.attributionGap.detail}`
+    `  - ${publicDetail(route.attributionGap.detail, run)}`
   );
 }
 
@@ -215,7 +229,7 @@ The first cycle is excluded from the verdict (engine warm-up).
 
 ### Heap evidence
 
-${evidenceRows(route) || missingEvidence(route)}
+${evidenceRows(route) || missingEvidence(route, run)}
 ${signatures === "" ? "" : `\n**Matched known causes:**\n${signatures}\n`}${peakSection}${caveats}
 ### Verify it yourself
 
