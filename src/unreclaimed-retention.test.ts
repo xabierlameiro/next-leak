@@ -154,6 +154,29 @@ describe("assessUnreclaimedRetention", () => {
     expect(retention).toBeNull();
   });
 
+  it("measures a growing route against the most it retained, not the least", () => {
+    // Measured on the vercel/next.js#99077 reproduction, 2026-09-23: the heap
+    // after a GC goes 266.1 → 463.2 → 660.2 MB, and the largest gap is 107.3 MB.
+    // Against the 660.2 MB it ends on that is 0.16x, and the note stays quiet:
+    // what this route holds survives a collection. Against the floor of the
+    // series it would be 0.40x and the note would fire on a plain leak. The
+    // verdict is left unsupported here so the ratio is what decides.
+    const retention = assessUnreclaimedRetention({
+      unreclaimedSamples: samples({
+        heap: [367.2, 538.5, 767.5],
+        arrayBuffers: [189.7, 331.8, 478.0],
+      }),
+      memorySamples: samples({
+        heap: [71.3, 266.1, 463.2, 660.2],
+        arrayBuffers: [28.9, 171.3, 313.5, 455.6],
+      }),
+      verdict: "leak",
+      verdictIsWellSupported: false,
+    });
+
+    expect(retention).toBeNull();
+  });
+
   it("stays quiet when there is no pre-collection series", () => {
     expect(
       assessUnreclaimedRetention({

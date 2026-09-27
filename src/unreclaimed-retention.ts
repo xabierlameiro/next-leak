@@ -148,6 +148,15 @@ export function assessUnreclaimedRetention(
     if (largestGapBytes < MIN_GAP_BYTES) {
       continue;
     }
+    // The most the route retained, not the least. `retainedAfterLoad` in
+    // peak-pressure.ts takes the floor, and the two are not the same question:
+    // that one is asked of routes that retain nothing, where anything above
+    // the floor is memory not collected yet. This note also runs on routes
+    // that grow, and on a growing series the floor is the first cycle, which
+    // understates what the route holds by the end. Replayed 2026-09-27 over
+    // 366 recorded routes, the floor changed five, every one a `leak` on the
+    // same app, and it changed them by adding this note to a route whose
+    // memory a GC does not take back.
     const retainedBytes = largestGap(
       input.memorySamples.slice(1).map((sample) => read(sample, memoryClass))
     );
