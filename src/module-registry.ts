@@ -189,15 +189,18 @@ async function jsFilesUnder(dir: string): Promise<string[]> {
 export async function extractModuleRegistry(nextServerDir: string): Promise<ModuleRegistry> {
   const registry = new Map<number, string>();
   for (const file of await jsFilesUnder(nextServerDir)) {
-    let code: string;
-    let map: unknown;
+    let modules: Map<number, string>;
     try {
-      code = await readFile(file, "utf8");
-      map = JSON.parse(await readFile(`${file}.map`, "utf8"));
+      const code = await readFile(file, "utf8");
+      const map: unknown = JSON.parse(await readFile(`${file}.map`, "utf8"));
+      // Inside the guard with the reads: a map that parses as JSON can still
+      // carry mappings the decoder rejects, and one such file must not take
+      // the whole run down with it.
+      modules = extractChunkModules(code, map);
     } catch {
       continue;
     }
-    for (const [id, source] of extractChunkModules(code, map)) {
+    for (const [id, source] of modules) {
       if (!registry.has(id)) {
         registry.set(id, source);
       }

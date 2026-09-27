@@ -119,6 +119,21 @@ describe("extractModuleRegistry", () => {
     expect(registry.size).toBe(2);
   });
 
+  it("skips a chunk whose mappings do not decode instead of failing the run", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "next-leak-registry-"));
+    await writeFile(path.join(dir, "chunk.js"), CHUNK);
+    await writeFile(path.join(dir, "chunk.js.map"), JSON.stringify(makeMap()));
+    await writeFile(path.join(dir, "corrupt.js"), CHUNK);
+    await writeFile(
+      path.join(dir, "corrupt.js.map"),
+      JSON.stringify({ ...makeMap(), mappings: "AAAA;!!!invalid;AACA" })
+    );
+
+    const registry = await extractModuleRegistry(dir);
+    expect(registry.get(10)).toBe("[project]/app/one.ts");
+    expect(registry.size).toBe(2);
+  });
+
   it("returns an empty registry for a missing directory", async () => {
     expect((await extractModuleRegistry("/nope/nothing")).size).toBe(0);
   });
