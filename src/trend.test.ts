@@ -451,6 +451,79 @@ describe("saturation reached at the tail", () => {
   });
 });
 
+describe("saturation that reaches zero", () => {
+  // Field series, the fixture's /cached route on 2026-09-26 at 300 requests
+  // per cycle, gate 262 144 B. Reported `leak` at 300 and `stable` at 600 and
+  // 3000: the same curve landing on either side of the fixed gate depending on
+  // how much traffic the caller asked for.
+  const CACHED_SAMPLES = [
+    11531112, 13943920, 15198496, 15625328, 15811016, 15877896, 15915896, 15936904, 15931312,
+  ];
+
+  it("calls a curve that decelerates into its own noise saturating", () => {
+    const result = classifyTrend(CACHED_SAMPLES);
+    expect(result.deltas).toEqual([1254576, 426832, 185688, 66880, 38000, 21008, -5592]);
+    expect(result.verdict).toBe("saturating");
+  });
+
+  it("holds that verdict at the higher gate of a busier cycle", () => {
+    // The point of the fix: the shape decides, not the traffic.
+    const result = classifyTrend(CACHED_SAMPLES, { minGrowthPerCycle: minGrowthFor(3000) });
+    expect(result.verdict).toBe("saturating");
+  });
+
+  it("keeps a stop reached at full rate a leak", () => {
+    // [8, 3, 0] MB again, from the other side: the approach to the stop is
+    // 3 MB, twelve times the gate. A store running out passes through small
+    // growth first; this one halts.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 41 * MB, 41 * MB];
+    expect(classifyTrend(samples).verdict).toBe("leak");
+  });
+
+  it("keeps a leak that resumes after going flat", () => {
+    // The #95094 shape: the zero is a pause, and the cycle after it clears the
+    // gate. Deltas [8, 0, 8, 0, 8] MB.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 38 * MB, 46 * MB, 46 * MB, 54 * MB];
+    const result = classifyTrend(samples);
+    expect(result.deltas).toEqual([8 * MB, 0, 8 * MB, 0, 8 * MB]);
+    expect(result.verdict).toBe("leak");
+  });
+
+  it("refuses a series that opens flat", () => {
+    // Nothing to decelerate from: the first post-warm-up cycle is the stop.
+    const samples = [28 * MB, 30 * MB, 30 * MB, 30 * MB, 30 * MB];
+    expect(classifyTrend(samples).verdict).not.toBe("saturating");
+  });
+
+  it("keeps a leak whose growth comes back after the stop", () => {
+    // Deltas [8 MB, 100 KiB, 0, 256 KiB, 100 KiB]. The approach to the stop is
+    // under the gate and the closing cycle is tiny, so every other saturation
+    // test passes: the resumption is the only thing separating this from an
+    // arrival, and a cycle landing *on* the gate is growth coming back.
+    const samples = [
+      28 * MB,
+      30 * MB,
+      38 * MB,
+      38 * MB + 100 * KIB,
+      38 * MB + 100 * KIB,
+      38 * MB + 356 * KIB,
+      38 * MB + 456 * KIB,
+    ];
+    const result = classifyTrend(samples);
+    expect(result.deltas).toEqual([8 * MB, 100 * KIB, 0, 256 * KIB, 100 * KIB]);
+    expect(result.verdict).toBe("leak");
+  });
+
+  it("keeps a stop approached at exactly the gate a leak", () => {
+    // Deltas [8 MB, 256 KiB, 0]. The approach has to fall *below* the leak
+    // rate to count as running out; one still at it has only halted.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 38 * MB + 256 * KIB, 38 * MB + 256 * KIB];
+    const result = classifyTrend(samples);
+    expect(result.deltas).toEqual([8 * MB, 256 * KIB, 0]);
+    expect(result.verdict).toBe("leak");
+  });
+});
+
 describe("cache-driven context", () => {
   it("records the context without moving the verdict", () => {
     // Same series, both ways round: the flag is disclosure, not a threshold.
