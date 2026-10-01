@@ -43,6 +43,12 @@ export const prerenderManifestSchema = z.looseObject({
       })
     )
     .optional(),
+  // Read only for `fallback`, and left untyped: its shape has changed across
+  // Next versions (`null`, `false`, an HTML path, a PPR shell), and a template
+  // the tool cannot classify must not fail the whole manifest.
+  dynamicRoutes: z
+    .record(z.string(), z.looseObject({ fallback: z.unknown().optional() }))
+    .optional(),
   preview: z.looseObject({ previewModeId: z.string() }).optional(),
 });
 export type PrerenderManifest = z.infer<typeof prerenderManifestSchema>;

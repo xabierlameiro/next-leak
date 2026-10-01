@@ -427,6 +427,7 @@ describe("formatReport for ISR routes driven through revalidation", () => {
     const route = report.routes[0];
     if (route?.status !== "measured") throw new Error("fixture broken");
     route.revalidatedEverySeconds = 3600;
+    route.servedFromIsrCache = true;
     route.revalidationDriven = true;
     const output = formatReport(report);
 
@@ -442,6 +443,7 @@ describe("formatReport for ISR routes driven through revalidation", () => {
     const route = report.routes[0];
     if (route?.status !== "measured") throw new Error("fixture broken");
     route.revalidatedEverySeconds = 3600;
+    route.servedFromIsrCache = true;
     route.revalidationDriven = true;
 
     expect(formatReport(report)).toContain("path your users take is not in this number");
@@ -452,6 +454,7 @@ describe("formatReport for ISR routes driven through revalidation", () => {
     const route = report.routes[0];
     if (route?.status !== "measured") throw new Error("fixture broken");
     route.revalidatedEverySeconds = 3600;
+    route.servedFromIsrCache = true;
     const output = formatReport(report);
 
     expect(output).toContain("not driven (revalidates every 3600s)");
@@ -460,6 +463,19 @@ describe("formatReport for ISR routes driven through revalidation", () => {
 
   it("says nothing for a route that is not ISR", () => {
     expect(formatReport(makeRunReport())).not.toContain("ISR revalidation");
+  });
+
+  it("names the cache, not a period, for a template with nothing prerendered", () => {
+    // vercel/next.js#99335: `generateStaticParams() → []` leaves no concrete
+    // entry to carry the period, yet every new slug is cached.
+    const report = makeRunReport();
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("fixture broken");
+    route.servedFromIsrCache = true;
+    const output = formatReport(report);
+
+    expect(output).toContain("not driven (caches each new key on its first request)");
+    expect(output).not.toContain("revalidates every");
   });
 });
 
@@ -475,6 +491,17 @@ describe("formatReport on bounding keys of an ISR route", () => {
     if (route?.status !== "measured") throw new Error("fixture broken");
     route.trend = { ...route.trend, cacheDriven: true, growthPerCycle: 5 * 1024 * 1024 };
     route.revalidatedEverySeconds = 3600;
+    route.servedFromIsrCache = true;
+
+    expect(formatReport(report)).toContain("{n%N} does not isolate that");
+  });
+
+  it("qualifies it too on a template that caches with no period on record", () => {
+    const report = makeRunReport();
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("fixture broken");
+    route.trend = { ...route.trend, cacheDriven: true, growthPerCycle: 5 * 1024 * 1024 };
+    route.servedFromIsrCache = true;
 
     expect(formatReport(report)).toContain("{n%N} does not isolate that");
   });

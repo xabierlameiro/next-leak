@@ -50,9 +50,26 @@ export function revalidateSecondsFor(
   return null;
 }
 
+/**
+ * Whether a dynamic template renders each new key once and caches the result,
+ * with nothing prerendered to say for how long.
+ *
+ * `fallback: null` is a blocking fallback: an unseen param is rendered on its
+ * first request and stored in the ISR cache. The period lives only in the page
+ * module, so the manifest has no concrete entry to read it from. Measured on
+ * the vercel/next.js#99335 reproduction (`revalidate = 3600`,
+ * `generateStaticParams() → []`): `/blog/[slug]` appears in `dynamicRoutes`
+ * with `fallback: null` and nowhere in `routes`. `false` 404s unseen params,
+ * and a string is a fallback shell that may render dynamic content on every
+ * request, so neither is treated as caching on demand.
+ */
+function cachesOnDemand(manifest: PrerenderManifest | undefined, route: string): boolean {
+  return manifest?.dynamicRoutes?.[route]?.fallback === null;
+}
+
 /** Whether a route is served from the ISR cache and needs driving. */
 export function revalidates(manifest: PrerenderManifest | undefined, route: string): boolean {
-  return revalidateSecondsFor(manifest, route) !== null;
+  return revalidateSecondsFor(manifest, route) !== null || cachesOnDemand(manifest, route);
 }
 
 export type RevalidationPlan =
@@ -101,10 +118,12 @@ export function planRevalidation(
   }
   const previewModeId = manifest?.preview?.previewModeId;
   if (previewModeId === undefined || previewModeId === "") {
+    const seconds = revalidateSecondsFor(manifest, route);
+    const cached = seconds === null ? "is served from the ISR cache" : `revalidates every ${seconds}s`;
     return {
       kind: "cannot-drive",
       reason:
-        `revalidates every ${revalidateSecondsFor(manifest, route)}s, but the build's ` +
+        `${cached}, but the build's ` +
         `prerender-manifest.json carries no previewModeId — load would serve the cache ` +
         `and measure nothing. Set "${REVALIDATE_HEADER}" in next-leak.config.json to drive it.`,
     };
