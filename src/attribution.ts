@@ -135,22 +135,101 @@ export type AttributedDiff = {
 };
 
 /**
+ * Index of the nearest enclosing finding, from the dominator links `heap-diff`
+ * records. Undefined for a finding nothing else contains, and for every
+ * finding of a run.json written before the links existed.
+ */
+function enclosingIndexes(all: readonly NodeFinding[]): Array<number | undefined> {
+  const indexById = new Map<number, number>();
+  for (const [index, finding] of all.entries()) {
+    if (finding.nodeId !== undefined) {
+      indexById.set(finding.nodeId, index);
+    }
+  }
+  return all.map((finding) =>
+    finding.containedIn === undefined ? undefined : indexById.get(finding.containedIn)
+  );
+}
+
+/**
+ * A finding no chain resolved takes the owner of the nearest finding that
+ * dominates it: it is reachable only through that one. On the
+ * vercel/next.js#99335 reproduction the fsChecker LRU's table came out
+ * unattributed on the long run because its 7-hop chain stopped short of
+ * `fsChecker`, while the object that dominates it was named.
+ */
+function inheritOwners(
+  own: readonly FindingAttribution[],
+  enclosing: ReadonlyArray<number | undefined>
+): FindingAttribution[] {
+  return own.map((attribution, index) => {
+    let current = enclosing[index];
+    // Bounded by the number of findings, so a malformed cycle cannot spin.
+    for (let hops = 0; attribution.owner === "unattributed" && hops < own.length; hops += 1) {
+      if (current === undefined) {
+        break;
+      }
+      const ancestor = own[current];
+      if (ancestor !== undefined && ancestor.owner !== "unattributed") {
+        return ancestor;
+      }
+      current = enclosing[current];
+    }
+    return attribution;
+  });
+}
+
+/**
+ * Bytes each finding holds that no other finding already reports.
+ *
+ * A grown container's delta includes everything it dominates, so summing raw
+ * figures counts one store once per level. Measured on the
+ * vercel/next.js#99335 reproduction: 3.32 MB of server context, 3.32 MB of
+ * fsChecker object and 0.92 MB of its LRU table were the same memory.
+ */
+function exclusiveBytes(
+  all: readonly NodeFinding[],
+  enclosing: ReadonlyArray<number | undefined>
+): number[] {
+  const bytes = all.map((finding) => finding.retainedBytes);
+  for (const [index, parent] of enclosing.entries()) {
+    if (parent !== undefined) {
+      bytes[parent] = (bytes[parent] ?? 0) - (all[index]?.retainedBytes ?? 0);
+    }
+  }
+  return bytes.map((value) => Math.max(0, value));
+}
+
+/**
  * Attributes every finding and derives the route-level verdict: the
- * owner+source group holding the most attributed retained bytes wins;
- * with nothing attributed the route stays `unattributed`.
+ * owner+source group holding the most exclusive retained bytes wins.
+ *
+ * What nothing could attribute competes as a group of its own. When it is the
+ * largest, the route stays `unattributed`: naming a smaller store as the
+ * culprit misleads, and an `app` or `dependency` culprit is what tells the
+ * issue draft not to file upstream. On the vercel/next.js#99335 long run the
+ * unnamed 19.84 MB map lost to a 9.31 MB fsChecker LRU reported at a
+ * dominance of 1, because unattributed bytes were left out of the share.
  */
 export function attributeDiff(diff: HeapDiff, registry: ModuleRegistry): AttributedDiff {
   const all = [...diff.grownNodes, ...diff.newNodes];
-  const findings = all.map((finding) => attributeFinding(finding, registry));
+  const enclosing = enclosingIndexes(all);
+  const findings = inheritOwners(
+    all.map((finding) => attributeFinding(finding, registry)),
+    enclosing
+  );
+  const exclusive = exclusiveBytes(all, enclosing);
 
   const byGroup = new Map<string, { attribution: FindingAttribution; bytes: number }>();
-  let attributedBytes = 0;
+  let unattributedBytes = 0;
+  let totalBytes = 0;
   for (const [index, attribution] of findings.entries()) {
+    const bytes = exclusive[index] ?? 0;
+    totalBytes += bytes;
     if (attribution.owner === "unattributed") {
+      unattributedBytes += bytes;
       continue;
     }
-    const bytes = all[index]?.retainedBytes ?? 0;
-    attributedBytes += bytes;
     const key = `${attribution.owner}|${attribution.source ?? ""}|${attribution.packageName ?? ""}`;
     const group = byGroup.get(key) ?? { attribution, bytes: 0 };
     group.bytes += bytes;
@@ -165,8 +244,8 @@ export function attributeDiff(diff: HeapDiff, registry: ModuleRegistry): Attribu
   }
 
   const route: RouteAttribution =
-    winner === null || attributedBytes === 0
+    winner === null || winner.bytes === 0 || unattributedBytes > winner.bytes
       ? { ...UNATTRIBUTED, dominance: 0 }
-      : { ...winner.attribution, dominance: winner.bytes / attributedBytes };
+      : { ...winner.attribution, dominance: winner.bytes / totalBytes };
   return { findings, route };
 }

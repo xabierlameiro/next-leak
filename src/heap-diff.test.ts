@@ -131,6 +131,122 @@ describe("diffAgainstBaseline", () => {
   });
 });
 
+// A grown container's delta includes what it dominates. Shaped after the
+// vercel/next.js#99335 run, where Next's server context, the fsChecker object
+// and its LRU table were one store reported three times.
+describe("containment between findings", () => {
+  function nestedScenario() {
+    const { baseline, after } = leakyScenario();
+    const nodes: HeapNodeLike[] = [];
+    after.nodes.forEach((node) => nodes.push(node));
+    const byId = (id: number): HeapNodeLike => {
+      const node = nodes.find((candidate) => candidate.id === id);
+      if (node === undefined) throw new Error(`fixture lacks node ${id}`);
+      return node;
+    };
+    const root = makeNode({ id: 0, type: "synthetic", name: "" });
+    root.dominatorNode = root;
+    const context = byId(1);
+    const closure = byId(2);
+    const array = byId(10);
+    closure.dominatorNode = root;
+    context.dominatorNode = closure;
+    array.dominatorNode = context;
+    for (const id of [103, 105, 107]) {
+      byId(id).dominatorNode = array;
+    }
+    return { baseline, after, byId };
+  }
+
+  const contextLink = (after: ReturnType<typeof nestedScenario>["after"]) =>
+    diffAgainstBaseline(
+      summarizeBaseline(nestedScenario().baseline, OPTIONS),
+      after,
+      OPTIONS
+    ).grownNodes.find((finding) => finding.nodeId === 1);
+
+  it("never links a finding to itself through a malformed dominator cycle", () => {
+    const { after, byId } = nestedScenario();
+    byId(2).dominatorNode = byId(1);
+    const context = contextLink(after);
+
+    expect(context).toBeDefined();
+    expect(context?.containedIn).toBeUndefined();
+  });
+
+  it("gives up on a dominator cycle that never reaches a finding", () => {
+    const { after, byId } = nestedScenario();
+    const hop = makeNode({ id: 50, name: "Map" });
+    hop.dominatorNode = byId(2);
+    byId(2).dominatorNode = hop;
+    const context = contextLink(after);
+
+    expect(context).toBeDefined();
+    expect(context?.containedIn).toBeUndefined();
+  });
+
+  it("stops where a dominator chain ends without a root", () => {
+    const { after, byId } = nestedScenario();
+    byId(2).dominatorNode = null;
+    const context = contextLink(after);
+
+    expect(context).toBeDefined();
+    expect(context?.containedIn).toBeUndefined();
+  });
+
+  it("links each finding to the nearest finding that dominates it", () => {
+    const { baseline, after } = nestedScenario();
+    const diff = diffAgainstBaseline(summarizeBaseline(baseline, OPTIONS), after, OPTIONS);
+    const containerOf = (name: string) =>
+      [...diff.grownNodes, ...diff.newNodes].find((finding) => finding.name === name)?.containedIn;
+
+    expect(containerOf("system / Context")).toBeUndefined();
+    expect(containerOf("Array")).toBe(1);
+    expect(diff.newNodes.map((finding) => finding.containedIn)).toEqual([10, 10, 10]);
+  });
+
+  it("walks past dominators that are not findings themselves", () => {
+    const { baseline, after } = nestedScenario();
+    after.nodes.forEach((node) => {
+      if (node.id === 10) {
+        // The closure is not a finding; the context above it is.
+        const hop = makeNode({ id: 9, name: "Map", dominatorNode: null });
+        node.dominatorNode = hop;
+        after.nodes.forEach((candidate) => {
+          if (candidate.id === 1) hop.dominatorNode = candidate;
+        });
+      }
+    });
+    const diff = diffAgainstBaseline(summarizeBaseline(baseline, OPTIONS), after, OPTIONS);
+
+    expect(diff.grownNodes.find((finding) => finding.name === "Array")?.containedIn).toBe(1);
+  });
+
+  it("records every finding's node id, so the links can be resolved", () => {
+    const { baseline, after } = nestedScenario();
+    const diff = diffAgainstBaseline(summarizeBaseline(baseline, OPTIONS), after, OPTIONS);
+
+    expect(diff.grownNodes.map((finding) => finding.nodeId)).toEqual([1, 10]);
+    expect(diff.newNodes.map((finding) => finding.nodeId)).toEqual([103, 105, 107]);
+  });
+
+  it("leaves findings unlinked when the heap carries no dominators", () => {
+    const { baseline, after } = leakyScenario();
+    const diff = diffAgainstBaseline(summarizeBaseline(baseline, OPTIONS), after, OPTIONS);
+
+    for (const finding of [...diff.grownNodes, ...diff.newNodes]) {
+      expect(finding.containedIn).toBeUndefined();
+    }
+  });
+
+  it("stops at a self-dominated root without linking to it", () => {
+    const { baseline, after } = nestedScenario();
+    const diff = diffAgainstBaseline(summarizeBaseline(baseline, OPTIONS), after, OPTIONS);
+
+    expect(diff.grownNodes[0]?.containedIn).toBeUndefined();
+  });
+});
+
 // V8's roots aggregate everything below them, so the root's growth is simply
 // the heap's growth. Reporting it as a finding put `grown [synthetic] 1755 MB`
 // above the one named object on the vercel/next.js#94919 measurement.
