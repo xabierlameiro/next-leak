@@ -240,7 +240,7 @@ separates them, because each one has a different fix:
 | One-time warm-up growth (JIT, lazy caches) | `stable` | The first cycle is excluded from the verdict; warm-up flattens, leaks keep climbing |
 | A route that is expensive, not leaky | `failed` under load it cannot sustain, flat once concurrency fits | Real leaks survive forced GC at any concurrency; saturation disappears when load drops |
 | Growth that pauses and resumes (stepwise) | `leak` | A healthy route gives back 20-30% of its growth; a stepwise leak gives back nothing |
-| A cache filling up under the load that measures it | `saturating` | A bounded store grows by less each cycle as new keys get rarer; a leak does not decelerate |
+| A cache filling up under the load that measures it | `saturating` | A bounded store grows by less each cycle as new keys get rarer; a leak does not decelerate. A bend that lands on a steady rate above the gate is a leak under the fill, and stays `leak` |
 | Memory a forced GC reclaims that production never reclaims in time | `pressure` | Every verdict sample is post-GC; the peaks are sampled under load, and a ceiling every settled cycle comes back to is a regime, not an episode |
 | Native/buffer memory with a flat JS heap | `leak (external)` or an explicit RSS note | Heap, `external` and RSS are sampled and judged separately |
 | A leak in your code vs a dependency vs Next itself | `culprit: src/app/x/page.tsx (your code)` — or the package, or framework internals | Retainer chains mapped through the build's source maps |
@@ -271,7 +271,15 @@ separates them, because each one has a different fix:
   alternative was calling it a leak: a `use cache` route measured on Next
   16.3.3 came out at +603 MB per 1000 requests that was entirely the cache
   storing what it had been asked to store — the same route dropped to +88 MB
-  once the payload was removed. Because the shape requires every cycle to clear
+  once the payload was removed. The bend has to head for zero, though: a store
+  filling on top of a leak bends too, and then holds the leak's rate for as
+  long as the load runs. So when the last third of the window (at least three
+  cycles) sits at one steady rate at or above the gate, within 1.5x of itself,
+  the route stays `leak`. Measured on the reproduction for
+  [#99335](https://github.com/vercel/next.js/issues/99335), an ISR route
+  keeping every new path's cache control in an unbounded map: it closed on four
+  cycles of ~2.2 MB, twice the gate, and used to be called `saturating`, with
+  no issue draft. Because the shape requires every cycle to clear
   the growth gate, a decelerating curve always ends the window still growing,
   so where it settles is outside what was measured: these routes are
   **measured again** with twice the cycles, like `inconclusive` ones. No issue
