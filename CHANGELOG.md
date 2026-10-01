@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.1](https://github.com/xabierlameiro/next-leak/compare/v0.13.0...v0.13.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **config:** make the REPLACE-ME placeholder vary per request ([16dd678](https://github.com/xabierlameiro/next-leak/commit/16dd6788bd6ebea7f6352ef695ebf61e233183cc))
+* **config:** make the REPLACE-ME placeholder vary per request ([7ede0cb](https://github.com/xabierlameiro/next-leak/commit/7ede0cbd847052145e37354d7891c7db5ba88863))
+* **isr:** treat a template with nothing prerendered as served from the cache ([f4186ce](https://github.com/xabierlameiro/next-leak/commit/f4186ce6f0c66d84b045ab668acb9f3628a7ba83))
+* **isr:** treat a template with nothing prerendered as served from the cache ([218b96f](https://github.com/xabierlameiro/next-leak/commit/218b96f6c718814386115a84e3e16e422edda8cc))
+* **trend:** keep a leak that settles above the gate out of saturating ([0001e92](https://github.com/xabierlameiro/next-leak/commit/0001e929316294fad3a007a375e931f772c89f9a))
+* **trend:** keep a leak that settles above the gate out of saturating ([60be189](https://github.com/xabierlameiro/next-leak/commit/60be1891ebbd147395aeb54d35736d501fdd5132))
+
 ## [0.13.0](https://github.com/xabierlameiro/next-leak/compare/v0.12.2...v0.13.0) (2026-09-27)
 
 
