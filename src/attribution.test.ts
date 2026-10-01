@@ -206,6 +206,48 @@ describe("chain-based framework detection", () => {
     expect(chain("NextNodeServer#object[.x]").packageName).toBe("next (Next server)");
   });
 
+  // Chains copied from the vercel/next.js#99335 reproduction, 12 cycles ×
+  // 20,000 requests on next@16.4.0-canary.50.
+  const SHARED_CACHE_CONTROLS_CHAIN =
+    "Map#object[.table] <- system / PropertyArray#hidden[.2] <- " +
+    "SharedCacheControls#closure[.properties] <- system / Context#object[.1] <- " +
+    "clear#closure[.context] <- system / PropertyArray#hidden[.3] <- Object#object[.properties]";
+  const FS_CHECKER_CHAIN =
+    "system / Context#object[.fsChecker] <- match#closure[.context] <- " +
+    "Object#object[.match] <- (object elements)#array[.5] <- Array#object[.elements]";
+
+  it("names the shared cache controls store", () => {
+    expect(chain(SHARED_CACHE_CONTROLS_CHAIN).packageName).toBe("next (shared cache controls)");
+  });
+
+  it("names the shared cache controls before the incremental cache that holds them", () => {
+    expect(
+      chain("SharedCacheControls#closure[.properties] <- IncrementalCache#object[.x]").packageName
+    ).toBe("next (shared cache controls)");
+  });
+
+  it("hands the route to the store that grew most once it has a name", () => {
+    // Before, the 19.84 MB map was unattributed and the bounded 9.31 MB
+    // fsChecker LRU won the route with a dominance of 1.
+    const node = (kind: "grown" | "new", retainedBytes: number, retainerChain: string) => ({
+      kind,
+      nodeType: kind === "new" ? "array" : "object",
+      name: "",
+      retainedBytes,
+      retainerChain,
+      moduleIds: [],
+    });
+    const diff: HeapDiff = {
+      typeDeltas: [],
+      grownNodes: [node("grown", 9_760_000, FS_CHECKER_CHAIN)],
+      newNodes: [node("new", 20_800_000, SHARED_CACHE_CONTROLS_CHAIN)],
+    };
+    const result = attributeDiff(diff, new Map());
+
+    expect(result.route.packageName).toBe("next (shared cache controls)");
+    expect(result.route.dominance).toBeCloseTo(20_800_000 / 30_560_000);
+  });
+
   it("stays unattributed for chains with no known marker", () => {
     expect(chain("Object#object[.foo] <- Array#object[.bar]").owner).toBe("unattributed");
     expect(chain("").owner).toBe("unattributed");

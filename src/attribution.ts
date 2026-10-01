@@ -76,6 +76,12 @@ const FRAMEWORK_CHAIN_MARKERS: ReadonlyArray<readonly [marker: string, component
   ["NextNodeServer", "Next server"],
   ["AppPageRouteModule", "App Router page module"],
   ["AppRouteRouteModule", "App Router route handler module"],
+  // Ahead of the incremental cache, which holds it: a chain reaching through
+  // both should name the store that grows. On the vercel/next.js#99335
+  // reproduction its unbounded Map was the largest finding (19.84 MB over
+  // 240,000 requests) and, unnamed, lost the route to the bounded fsChecker
+  // LRU at 9.31 MB with a reported dominance of 1.
+  ["SharedCacheControls", "shared cache controls"],
   ["incrementalCache", "incremental cache"],
   ["IncrementalCache", "incremental cache"],
   ["ReactServer", "React Server Components renderer"],
