@@ -527,7 +527,8 @@ describe("formatReport guidance for skipped routes", () => {
     expect(output).toContain("need sample params");
     expect(output).toContain("next-leak.config.json");
     expect(output).toContain('"/products/[id]"');
-    expect(output).toContain("REPLACE-ME");
+    expect(output).toContain('"REPLACE-ME-{n}"');
+    expect(output).toContain("keep the `-{n}` after it");
   });
 
   // The build's value gives the shape, never the value itself: requesting a

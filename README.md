@@ -193,7 +193,10 @@ entry, so the route reads as flat whatever it retains, and that false negative
 lands on exactly the leaks being reported now (`use cache`, `cacheComponents`
 and ISR all key on the params). If your app answers 404 for params it never
 prerendered, the run says so through its non-2xx count; drop the marker then.
-When a run skips a route it prints the same fragment.
+When the build prerendered nothing for a route, the value is `REPLACE-ME-{n}`:
+put the shape of a real value in place of `REPLACE-ME` and keep the `-{n}`, or
+the run measures a single cache entry. When a run skips a route it prints the
+same fragment.
 
 ```json
 ```

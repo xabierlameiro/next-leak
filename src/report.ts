@@ -402,7 +402,9 @@ function skippedGuidanceLines(report: RunReport): string[] {
     return [];
   }
   const editing = hasPlaceholders(skeleton)
-    ? ` Replace each ${"REPLACE-ME"} with a value that exists in your app.`
+    ? ` Replace each ${"REPLACE-ME"} with the shape of a value that exists in ` +
+      `your app, and keep the \`-{n}\` after it: a fixed value measures one ` +
+      `cache entry and reads as flat whatever the route retains.`
     : ` The shapes come from paths your build already prerendered; \`{n}\` makes ` +
       `every request use a different one, because reusing a prerendered value ` +
       `serves the warm cache and reads as flat whatever the route retains. Use ` +

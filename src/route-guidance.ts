@@ -97,10 +97,13 @@ export function renderConfigSkeleton(
     const values: Record<string, string> = {};
     for (const segment of segments) {
       const prerendered = sampled?.[segment.name];
-      // The placeholder is left alone: it is already obviously not a value,
-      // and appending `{n}` to it would read like part of what to replace.
-      values[segment.name] =
-        prerendered === undefined ? PLACEHOLDER : varyingValueFrom(prerendered);
+      // The placeholder moves too. A bare `REPLACE-ME` invites one fixed value,
+      // and one fixed value measures one cache entry: the false negative
+      // `varyingValueFrom` exists to prevent. Measured on the
+      // vercel/next.js#99335 reproduction, where the build prerendered nothing
+      // and the skeleton was the only guidance. The messages that print it say
+      // to keep the `{n}`.
+      values[segment.name] = varyingValueFrom(prerendered ?? PLACEHOLDER);
     }
     routes[template] = values;
   }
@@ -110,4 +113,21 @@ export function renderConfigSkeleton(
 /** Whether a rendered skeleton still needs the user to fill anything in. */
 export function hasPlaceholders(skeleton: string): boolean {
   return skeleton.includes(PLACEHOLDER);
+}
+
+/** What `--write-config` prints after writing a skeleton: how to edit it. */
+export function writtenConfigNote(skeleton: string): string {
+  if (hasPlaceholders(skeleton)) {
+    return (
+      `replace each ${PLACEHOLDER} with the shape of a value that exists in your app, ` +
+      "and keep the `-{n}` after it: a fixed value measures one cache entry and " +
+      "reads as flat whatever the route retains"
+    );
+  }
+  return (
+    "`{n}` gives every request a different value: a prerendered one serves the " +
+    "warm cache and reads as flat whatever the route retains. Use `{n%200}` to " +
+    "revisit a fixed set of keys, and drop the marker only if the app 404s on " +
+    "params it never prerendered."
+  );
 }
