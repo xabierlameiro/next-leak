@@ -4,6 +4,7 @@ import {
   renderConfigSkeleton,
   sampleValuesFromManifest,
   varyingValueFrom,
+  writtenConfigNote,
 } from "./route-guidance.js";
 import { prerenderManifestSchema } from "./manifests.js";
 
@@ -79,6 +80,24 @@ describe("renderConfigSkeleton", () => {
       "/blog/[slug]": { slug: "REPLACE-ME-{n}" },
       "/[lang]/docs/[...path]": { lang: "REPLACE-ME-{n}", path: "REPLACE-ME-{n}" },
     });
+  });
+
+  it("tells whoever fills a placeholder in to keep it moving", () => {
+    const skeleton = renderConfigSkeleton(["/blog/[slug]"]);
+    if (skeleton === null) throw new Error("expected a skeleton");
+    const note = writtenConfigNote(skeleton);
+
+    expect(note).toContain("replace each REPLACE-ME");
+    expect(note).toContain("keep the `-{n}` after it");
+  });
+
+  it("explains the marker when every value came from the build", () => {
+    const skeleton = renderConfigSkeleton(["/posts/[slug]"], MANIFEST);
+    if (skeleton === null) throw new Error("expected a skeleton");
+    const note = writtenConfigNote(skeleton);
+
+    expect(note).toContain("`{n}` gives every request a different value");
+    expect(note).not.toContain("REPLACE-ME");
   });
 
   it("names every segment of a multi-parameter route", () => {

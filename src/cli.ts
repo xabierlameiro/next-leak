@@ -15,7 +15,7 @@ import { killActiveChildren } from "./launcher.js";
 import { formatReport } from "./report.js";
 import { RouteConfigError } from "./route-config.js";
 import { discoverPagesRoutes, discoverRoutes } from "./manifests.js";
-import { hasPlaceholders, renderConfigSkeleton } from "./route-guidance.js";
+import { renderConfigSkeleton, writtenConfigNote } from "./route-guidance.js";
 import { runMeasurement, freePort } from "./runner.js";
 import { TargetError, validateTarget } from "./target.js";
 import { terminalSafe } from "./terminal-text.js";
@@ -168,20 +168,7 @@ async function writeConfigSkeleton(appDir: string): Promise<void> {
     return;
   }
   console.log(`wrote ${file}`);
-  if (hasPlaceholders(skeleton)) {
-    console.log(
-      "replace each REPLACE-ME with the shape of a value that exists in your app, " +
-        "and keep the `-{n}` after it: a fixed value measures one cache entry and " +
-        "reads as flat whatever the route retains"
-    );
-  } else {
-    console.log(
-      "`{n}` gives every request a different value: a prerendered one serves the " +
-        "warm cache and reads as flat whatever the route retains. Use `{n%200}` to " +
-        "revisit a fixed set of keys, and drop the marker only if the app 404s on " +
-        "params it never prerendered."
-    );
-  }
+  console.log(writtenConfigNote(skeleton));
 }
 
 async function main(): Promise<void> {
