@@ -126,6 +126,83 @@ describe("planRevalidation", () => {
   });
 });
 
+// Shaped after the real prerender-manifest.json of the vercel/next.js#99335
+// reproduction on next@16.4.0-canary.50: `revalidate = 3600` with
+// `generateStaticParams() → []`. Nothing is prerendered, so `routes` holds no
+// entry pointing back at the template and the period is nowhere in the build;
+// the template only shows up in `dynamicRoutes`, with a blocking fallback.
+function onDemandManifest(fallback: unknown, previewModeId = "a1b2"): PrerenderManifest {
+  return prerenderManifestSchema.parse({
+    version: 4,
+    routes: {
+      "/_global-error": { initialRevalidateSeconds: false, srcRoute: "/_global-error" },
+    },
+    dynamicRoutes: {
+      "/blog/[slug]": {
+        routeType: "page",
+        routeRegex: "^/blog/([^/]+?)(?:/)?$",
+        dataRoute: "/blog/[slug].rsc",
+        fallback,
+      },
+    },
+    ...(previewModeId !== "" && { preview: { previewModeId } }),
+  });
+}
+
+describe("a template that caches each new key with nothing prerendered", () => {
+  it("is served from the ISR cache even though no period is on record", () => {
+    const manifest = onDemandManifest(null);
+
+    expect(revalidates(manifest, "/blog/[slug]")).toBe(true);
+    expect(revalidateSecondsFor(manifest, "/blog/[slug]")).toBeNull();
+  });
+
+  it("is not driven when every request asks for a new key", () => {
+    // The plan that marks the run as cache-driven, so the report says the
+    // growth includes cache residency. Before, the route came out `not-isr`
+    // and the note never appeared.
+    const plan = planRevalidation(onDemandManifest(null), "/blog/[slug]", undefined, "/blog/{n}");
+    expect(plan.kind).toBe("no-cache-to-drive");
+  });
+
+  it("is driven when the keys repeat, because the cache now holds them", () => {
+    const plan = planRevalidation(onDemandManifest(null), "/blog/[slug]", undefined, "/blog/{n%50}");
+    if (plan.kind !== "drive") throw new Error("expected drive");
+
+    expect(plan.headers[REVALIDATE_HEADER]).toBe("a1b2");
+  });
+
+  it("refuses to guess without a previewModeId, naming the cache instead of a period", () => {
+    const plan = planRevalidation(onDemandManifest(null, ""), "/blog/[slug]", undefined, "/blog/a");
+    if (plan.kind !== "cannot-drive") throw new Error("expected cannot-drive");
+
+    expect(plan.reason).toContain("is served from the ISR cache, but");
+    expect(plan.reason).not.toContain("null");
+  });
+
+  it("does not count a template whose unseen params 404", () => {
+    // `dynamicParams = false` → `fallback: false`: nothing new is ever cached.
+    expect(revalidates(onDemandManifest(false), "/blog/[slug]")).toBe(false);
+  });
+
+  it("does not count a fallback shell, which may render on every request", () => {
+    expect(revalidates(onDemandManifest("/blog/[slug].html"), "/blog/[slug]")).toBe(false);
+  });
+
+  it("does not count a template whose entry says nothing about its fallback", () => {
+    expect(revalidates(onDemandManifest(undefined), "/blog/[slug]")).toBe(false);
+  });
+
+  it("does not leak onto a route the dynamicRoutes table does not name", () => {
+    expect(revalidates(onDemandManifest(null), "/about")).toBe(false);
+  });
+
+  it("reads a build with no dynamic routes at all as not caching on demand", () => {
+    const staticOnly = prerenderManifestSchema.parse({ version: 4, routes: {} });
+    expect(revalidates(staticOnly, "/about")).toBe(false);
+  });
+});
+
 describe("prerenderManifestSchema", () => {
   it("tolerates the fields the tool does not read", () => {
     const parsed = prerenderManifestSchema.parse({

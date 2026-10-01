@@ -89,10 +89,13 @@ function ownerLabel(attribution: FindingAttribution): string | null {
  * when not. Whichever path ran, the reader has to be told which one.
  */
 function revalidationLines(route: MeasuredRouteView): string[] {
-  if (route.revalidatedEverySeconds === undefined) {
+  if (route.servedFromIsrCache !== true) {
     return [];
   }
-  const every = `revalidates every ${route.revalidatedEverySeconds}s`;
+  const every =
+    route.revalidatedEverySeconds === undefined
+      ? "caches each new key on its first request"
+      : `revalidates every ${route.revalidatedEverySeconds}s`;
   return route.revalidationDriven === true
     ? [
         `      driven through ISR revalidation (${every}; without it the load would ` +
@@ -159,7 +162,7 @@ function cacheLines(route: MeasuredRouteView): string[] {
     // revalidation path. Measured on the vercel/next.js#99077 reproduction,
     // two builds retaining 7x apart came out at +1809.97 and +1815.05
     // MB/1000 req that way, and at +2.34 and +343.05 undriven.
-    if (route.revalidatedEverySeconds !== undefined) {
+    if (route.servedFromIsrCache === true) {
       lines.push(
         `      on this route {n%N} does not isolate that: a bounded key set is ` +
           `served from the ISR cache, so the run would drive revalidation and ` +

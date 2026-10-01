@@ -1258,6 +1258,44 @@ describe("cache-driven routes", () => {
     );
     expect(flag).toBeUndefined();
   });
+
+  it("marks a template that caches each new key with nothing prerendered", async () => {
+    // vercel/next.js#99335: `generateStaticParams() → []` leaves the template
+    // only in `dynamicRoutes`, with a blocking fallback and no period anywhere.
+    // It used to be measured as not-ISR, so the cache-residency note and the
+    // remedy audit never saw the cache filling under the load.
+    const appDir = await makeAppDir({ "/blog/[slug]/page": "app/blog/[slug]/page.js" });
+    await writeFile(
+      path.join(appDir, ".next", "prerender-manifest.json"),
+      JSON.stringify({
+        routes: {},
+        dynamicRoutes: { "/blog/[slug]": { fallback: null } },
+        preview: { previewModeId: "preview-id" },
+      })
+    );
+    await writeFile(
+      path.join(appDir, "next-leak.config.json"),
+      JSON.stringify({ params: { slug: "post-{n}" } })
+    );
+    let seen: boolean | undefined;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          seen = options.cacheDriven;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("expected a measured route");
+
+    expect(seen).toBe(true);
+    expect(route.servedFromIsrCache).toBe(true);
+    expect(route.revalidatedEverySeconds).toBeUndefined();
+    expect(route.revalidationDriven).toBeUndefined();
+  });
 });
 
 // run.json is what a maintainer re-reads months later. A verdict whose

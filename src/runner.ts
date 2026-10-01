@@ -41,7 +41,7 @@ import {
 } from "./ritual.js";
 import { matchSignatures, readNextVersion, type MatchedSignature } from "./signatures.js";
 import { validateTarget, type ValidatedTarget } from "./target.js";
-import { planRevalidation, revalidateSecondsFor } from "./isr.js";
+import { planRevalidation, revalidateSecondsFor, revalidates } from "./isr.js";
 import { minGrowthFor, type TrendResult, type TrendVerdict } from "./trend.js";
 
 /** What one repetition of a route concluded, for disclosing the spread. */
@@ -137,6 +137,12 @@ export type RouteReport =
        * cache and one measured against a re-render are different experiments.
        */
       revalidatedEverySeconds?: number;
+      /**
+       * Set on every route served from the ISR cache, including a dynamic
+       * template that caches each new key with no prerendered entry to carry
+       * its period — the period is then absent, but the cache is in play.
+       */
+      servedFromIsrCache?: true;
       /**
        * Whether the load carried the build's own revalidation header. Set apart
        * from the period because the two answer different questions: the period
@@ -496,6 +502,7 @@ async function measureRoute(
   // Next's revalidation path — see planRevalidation.
   const plan = planRevalidation(target.prerender, route.path, routeConfig.headers, requestPath);
   const revalidateSeconds = revalidateSecondsFor(target.prerender, route.path);
+  const servedFromIsrCache = revalidates(target.prerender, route.path);
   const bounded = boundedMarkerOf(requestPath);
   const driven = plan.kind === "drive" ? plan.headers : {};
   // Serving a cached route keys it has never held fills its store as a side
@@ -548,7 +555,7 @@ async function measureRoute(
     warmupRequests: options.warmupRequests ?? RITUAL_DEFAULTS.warmupRequests,
     // Decides whether the cache-residency remedy exists on this route: bounding
     // the keys of an ISR route hands the requests back to the cache.
-    revalidatesFromCache: revalidateSeconds !== null,
+    revalidatesFromCache: servedFromIsrCache,
     ...(routeConfig.abandonAfterMs !== undefined && {
       abandonAfterMs: routeConfig.abandonAfterMs,
     }),
@@ -604,6 +611,7 @@ async function measureRoute(
     memorySamples: result.memorySamples,
     peaks: result.peaks,
     ...(revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
+    ...(servedFromIsrCache && { servedFromIsrCache: true as const }),
     ...(plan.kind === "drive" && { revalidationDriven: true as const }),
     ...(bounded !== null && { keyCardinality: bounded.bound }),
     unreclaimedSamples: result.unreclaimedSamples,

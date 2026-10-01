@@ -388,7 +388,11 @@ A route with a revalidation period serves its cache unless the request carries
 the build's own `x-prerender-revalidate` header. Measured on that same app: the
 identical run reports `leak` with the header and `stable` without it. next-leak
 reads `previewModeId` from `.next/prerender-manifest.json` and drives those
-routes itself; a header you set in `next-leak.config.json` wins untouched. When
+routes itself; a header you set in `next-leak.config.json` wins untouched. A
+dynamic template with nothing prerendered (`generateStaticParams()` returning
+`[]`) counts too: the build records no period for it, but its blocking fallback
+caches every new param on first request, so `{n}` fills that cache while it is
+measured and the report says so. When
 the manifest cannot supply one, the route is reported `not exercised` with no
 verdict, because a flat curve measured against a static cache says nothing about
 the app.
