@@ -118,6 +118,27 @@ const SATURATION_MIN_CYCLES = 3;
 const SATURATION_MAX_FINAL_RATIO = 0.5;
 
 /**
+ * Closing cycles that must agree on one rate before a tail counts as settled.
+ *
+ * The same reasoning as `SATURATION_MIN_CYCLES`: fewer is a pair, not a rate.
+ * Longer series take their last third, so a twelve-cycle window judges its
+ * last four deltas rather than the last three.
+ */
+const SETTLED_TAIL_MIN_CYCLES = 3;
+
+/**
+ * Widest spread (largest closing delta over smallest) of a tail growing at
+ * one rate.
+ *
+ * A store still filling keeps shrinking its deltas, and 1.5 is what a decline
+ * of 15% per cycle reaches across four of them, so a tail this tight has
+ * stopped bending. Measured on the vercel/next.js#99335 reproduction, the
+ * leaking build's last four deltas spread 1.02; the bounded build's last
+ * three straddled zero.
+ */
+const SETTLED_TAIL_MAX_SPREAD = 1.5;
+
+/**
  * Largest give-back from a running peak, over the post-warm-up window.
  *
  * This is what separates a plateau from a pause. A healthy route oscillates
@@ -173,7 +194,7 @@ function isStepwiseGrowth(
  * a `use cache` route that was storing exactly what it was asked to store,
  * against +88 MB/1000 for the same route once the payload was removed.
  *
- * Three conditions, and each one earns its place:
+ * Four conditions, and each one earns its place:
  *
  * - **Growth stops at most once, and does not come back.** See
  *   `hasArrivedWithoutResuming`.
@@ -183,6 +204,7 @@ function isStepwiseGrowth(
  *   half the first, *and* the later cycles averaging below the earlier ones.
  *   Arrival alone would admit a series that spikes and drops on its last
  *   cycle; direction alone would admit a decline that never gets anywhere.
+ * - **Where it arrives is not a leak rate.** See `hasSettledAboveGate`.
  *
  * What is deliberately *not* required is that each delta be smaller than the
  * one before it. Post-GC deltas do not descend in order — measured on Next
@@ -206,7 +228,38 @@ function isSaturating(deltas: readonly number[], minGrowth: number): boolean {
   if (last > first * SATURATION_MAX_FINAL_RATIO) {
     return false;
   }
+  if (hasSettledAboveGate(deltas, minGrowth)) {
+    return false;
+  }
   return isHeadingDown(deltas);
+}
+
+/**
+ * Whether the deceleration ended on a steady rate the gate calls a leak.
+ *
+ * A store running out of keys bends toward zero. A bounded store filling on
+ * top of a leak bends too, and then holds the leak's rate for as long as the
+ * load runs: the bend is the store, the floor it lands on is the leak. Every
+ * condition above admits both, because each compares the tail against the
+ * opening cycles and the fill makes those large.
+ *
+ * Measured on the vercel/next.js#99335 reproduction (16.4.0-canary.50, 20000
+ * requests per cycle, gate 1 MiB), 2026-10-01. The build that keeps every ISR
+ * path's cache control in an unbounded map closed on
+ * [2264416, 2230040, 2268232, 2235240] after opening at 6610984: twice the gate,
+ * flat to 2%, and called `saturating`, which carries no issue draft. Its own
+ * ground truth grows linearly with no ceiling. The same build with the map
+ * bounded closed on [5432, -992, 13408], a plateau its ground truth confirms
+ * past 100,000 paths.
+ */
+function hasSettledAboveGate(deltas: readonly number[], minGrowth: number): boolean {
+  const size = Math.max(SETTLED_TAIL_MIN_CYCLES, Math.ceil(deltas.length / 3));
+  const tail = deltas.slice(-size);
+  const smallest = Math.min(...tail);
+  if (smallest < minGrowth) {
+    return false;
+  }
+  return Math.max(...tail) <= smallest * SETTLED_TAIL_MAX_SPREAD;
 }
 
 /**
