@@ -451,6 +451,81 @@ describe("saturation reached at the tail", () => {
   });
 });
 
+describe("saturation that lands on a leak rate", () => {
+  // Field series, the vercel/next.js#99335 reproduction on 16.4.0-canary.50,
+  // 2026-10-01: an ISR route asked for a new path every request, 20000
+  // requests per cycle, resolved at 12 cycles. Both builds fill a bounded
+  // route cache first; only the first also keeps every path's cache control
+  // in an unbounded map.
+  const GATE = minGrowthFor(20000);
+  const LEAKING_SAMPLES = [
+    32303016, 37470344, 44081328, 47672024, 53647448, 55945208, 58234112, 64228672, 66471320,
+    68735736, 70965776, 73234008, 75469248,
+  ];
+  const BOUNDED_SAMPLES = [
+    32326720, 34499616, 37942528, 39314552, 41196024, 41258584, 41304400, 41317440, 41335960,
+    41341192, 41346624, 41345632, 41359040,
+  ];
+
+  it("keeps a bend that settles on a steady rate above the gate a leak", () => {
+    const result = classifyTrend(LEAKING_SAMPLES, { minGrowthPerCycle: GATE });
+    expect(result.deltas.slice(-4)).toEqual([2264416, 2230040, 2268232, 2235240]);
+    expect(result.verdict).toBe("leak");
+  });
+
+  it("still calls the same bend saturating when it settles below the gate", () => {
+    const result = classifyTrend(BOUNDED_SAMPLES, { minGrowthPerCycle: GATE });
+    expect(result.deltas.slice(-3)).toEqual([5432, -992, 13408]);
+    expect(result.verdict).toBe("saturating");
+  });
+
+  it("keeps a tail that is still shrinking saturating", () => {
+    // Deltas [8, 6, 4, 3, 2, 1.5] MB: every closing cycle clears the gate, but
+    // the last three spread 2x, so the curve has not stopped bending.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 44 * MB, 48 * MB, 51 * MB, 53 * MB, 54.5 * MB];
+    expect(classifyTrend(samples).verdict).toBe("saturating");
+  });
+
+  it("does not let one closing cycle below the gate settle a tail", () => {
+    // Deltas [8, 4, 3, 2, 2, 0.2] MB: flat until the last cycle, which drops
+    // under the 256 KiB gate — the store arriving, not a floor.
+    const samples = [28 * MB, 30 * MB, 38 * MB, 42 * MB, 45 * MB, 47 * MB, 49 * MB, 49.2 * MB];
+    expect(classifyTrend(samples).verdict).toBe("saturating");
+  });
+
+  // Baseline and warm-up cycle, then one sample per delta given in MB.
+  const fromDeltas = (deltasInMb: readonly number[]): number[] =>
+    deltasInMb.reduce(
+      (series, delta) => [...series, (series.at(-1) ?? 0) + delta * MB],
+      [28 * MB, 30 * MB]
+    );
+
+  it("judges the last third of a long series, not just its last three cycles", () => {
+    // Twelve deltas, so the tail is four: [2, 2, 2] alone would settle, but the
+    // fourth from the end is still 4 MB and the curve is still bending.
+    const samples = fromDeltas([9, 8, 7, 6, 5.5, 5, 4.5, 4.2, 4, 2, 2, 2]);
+    expect(classifyTrend(samples).verdict).toBe("saturating");
+  });
+
+  it("keeps a tail that settles flat under the gate saturating", () => {
+    // [0.2, 0.2, 0.2] MB is one steady rate, but below the 256 KiB gate:
+    // drift the instrument cannot tell from noise, not a leak rate.
+    const samples = fromDeltas([8, 4, 2, 0.2, 0.2, 0.2]);
+    expect(classifyTrend(samples).verdict).toBe("saturating");
+  });
+
+  it("counts a tail sitting exactly on the gate as a leak rate, as allGrow does", () => {
+    const samples = fromDeltas([4, 2, 1, 1, 1]);
+    expect(classifyTrend(samples, { minGrowthPerCycle: 1 * MB }).verdict).toBe("leak");
+  });
+
+  it("counts a tail spread exactly at the limit as settled", () => {
+    // [2, 3, 2] MB: the largest closing delta is 1.5x the smallest.
+    const samples = fromDeltas([8, 6, 4, 2, 3, 2]);
+    expect(classifyTrend(samples).verdict).toBe("leak");
+  });
+});
+
 describe("saturation that reaches zero", () => {
   // Field series, the fixture's /cached route on 2026-09-26 at 300 requests
   // per cycle, gate 262 144 B. Reported `leak` at 300 and `stable` at 600 and
