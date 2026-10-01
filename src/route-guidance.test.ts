@@ -64,8 +64,21 @@ describe("renderConfigSkeleton", () => {
     const skeleton = renderConfigSkeleton(["/users/[id]"], MANIFEST);
     if (skeleton === null) throw new Error("expected a skeleton");
 
-    expect(JSON.parse(skeleton).routes["/users/[id]"].id).toBe("REPLACE-ME");
+    expect(JSON.parse(skeleton).routes["/users/[id]"].id).toBe("REPLACE-ME-{n}");
     expect(hasPlaceholders(skeleton)).toBe(true);
+  });
+
+  it("makes the placeholder move, so filling it in does not pin one key", () => {
+    // vercel/next.js#99335: the build prerendered nothing, the skeleton said
+    // `REPLACE-ME`, and a fixed slug measures a single cache entry.
+    const skeleton = renderConfigSkeleton(["/blog/[slug]", "/[lang]/docs/[...path]"]);
+    if (skeleton === null) throw new Error("expected a skeleton");
+
+    const { routes } = JSON.parse(skeleton) as { routes: Record<string, Record<string, string>> };
+    expect(routes).toEqual({
+      "/blog/[slug]": { slug: "REPLACE-ME-{n}" },
+      "/[lang]/docs/[...path]": { lang: "REPLACE-ME-{n}", path: "REPLACE-ME-{n}" },
+    });
   });
 
   it("names every segment of a multi-parameter route", () => {

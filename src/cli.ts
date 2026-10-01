@@ -169,7 +169,11 @@ async function writeConfigSkeleton(appDir: string): Promise<void> {
   }
   console.log(`wrote ${file}`);
   if (hasPlaceholders(skeleton)) {
-    console.log("replace each REPLACE-ME with a value that exists in your app");
+    console.log(
+      "replace each REPLACE-ME with the shape of a value that exists in your app, " +
+        "and keep the `-{n}` after it: a fixed value measures one cache entry and " +
+        "reads as flat whatever the route retains"
+    );
   } else {
     console.log(
       "`{n}` gives every request a different value: a prerendered one serves the " +

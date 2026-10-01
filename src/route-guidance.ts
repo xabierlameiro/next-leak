@@ -97,10 +97,13 @@ export function renderConfigSkeleton(
     const values: Record<string, string> = {};
     for (const segment of segments) {
       const prerendered = sampled?.[segment.name];
-      // The placeholder is left alone: it is already obviously not a value,
-      // and appending `{n}` to it would read like part of what to replace.
-      values[segment.name] =
-        prerendered === undefined ? PLACEHOLDER : varyingValueFrom(prerendered);
+      // The placeholder moves too. A bare `REPLACE-ME` invites one fixed value,
+      // and one fixed value measures one cache entry: the false negative
+      // `varyingValueFrom` exists to prevent. Measured on the
+      // vercel/next.js#99335 reproduction, where the build prerendered nothing
+      // and the skeleton was the only guidance. The messages that print it say
+      // to keep the `{n}`.
+      values[segment.name] = varyingValueFrom(prerendered ?? PLACEHOLDER);
     }
     routes[template] = values;
   }
