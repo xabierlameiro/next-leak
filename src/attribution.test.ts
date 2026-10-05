@@ -99,7 +99,7 @@ describe("attributeDiff", () => {
         finding({ moduleIds: [35194], retainedBytes: 5_000_000 }),
         finding({ moduleIds: [70000], retainedBytes: 1_000_000 }),
       ],
-      newNodes: [finding({ moduleIds: [], retainedBytes: 9_000_000 })],
+      newNodes: [finding({ moduleIds: [], retainedBytes: 3_000_000 })],
     };
     const result = attributeDiff(diff, registry);
     expect(result.findings.map((entry) => entry.owner)).toEqual([
@@ -109,7 +109,36 @@ describe("attributeDiff", () => {
     ]);
     expect(result.route.owner).toBe("app");
     expect(result.route.source).toBe("src/app/leaky/page.tsx");
-    expect(result.route.dominance).toBeCloseTo(5 / 6);
+    // Unattributed bytes count toward the share: they are growth too.
+    expect(result.route.dominance).toBeCloseTo(5 / 9);
+  });
+
+  it("names no culprit when what nobody owns outweighs every owner", () => {
+    // An `app` culprit tells the issue draft not to file upstream, so it must
+    // not be elected over a larger store the run could not name.
+    const diff: HeapDiff = {
+      typeDeltas: [],
+      grownNodes: [finding({ moduleIds: [35194], retainedBytes: 5_000_000 })],
+      newNodes: [finding({ moduleIds: [], retainedBytes: 9_000_000 })],
+    };
+    expect(attributeDiff(diff, registry).route).toEqual({
+      owner: "unattributed",
+      source: null,
+      packageName: null,
+      dominance: 0,
+    });
+  });
+
+  it("keeps the owner when what nobody owns only ties it", () => {
+    const diff: HeapDiff = {
+      typeDeltas: [],
+      grownNodes: [finding({ moduleIds: [35194], retainedBytes: 4_000_000 })],
+      newNodes: [finding({ moduleIds: [], retainedBytes: 4_000_000 })],
+    };
+    const route = attributeDiff(diff, registry).route;
+
+    expect(route.owner).toBe("app");
+    expect(route.dominance).toBeCloseTo(0.5);
   });
 
   it("stays unattributed when no finding resolves", () => {
@@ -204,6 +233,174 @@ describe("chain-based framework detection", () => {
       "next (dynamic route matcher)"
     );
     expect(chain("NextNodeServer#object[.x]").packageName).toBe("next (Next server)");
+  });
+
+  // Chains copied from the vercel/next.js#99335 reproduction, 12 cycles ×
+  // 20,000 requests on next@16.4.0-canary.50.
+  const SHARED_CACHE_CONTROLS_CHAIN =
+    "Map#object[.table] <- system / PropertyArray#hidden[.2] <- " +
+    "SharedCacheControls#closure[.properties] <- system / Context#object[.1] <- " +
+    "clear#closure[.context] <- system / PropertyArray#hidden[.3] <- Object#object[.properties]";
+  const FS_CHECKER_CHAIN =
+    "system / Context#object[.fsChecker] <- match#closure[.context] <- " +
+    "Object#object[.match] <- (object elements)#array[.5] <- Array#object[.elements]";
+
+  it("names the shared cache controls store", () => {
+    expect(chain(SHARED_CACHE_CONTROLS_CHAIN).packageName).toBe("next (shared cache controls)");
+  });
+
+  it("names the shared cache controls before the incremental cache that holds them", () => {
+    expect(
+      chain("SharedCacheControls#closure[.properties] <- IncrementalCache#object[.x]").packageName
+    ).toBe("next (shared cache controls)");
+  });
+
+  // Nesting as measured on the 4 × 5000 run of the same reproduction: Next's
+  // server context dominates the fsChecker object, which dominates its LRU's
+  // table. Raw sums counted that one store three times.
+  function nestedDiff(): HeapDiff {
+    const node = (
+      kind: "grown" | "new",
+      nodeId: number,
+      retainedBytes: number,
+      retainerChain: string,
+      containedIn?: number
+    ) => ({
+      kind,
+      nodeType: "object",
+      name: "",
+      retainedBytes,
+      retainerChain,
+      moduleIds: [],
+      nodeId,
+      ...(containedIn !== undefined && { containedIn }),
+    });
+    return {
+      typeDeltas: [],
+      grownNodes: [
+        node("grown", 1, 3_324_480, "logError#closure[.context] <- process#object[.properties]"),
+        node("grown", 2, 3_319_560, FS_CHECKER_CHAIN, 1),
+      ],
+      newNodes: [
+        node("new", 3, 2_058_112, SHARED_CACHE_CONTROLS_CHAIN),
+        node("new", 4, 917_544, "Map#object[.table] <- LRUCache#object[.cache] <- length#closure", 2),
+      ],
+    };
+  }
+
+  it("counts a store once, not once per level that contains it", () => {
+    const route = attributeDiff(nestedDiff(), new Map()).route;
+    // The fsChecker object and the LRU it dominates hold 3,319,560 bytes
+    // between them; the server context keeps only the 4,920 outside both.
+    const total = 4_920 + 3_319_560 + 2_058_112;
+
+    expect(route.packageName).toBe("next (route filesystem checker)");
+    expect(route.dominance).toBeCloseTo(3_319_560 / total);
+  });
+
+  it("gives an unnamed finding the owner of the finding that dominates it", () => {
+    const result = attributeDiff(nestedDiff(), new Map());
+
+    expect(result.findings[3]?.packageName).toBe("next (route filesystem checker)");
+    // The outer context has no owner to pass down to the fsChecker object.
+    expect(result.findings[0]?.owner).toBe("unattributed");
+  });
+
+  it("inherits through an unnamed intermediate finding", () => {
+    const diff = nestedDiff();
+    const [outer, middle] = diff.grownNodes;
+    if (outer === undefined || middle === undefined) throw new Error("fixture broken");
+    diff.grownNodes = [
+      { ...outer, retainerChain: FS_CHECKER_CHAIN },
+      { ...middle, retainerChain: "Object#object[.x]" },
+    ];
+
+    expect(attributeDiff(diff, new Map()).findings[3]?.packageName).toBe(
+      "next (route filesystem checker)"
+    );
+  });
+
+  it("ignores a link to a finding that is not in the diff", () => {
+    const diff = nestedDiff();
+    const lru = diff.newNodes[1];
+    if (lru === undefined) throw new Error("fixture broken");
+    diff.newNodes[1] = { ...lru, containedIn: 999 };
+
+    expect(attributeDiff(diff, new Map()).findings[3]?.owner).toBe("unattributed");
+  });
+
+  it("never lets a container's share go negative", () => {
+    const diff = nestedDiff();
+    const outer = diff.grownNodes[0];
+    if (outer === undefined) throw new Error("fixture broken");
+    // A container whose delta is smaller than what it contains: the child
+    // grew while something else under the container shrank.
+    diff.grownNodes[0] = { ...outer, retainedBytes: 1_000 };
+    const route = attributeDiff(diff, new Map()).route;
+
+    expect(route.dominance).toBeCloseTo(3_319_560 / (3_319_560 + 2_058_112));
+  });
+
+  it("keeps a named finding's own owner inside a container named otherwise", () => {
+    const diff = nestedDiff();
+    const lru = diff.newNodes[1];
+    if (lru === undefined) throw new Error("fixture broken");
+    diff.newNodes[1] = { ...lru, retainerChain: SHARED_CACHE_CONTROLS_CHAIN };
+
+    expect(attributeDiff(diff, new Map()).findings[3]?.packageName).toBe(
+      "next (shared cache controls)"
+    );
+  });
+
+  it("stops inheriting when malformed links form a cycle", () => {
+    const diff = nestedDiff();
+    const [outer, middle] = diff.grownNodes;
+    if (outer === undefined || middle === undefined) throw new Error("fixture broken");
+    diff.grownNodes = [
+      { ...outer, containedIn: 4 },
+      { ...middle, retainerChain: "Object#object[.x]" },
+    ];
+    const result = attributeDiff(diff, new Map());
+
+    expect(result.findings[0]?.owner).toBe("unattributed");
+    expect(result.findings[3]?.owner).toBe("unattributed");
+  });
+
+  it("names no culprit when no finding holds a byte of its own", () => {
+    const diff: HeapDiff = {
+      typeDeltas: [],
+      grownNodes: [finding({ retainedBytes: 0, retainerChain: FS_CHECKER_CHAIN })],
+      newNodes: [],
+    };
+
+    expect(attributeDiff(diff, new Map()).route).toEqual({
+      owner: "unattributed",
+      source: null,
+      packageName: null,
+      dominance: 0,
+    });
+  });
+
+  it("hands the route to the store that grew most once it has a name", () => {
+    // Before, the 19.84 MB map was unattributed and the bounded 9.31 MB
+    // fsChecker LRU won the route with a dominance of 1.
+    const node = (kind: "grown" | "new", retainedBytes: number, retainerChain: string) => ({
+      kind,
+      nodeType: kind === "new" ? "array" : "object",
+      name: "",
+      retainedBytes,
+      retainerChain,
+      moduleIds: [],
+    });
+    const diff: HeapDiff = {
+      typeDeltas: [],
+      grownNodes: [node("grown", 9_760_000, FS_CHECKER_CHAIN)],
+      newNodes: [node("new", 20_800_000, SHARED_CACHE_CONTROLS_CHAIN)],
+    };
+    const result = attributeDiff(diff, new Map());
+
+    expect(result.route.packageName).toBe("next (shared cache controls)");
+    expect(result.route.dominance).toBeCloseTo(20_800_000 / 30_560_000);
   });
 
   it("stays unattributed for chains with no known marker", () => {

@@ -20,6 +20,8 @@ export type HeapNodeLike = {
   referrers: HeapEdgeLike[];
   /** Outgoing edges; optional because test fixtures rarely need them. */
   references?: Array<{ name_or_index: string | number }>;
+  /** Immediate dominator, as memlab computes it; absent in most fixtures. */
+  dominatorNode?: HeapNodeLike | null;
 };
 
 export type HeapLike = {
@@ -65,6 +67,15 @@ export type NodeFinding = {
   retainerChain: string;
   /** Bundler module ids seen along the chain (needs `resolveNumeric`). */
   moduleIds: number[];
+  /** Snapshot node id. Absent in run.json files written before it existed. */
+  nodeId?: number;
+  /**
+   * `nodeId` of the nearest other finding that dominates this one, when there
+   * is one. A grown container's delta already includes everything it
+   * dominates, so without this the same bytes are counted once per level —
+   * see `attributeDiff`.
+   */
+  containedIn?: number;
 };
 
 export type HeapDiff = {
@@ -191,8 +202,8 @@ export function diffAgainstBaseline(
   const resolved = { ...DEFAULTS, ...options };
 
   const afterTypeSelfSizes = new Map<string, number>();
-  const grown: NodeFinding[] = [];
-  const fresh: NodeFinding[] = [];
+  const grown: Candidate[] = [];
+  const fresh: Candidate[] = [];
 
   after.nodes.forEach((node) => {
     afterTypeSelfSizes.set(
@@ -215,12 +226,16 @@ export function diffAgainstBaseline(
       if (node.retainedSize >= resolved.newThresholdBytes) {
         const chain = walkChain(node, resolved.chainDepth);
         fresh.push({
-          kind: "new",
-          nodeType: node.type,
-          name: truncateLabel(node.name),
-          retainedBytes: node.retainedSize,
-          retainerChain: chain.parts.join(" <- "),
-          moduleIds: collectModuleIds(chain.nodes),
+          node,
+          finding: {
+            kind: "new",
+            nodeType: node.type,
+            name: truncateLabel(node.name),
+            retainedBytes: node.retainedSize,
+            retainerChain: chain.parts.join(" <- "),
+            moduleIds: collectModuleIds(chain.nodes),
+            nodeId: node.id,
+          },
         });
       }
       return;
@@ -230,12 +245,16 @@ export function diffAgainstBaseline(
     if (before !== undefined && node.retainedSize - before >= resolved.grownThresholdBytes) {
       const chain = walkChain(node, resolved.chainDepth);
       grown.push({
-        kind: "grown",
-        nodeType: node.type,
-        name: truncateLabel(node.name),
-        retainedBytes: node.retainedSize - before,
-        retainerChain: chain.parts.join(" <- "),
-        moduleIds: collectModuleIds(chain.nodes),
+        node,
+        finding: {
+          kind: "grown",
+          nodeType: node.type,
+          name: truncateLabel(node.name),
+          retainedBytes: node.retainedSize - before,
+          retainerChain: chain.parts.join(" <- "),
+          moduleIds: collectModuleIds(chain.nodes),
+          nodeId: node.id,
+        },
       });
     }
   });
@@ -249,14 +268,53 @@ export function diffAgainstBaseline(
     }
   }
   typeDeltas.sort((a, b) => b.deltaBytes - a.deltaBytes);
-  grown.sort((a, b) => b.retainedBytes - a.retainedBytes);
-  fresh.sort((a, b) => b.retainedBytes - a.retainedBytes);
+  const bySize = (a: Candidate, b: Candidate): number =>
+    b.finding.retainedBytes - a.finding.retainedBytes;
+  const keptGrown = grown.sort(bySize).slice(0, resolved.maxFindings);
+  const keptFresh = fresh.sort(bySize).slice(0, resolved.maxFindings);
+  linkContainment([...keptGrown, ...keptFresh]);
 
   return {
     typeDeltas,
-    grownNodes: grown.slice(0, resolved.maxFindings),
-    newNodes: fresh.slice(0, resolved.maxFindings),
+    grownNodes: keptGrown.map((candidate) => candidate.finding),
+    newNodes: keptFresh.map((candidate) => candidate.finding),
   };
+}
+
+type Candidate = { node: HeapNodeLike; finding: NodeFinding };
+
+/**
+ * Bounds the dominator walk. The tree is shallow in practice (the
+ * vercel/next.js#99335 fsChecker LRU sits six levels under the root); the cap
+ * only guards against a malformed graph.
+ */
+const MAX_DOMINATOR_DEPTH = 10_000;
+
+/**
+ * Marks each kept finding with the nearest other kept finding that dominates
+ * it. Measured on the vercel/next.js#99335 reproduction: Next's server
+ * context (3.32 MB grown) dominates the fsChecker object (3.32 MB grown), which
+ * dominates its LRU's table (0.92 MB new) — one store, reported three times.
+ */
+function linkContainment(kept: Candidate[]): void {
+  const keptIds = new Set(kept.map((candidate) => candidate.node.id));
+  for (const candidate of kept) {
+    let current = candidate.node.dominatorNode;
+    for (let depth = 0; depth < MAX_DOMINATOR_DEPTH && current; depth += 1) {
+      if (current.id === candidate.node.id) {
+        break;
+      }
+      if (keptIds.has(current.id)) {
+        candidate.finding.containedIn = current.id;
+        break;
+      }
+      // memlab makes the root its own dominator; stop there.
+      if (current.dominatorNode?.id === current.id) {
+        break;
+      }
+      current = current.dominatorNode;
+    }
+  }
 }
 
 export class SnapshotError extends Error {
