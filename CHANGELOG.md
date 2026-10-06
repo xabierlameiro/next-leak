@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/xabierlameiro/next-leak/compare/v0.13.1...v0.13.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **attribution:** count each byte once and name the shared cache controls ([dd52214](https://github.com/xabierlameiro/next-leak/commit/dd5221462edc0c8bbedb19104960f2f63a55a728))
+
 ## [0.13.1](https://github.com/xabierlameiro/next-leak/compare/v0.13.0...v0.13.1) (2026-10-01)
 
 
