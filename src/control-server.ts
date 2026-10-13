@@ -171,7 +171,10 @@ export async function startControlServer(options: ControlServerOptions): Promise
       }
       respond(404, { error: `unknown path ${url.pathname}` });
     } catch (cause) {
-      respond(500, { error: cause instanceof Error ? cause.message : String(cause) });
+      // The client only reads the status, so the cause goes to this process's
+      // stderr — which the runner captures — instead of over the wire.
+      console.error(`[next-leak] control channel ${url.pathname} failed: ${String(cause)}`);
+      respond(500, { error: "internal error" });
     }
   }
 
