@@ -49,12 +49,14 @@
     "overrides": {
       "uuid": ">=11.1.1",
       "esbuild": ">=0.28.1",
-      "qs": ">=6.15.2",
+      "qs": ">=6.16.0",
       "js-yaml": ">=4.3.1 <5",
-      "fast-uri": ">=3.1.6 <4",
+      "fast-uri": ">=3.1.8 <4",
       "ip-address": ">=10.3.1 <11",
       "postcss": ">=8.5.23 <9",
       "browserslist": ">=4.28.7",
+      "source-map-js": ">=1.2.2 <2",
+      "brace-expansion": ">=5.0.12 <6",
       "@puppeteer/browsers": "^3.2.2"
     }
   },
