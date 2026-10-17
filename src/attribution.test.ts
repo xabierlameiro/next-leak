@@ -255,6 +255,31 @@ describe("chain-based framework detection", () => {
     ).toBe("next (shared cache controls)");
   });
 
+  // Chains from the vercel/next.js#99848 reproduction, 4 × 5000 requests on
+  // next@16.4.0 and Node 24.18: the default `use cache` handler's LRU, and the
+  // incremental cache's, which sits in a variable of the same name.
+  const USE_CACHE_HANDLER_CHAIN = "system / Context#object[.memoryCache] <- #closure[.context]";
+  const INCREMENTAL_MEMORY_CACHE_CHAIN =
+    "system / Context#object[.memoryCache] <- getMemoryCache#closure[.context]";
+
+  it("names the default use cache handler's store", () => {
+    expect(chain(USE_CACHE_HANDLER_CHAIN).packageName).toBe("next (default use cache handler)");
+    expect(
+      chain(
+        "Map#object[.table] <- LRUCache#object[.cache] <- " +
+          "system / Context#object[.memoryCache] <- updateTags#closure[.context]"
+      ).packageName
+    ).toBe("next (default use cache handler)");
+  });
+
+  it("does not take the incremental cache's memoryCache for the use cache handler", () => {
+    expect(chain(INCREMENTAL_MEMORY_CACHE_CHAIN).owner).toBe("unattributed");
+    // `get` closes over both modules' context, so it names neither.
+    expect(chain("system / Context#object[.memoryCache] <- get#closure[.context]").owner).toBe(
+      "unattributed"
+    );
+  });
+
   // Nesting as measured on the 4 × 5000 run of the same reproduction: Next's
   // server context dominates the fsChecker object, which dominates its LRU's
   // table. Raw sums counted that one store three times.

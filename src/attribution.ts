@@ -82,6 +82,17 @@ const FRAMEWORK_CHAIN_MARKERS: ReadonlyArray<readonly [marker: string, component
   // 240,000 requests) and, unnamed, lost the route to the bounded fsChecker
   // LRU at 9.31 MB with a reported dominance of 1.
   ["SharedCacheControls", "shared cache controls"],
+  // The default `use cache` handler keeps its LRU in a closure variable named
+  // `memoryCache`, and so does the incremental cache's memory-cache module:
+  // the variable alone cannot tell them apart. The closures retaining the
+  // context can. These are the handler's own (its methods and the anonymous
+  // size function); `get` is left out because both modules define one. On the
+  // vercel/next.js#99848 reproduction (next@16.4.0, Node 24.18) this LRU held
+  // 389 MB and, unnamed, left the route without a culprit.
+  ...["", "set", "refreshTags", "getExpiration", "updateTags"].map(
+    (closure) =>
+      [`Context#object[.memoryCache] <- ${closure}#closure[`, "default use cache handler"] as const
+  ),
   ["incrementalCache", "incremental cache"],
   ["IncrementalCache", "incremental cache"],
   ["ReactServer", "React Server Components renderer"],
