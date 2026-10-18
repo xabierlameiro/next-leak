@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.3](https://github.com/xabierlameiro/next-leak/compare/v0.13.2...v0.13.3) (2026-10-17)
+
+
+### Bug Fixes
+
+* **attribution:** name the default use cache handler's store ([bb23f0a](https://github.com/xabierlameiro/next-leak/commit/bb23f0adcbe59b6094da8162d2ec2e0d92dc9254))
+* **attribution:** name the default use cache handler's store ([4f86e11](https://github.com/xabierlameiro/next-leak/commit/4f86e1129b9b4b545fe2d5a664a01b5073419406))
+
 ## [0.13.2](https://github.com/xabierlameiro/next-leak/compare/v0.13.1...v0.13.2) (2026-10-05)
 
 
