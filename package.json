@@ -71,7 +71,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "autocannon": "^8.0.0",
     "husky": "^9.1.7",
-    "tsup": "^8.5.1",
+    "tsup": "^9.0.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
