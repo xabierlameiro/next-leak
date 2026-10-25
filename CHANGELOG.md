@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.4](https://github.com/xabierlameiro/next-leak/compare/v0.13.3...v0.13.4) (2026-10-25)
+
+
+### Bug Fixes
+
+* **security:** close the open code scanning and dependency alerts ([#120](https://github.com/xabierlameiro/next-leak/issues/120)) ([50dd198](https://github.com/xabierlameiro/next-leak/commit/50dd198e4b28970eda53bef476fd67454005cde9))
+
 ## [0.13.3](https://github.com/xabierlameiro/next-leak/compare/v0.13.2...v0.13.3) (2026-10-17)
 
 
