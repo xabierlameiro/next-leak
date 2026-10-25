@@ -24,7 +24,7 @@ describe("renderHtmlReport", () => {
   });
 
   it("loads no external resources (offline-renderable)", () => {
-    expect(html).not.toMatch(/<script[\s>]/);
+    expect(html).not.toMatch(/<script[\s>]/i);
     expect(html).not.toMatch(/<link[\s>]/);
     expect(html).not.toMatch(/src="http/);
     expect(html).not.toMatch(/url\(/);
