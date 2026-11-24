@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.5](https://github.com/xabierlameiro/next-leak/compare/v0.13.4...v0.13.5) (2026-11-24)
+
+
+### Bug Fixes
+
+* autocannon 9, saturation at a budget, pressure wording, first-cycle step ([b0727bf](https://github.com/xabierlameiro/next-leak/commit/b0727bfecc346ca262e96541be71d10c2b128d17))
+* **confidence:** flag a first-cycle step under any verdict ([9adf39b](https://github.com/xabierlameiro/next-leak/commit/9adf39bcce7b3c3799f7e6d66fa52722140923b8))
+* **confidence:** warn when the first cycle retains what the verdict skips ([379ffce](https://github.com/xabierlameiro/next-leak/commit/379ffce95ba8410a7d251487b87f45cd17a38399))
+* **deps:** bump autocannon to 9 and drop the uuid override ([16ababa](https://github.com/xabierlameiro/next-leak/commit/16ababaffe3bd1ac530a54028750879e7f7515b2))
+* **report:** word a pressure verdict promoted from saturating ([0e43c6d](https://github.com/xabierlameiro/next-leak/commit/0e43c6d308282ede2f82ab2925534dd2ea35742b))
+* **trend:** call a store that stops at its budget saturating ([22e1f49](https://github.com/xabierlameiro/next-leak/commit/22e1f49695cc44565bfbd3427c6e119faf799a2d))
+
 ## [0.13.4](https://github.com/xabierlameiro/next-leak/compare/v0.13.3...v0.13.4) (2026-10-25)
 
 
