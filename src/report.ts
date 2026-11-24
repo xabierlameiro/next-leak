@@ -1,6 +1,6 @@
 import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
-import { classifyTrend, type TrendVerdict } from "./trend.js";
+import { classifyTrend, type TrendResult, type TrendVerdict } from "./trend.js";
 import {
   effectiveVerdict,
   resolveCycles,
@@ -177,18 +177,28 @@ function cacheLines(route: MeasuredRouteView): string[] {
 /**
  * Why a verdict sits next to a growth rate that does not support it.
  *
- * A `pressure` route has a flat — often negative — post-GC curve, because that
- * is the finding: nothing is retained. Printing the headline without this line
- * would read as the tool contradicting itself, and the reader would trust the
- * number they recognise over the verdict they do not.
+ * A `pressure` route is judged on what it reached while serving, not on its
+ * post-GC curve. Printing the headline without this line would read as the
+ * tool contradicting itself, and the reader would trust the number they
+ * recognise over the verdict they do not.
+ *
+ * The curve under it is one of two shapes, and the line has to name the right
+ * one. Promoted from `stable`, nothing was retained. Promoted from
+ * `saturating`, something was and it levelled off: measured on the
+ * vercel/next.js#100492 reproduction, 2026-11-23, external memory went
+ * 5 → 337 MB across four cycles and the report said nothing was retained.
  */
-function pressureLines(verdict: TrendVerdict): string[] {
+function pressureLines(verdict: TrendVerdict, trend: TrendResult): string[] {
   if (verdict !== "pressure") {
     return [];
   }
+  const curve =
+    trend.promotedFrom === "saturating"
+      ? `what it retains between cycles grows by less each time and is levelling ` +
+        `off, so the rate above is not the finding: this `
+      : `nothing was retained between cycles, so the rate above is flat: this `;
   return [
-    `      nothing was retained between cycles, so the rate above is flat: this ` +
-      `verdict is about what the process reached while serving, which every ` +
+    `      ${curve}verdict is about what the process reached while serving, which every ` +
       `sample here hides behind a forced GC that production never runs`,
   ];
 }
@@ -374,7 +384,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
     ...repetitionLines(route),
     ...revalidationLines(route),
     ...cacheLines(route),
-    ...pressureLines(verdict),
+    ...pressureLines(verdict, route.trend),
     ...abandonLines(route),
     ...confidenceLines(route),
     ...memorySourceLines(route, verdict),

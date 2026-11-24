@@ -213,6 +213,21 @@ describe("assessPressureVerdict", () => {
     expect(result.source).toBe("heap");
   });
 
+  it("records which post-GC verdict it escalated", () => {
+    // The report words a promoted `stable` and a promoted `saturating`
+    // differently: one retained nothing, the other retained something that
+    // levelled off. Losing this made it say the first about the second.
+    const peaks = climbingPeaks([600, 1400, 2200, 3000]);
+    expect(assess(flatTrend(), peaks).promotedFrom).toBe("stable");
+    expect(assess(flatTrend("saturating"), peaks).promotedFrom).toBe("saturating");
+  });
+
+  it("records no promotion when it leaves the verdict alone", () => {
+    expect(
+      assess(flatTrend("leak"), climbingPeaks([600, 1400, 2200, 3000])).promotedFrom
+    ).toBeUndefined();
+  });
+
   it("calls a level peak pressure too, because the regime is what kills", () => {
     // Measured on the same reproduction: under this ritual the peak cannot
     // climb, because every cycle is preceded by a forced collection and runs

@@ -47,7 +47,6 @@
   },
   "pnpm": {
     "overrides": {
-      "uuid": ">=11.1.1",
       "esbuild": ">=0.28.1",
       "qs": ">=6.16.0",
       "js-yaml": ">=4.3.1 <5",
@@ -72,7 +71,7 @@
     "@types/node": "^26.1.1",
     "@types/semver": "^7.7.1",
     "@vitest/coverage-v8": "^4.1.12",
-    "autocannon": "^8.0.0",
+    "autocannon": "^9.0.0",
     "husky": "^9.1.7",
     "tsup": "^9.0.0",
     "typescript": "^7.0.2",

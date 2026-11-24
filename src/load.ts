@@ -197,8 +197,8 @@ export async function runLoadPhase(options: LoadPhaseOptions): Promise<LoadPhase
   };
 
   // Count everything that is not a recorded 2xx as a failure — not just
-  // non2xx+errors. A malformed URL (e.g. an unencoded non-ASCII path) makes
-  // autocannon report requests as sent with zero recorded responses, which
+  // non2xx+errors. A connection reset before any response makes autocannon
+  // report requests as sent with zero recorded responses, which
   // the narrower check accepted: the route was never really loaded, yet it
   // would have produced a confident "stable" verdict.
   //

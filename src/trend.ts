@@ -24,6 +24,13 @@ export type TrendResult = {
    * the same samples produce the same verdict either way.
    */
   cacheDriven?: true;
+  /**
+   * The post-GC verdict a `pressure` result was promoted from. `stable` means
+   * nothing was retained between cycles; `saturating` means something was,
+   * and levelled off. The report has to say which, or it tells a reader who
+   * can see hundreds of MB retained that nothing was.
+   */
+  promotedFrom?: "stable" | "saturating";
 };
 
 export type TrendOptions = {
@@ -106,6 +113,13 @@ const ACQUITTAL_MAX_GROWTH_MULTIPLE = 8;
  * tell a bend from a wobble is three.
  */
 const SATURATION_MIN_CYCLES = 3;
+
+/**
+ * Flat cycles that turn a stop reached at full rate into a ceiling.
+ *
+ * Same reasoning as `SATURATION_MIN_CYCLES`: fewer is a pair, not a level.
+ */
+const CEILING_MIN_FLAT_CYCLES = 3;
 
 /**
  * Share of the first cycle's growth the last one must fall below.
@@ -278,7 +292,8 @@ function hasSettledAboveGate(deltas: readonly number[], minGrowth: number): bool
  * store running out of new keys passes *through* small growth on its way to
  * none, so the cycle before the stop is already under the gate; a leak that
  * pauses drops from its full rate to nothing in one step. `[8, 3, 0] MB` and
- * `[8, 7, 4, 9, 3, 0] MB` both approach at 3 MB and stay leaks. And after the
+ * `[8, 7, 4, 9, 3, 0] MB` both approach at 3 MB and stay leaks, unless the
+ * stop holds long enough to be a ceiling (`hitsCeiling`). And after the
  * stop, no cycle may reach the gate again, which is the other half of what
  * keeps #95094 out.
  *
@@ -290,16 +305,37 @@ function hasSettledAboveGate(deltas: readonly number[], minGrowth: number): bool
  * equivalent of the fixed 256 KiB gate is lower — a verdict that moved with
  * the traffic the caller happened to ask for.
  */
+/**
+ * Whether a stop reached at full rate stayed stopped long enough to be a ceiling.
+ *
+ * A store with a byte budget does not slow down on its way to the limit: it
+ * grows at full rate until eviction starts, then stops in one step. Measured
+ * on the vercel/next.js#100492 reproduction with an exact-size `use cache`
+ * handler, 2026-11-23, at 12000 requests per cycle: external memory went
+ * 4.3 → 22.4 → 40.5 → 54.2 MB and then read 54.2 MB on five cycles in a row,
+ * the 50 MB budget plus overhead. That was reported `leak`.
+ *
+ * What still separates it from a leak pausing is how long the stop holds. A
+ * pause is a cycle or two inside the climb, as on #95094; a ceiling is flat
+ * for at least `CEILING_MIN_FLAT_CYCLES` and for no fewer cycles than it took
+ * to get there, so `[8, 3, 0]` and a long climb ending on one flat cycle stay
+ * leaks.
+ */
+function hitsCeiling(growingCycles: number, flatCycles: number): boolean {
+  return flatCycles >= Math.max(CEILING_MIN_FLAT_CYCLES, growingCycles);
+}
+
 function hasArrivedWithoutResuming(deltas: readonly number[], minGrowth: number): boolean {
   const stop = deltas.findIndex((delta) => delta <= 0);
   if (stop === -1) {
     return true;
   }
   const approach = deltas[stop - 1];
-  if (approach === undefined || approach >= minGrowth) {
+  const rest = deltas.slice(stop);
+  if (approach === undefined || !rest.every((delta) => delta < minGrowth)) {
     return false;
   }
-  return deltas.slice(stop).every((delta) => delta < minGrowth);
+  return approach < minGrowth || hitsCeiling(stop, rest.length);
 }
 
 /**
