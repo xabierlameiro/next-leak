@@ -223,9 +223,9 @@ describe("assessPressureVerdict", () => {
   });
 
   it("records no promotion when it leaves the verdict alone", () => {
-    expect(assess(flatTrend("leak"), climbingPeaks([600, 1400, 2200, 3000])).promotedFrom).toBe(
-      undefined
-    );
+    expect(
+      assess(flatTrend("leak"), climbingPeaks([600, 1400, 2200, 3000])).promotedFrom
+    ).toBeUndefined();
   });
 
   it("calls a level peak pressure too, because the regime is what kills", () => {
