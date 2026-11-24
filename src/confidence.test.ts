@@ -829,3 +829,94 @@ describe("withdrawnByDisagreement", () => {
     expect(withdrawnByDisagreement({ level: "high", warnings: [] })).toBe(false);
   });
 });
+
+// The verdict leaves the baseline→cycle-1 delta out as warm-up. A store that
+// fills inside that one cycle and stops is left out with it, and reads as flat.
+describe("first-cycle step", () => {
+  const MIB = 1024 * 1024;
+  const pair = ([heapUsed, external]: readonly [number, number]): HeapSample => ({
+    gcExposed: true,
+    heapUsed,
+    rss: heapUsed + external,
+    external,
+    arrayBuffers: external,
+  });
+  const mib = (pairs: ReadonlyArray<readonly [number, number]>): HeapSample[] =>
+    pairs.map(([heap, external]) => pair([heap * MIB, external * MIB]));
+
+  // vercel/next.js#97938 reproduction, 2026-11-23, Node 22.23, 300 requests per
+  // cycle. 16.3.6 reported `stable` with high confidence.
+  const NODE22_16_3_6 = [
+    [60046224, 36306648],
+    [370723624, 408511150],
+    [373650560, 408511150],
+    [373272920, 408478382],
+    [374093872, 408429230],
+  ].map((sample) => pair(sample as [number, number]));
+  // The same app on 16.4.6: a `use cache` LRU filling its 50 MB default budget.
+  const NODE22_16_4_6 = [
+    [42391024, 25956493],
+    [48262800, 86359416],
+    [49688376, 86359416],
+    [50286856, 86433144],
+    [50986104, 86392184],
+  ].map((sample) => pair(sample as [number, number]));
+
+  const flat: TrendResult = { verdict: "stable", growthPerCycle: 0, deltas: [] };
+  const assess = (memorySamples: readonly HeapSample[], trend: TrendResult = flat) =>
+    assessConfidence({ trend, loadOutcomes: [], settleOutcomes: [], memorySamples });
+  const steps = (memorySamples: readonly HeapSample[], trend?: TrendResult) =>
+    assess(memorySamples, trend).warnings.filter((warning) => warning.code === "first-cycle-step");
+
+  it("flags the measured #97938 step on Node 22", () => {
+    const found = steps(NODE22_16_3_6);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.detail).toContain("91.89 MB");
+    expect(found[0]?.detail).toContain("743.14 MB");
+    expect(found[0]?.detail).toContain("--requests");
+  });
+
+  it("lowers confidence without moving the verdict", () => {
+    const report = assess(NODE22_16_3_6);
+
+    expect(report.level).toBe("low");
+    expect(report.supersededVerdict).toBeUndefined();
+  });
+
+  it("stays quiet on 16.4.6, where the step is a cache filling its default budget", () => {
+    expect(steps(NODE22_16_4_6)).toHaveLength(0);
+  });
+
+  it("stays quiet on ordinary warm-up", () => {
+    expect(steps(mib([[29.4, 0], [31.5, 0], [32.3, 0], [32.1, 0]]))).toHaveLength(0);
+  });
+
+  it("needs the step to clear the floor", () => {
+    // Tripled, but 120 MiB is still under the 128 MiB floor.
+    expect(steps(mib([[60, 0], [180, 0], [180, 0], [180, 0]]))).toHaveLength(0);
+    expect(steps(mib([[60, 0], [188, 0], [188, 0], [188, 0]]))).toHaveLength(1);
+  });
+
+  it("needs the step to at least double the baseline", () => {
+    // +200 MiB on a 1 GiB process is a fifth of it.
+    expect(steps(mib([[1024, 0], [1224, 0], [1224, 0], [1224, 0]]))).toHaveLength(0);
+  });
+
+  it("stays quiet when the later cycles hand the step back", () => {
+    expect(steps(mib([[60, 30], [370, 400], [250, 200], [90, 40]]))).toHaveLength(0);
+  });
+
+  it("leaves curves the verdict already reads alone", () => {
+    const growth = { growthPerCycle: 5 * MIB, deltas: [5 * MIB, 5 * MIB, 5 * MIB] };
+    expect(steps(NODE22_16_3_6, { verdict: "leak", ...growth })).toHaveLength(0);
+    expect(steps(NODE22_16_3_6, { verdict: "saturating", ...growth })).toHaveLength(0);
+    expect(
+      steps(NODE22_16_3_6, { verdict: "pressure", promotedFrom: "saturating", ...growth })
+    ).toHaveLength(0);
+  });
+
+  it("still flags a flat curve that peaks promoted to pressure", () => {
+    expect(steps(NODE22_16_3_6, { ...flat, verdict: "pressure", promotedFrom: "stable" })).toHaveLength(1);
+  });
+});

@@ -20,6 +20,9 @@ import { MIN_GROWTH_NOISE_FLOOR, type TrendResult, type TrendVerdict } from "./t
  * `warm-up-baseline`    — the baseline sat far above the level the cycles
  *   settled at, so it carries warm-up's own retention rather than the app's
  *   resting size
+ * `first-cycle-step`    — the first cycle retained far more than warm-up costs
+ *   and the later cycles kept it, which the verdict cannot see because it
+ *   leaves that cycle out
  */
 export type WarningCode =
   | "unsettled"
@@ -32,6 +35,7 @@ export type WarningCode =
   | "thin-evidence"
   | "near-heap-ceiling"
   | "warm-up-baseline"
+  | "first-cycle-step"
   /**
    * The load filled a cache the route never had to hold, and the run has no
    * second experiment that would settle how much of the growth that was.
@@ -420,6 +424,78 @@ function warmUpBaselineWarnings(input: ConfidenceInput): MeasurementWarning[] {
 }
 
 /**
+ * Retained memory the first cycle has to add before it is more than warm-up.
+ *
+ * The verdict leaves the baseline→cycle-1 delta out, because on healthy routes
+ * it is engine warm-up: +2.1 MB and +4.3 MB on the validation set. A store that
+ * fills inside that one cycle and then stops is left out with it. Measured on
+ * the vercel/next.js#97938 reproduction, 2026-11-23, Next 16.3.6 on Node 22.23,
+ * 300 requests per cycle: heap plus external memory went 91.9 → 743.1 MB on the
+ * first cycle and held there, and the run reported `stable` with high
+ * confidence. 16.4.6 on the same Node added 63 MB, a `use cache` LRU filling its
+ * 50 MB default budget, which is the app doing what it was configured to do;
+ * the floor sits above it.
+ */
+const FIRST_CYCLE_STEP_FLOOR_BYTES = 128 * 1024 * 1024;
+
+/**
+ * And the step has to at least double what the process held at the baseline,
+ * so a large app adding a little in proportion stays quiet. #97938 grew 7x.
+ */
+const FIRST_CYCLE_STEP_BASELINE_MULTIPLE = 1;
+
+/**
+ * Share of the step the last sample still has to hold. Memory a later cycle
+ * hands back was not retained by the first one.
+ */
+const FIRST_CYCLE_STEP_HELD_SHARE = 0.75;
+
+const retainedOf = (sample: HeapSample): number => sample.heapUsed + sample.external;
+
+/**
+ * Whether the first cycle retained what the verdict cannot see.
+ *
+ * Only on a curve judged flat: a leak already says memory is retained, and a
+ * saturating curve shows its growth in the cycles the verdict does read.
+ * Reported, never corrected: counting the first delta would turn every app's
+ * warm-up into evidence. The user gets the step and a run that can show its
+ * shape — fewer requests per cycle spread the fill across cycles.
+ */
+function firstCycleStepWarnings(input: ConfidenceInput): MeasurementWarning[] {
+  const curve = input.trend.promotedFrom ?? input.trend.verdict;
+  const samples = input.memorySamples;
+  const baselineSample = samples?.[0];
+  const firstSample = samples?.[1];
+  const lastSample = samples?.at(-1);
+  if (
+    curve !== "stable" ||
+    baselineSample === undefined ||
+    firstSample === undefined ||
+    lastSample === undefined
+  ) {
+    return [];
+  }
+  const baseline = retainedOf(baselineSample);
+  const firstCycle = retainedOf(firstSample);
+  const step = firstCycle - baseline;
+  if (
+    step < FIRST_CYCLE_STEP_FLOOR_BYTES ||
+    step < baseline * FIRST_CYCLE_STEP_BASELINE_MULTIPLE ||
+    retainedOf(lastSample) - baseline < step * FIRST_CYCLE_STEP_HELD_SHARE
+  ) {
+    return [];
+  }
+  return [{
+    code: "first-cycle-step",
+    detail:
+      `heap plus external memory went from ${mb(baseline)} to ${mb(firstCycle)} on ` +
+      `the first cycle and the later cycles kept it — the verdict leaves that ` +
+      `cycle out as warm-up, so something that fills in one cycle and stops ` +
+      `reads as flat; re-run with fewer --requests per cycle to see how it fills`,
+  }];
+}
+
+/**
  * Invalidity, not noise: the measurement did not observe what it claims to.
  * Only a leak verdict is withdrawn — a stable one keeps its warnings, since
  * silently missing a leak costs the user less than a false accusation. And
@@ -549,6 +625,7 @@ export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
     ...cacheResidencyWarnings(input.trend, input.revalidatesFromCache),
     ...heapCeilingWarnings(input),
     ...warmUpBaselineWarnings(input),
+    ...firstCycleStepWarnings(input),
   ];
 
   return {
