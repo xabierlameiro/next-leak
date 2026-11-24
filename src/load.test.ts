@@ -41,20 +41,20 @@ describe("runLoadPhase", () => {
     expect(seen).toBe(50);
   }, 30_000);
 
-  // Regression: a malformed URL makes autocannon report requests as sent with
-  // zero recorded responses. Accepting that produced a confident "stable"
-  // verdict for a route that was never actually loaded.
+  // Regression: autocannon can report requests as sent with zero recorded
+  // responses (a reset connection, a malformed URL before autocannon 9 started
+  // normalising them). Accepting that produced a confident "stable" verdict
+  // for a route that was never actually loaded.
   it("fails when requests complete without any recorded 2xx response", async () => {
-    const port = await listen((req, res) => res.end("ok"));
+    const port = await listen((req) => req.socket.destroy());
     await expect(
-      // Unencoded non-ASCII path: autocannon sends nothing usable.
-      runLoadPhase({ url: `http://127.0.0.1:${port}/camión`, amount: 30, connections: 5 })
+      runLoadPhase({ url: `http://127.0.0.1:${port}/`, amount: 30, connections: 5 })
     ).rejects.toBeInstanceOf(LoadError);
   }, 30_000);
 
   it("reports unanswered requests distinctly in the error message", async () => {
-    const port = await listen((req, res) => res.end("ok"));
-    await runLoadPhase({ url: `http://127.0.0.1:${port}/ñ`, amount: 10, connections: 2 }).then(
+    const port = await listen((req) => req.socket.destroy());
+    await runLoadPhase({ url: `http://127.0.0.1:${port}/`, amount: 10, connections: 2 }).then(
       () => {
         throw new Error("expected a LoadError");
       },

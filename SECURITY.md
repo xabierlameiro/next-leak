@@ -49,10 +49,9 @@ narrow, and most of it is verifiable from the outside:
   (`src/stubs/browser-stub.cjs`) that throws loudly if anything ever
   reaches it: the published package cannot launch or download a browser,
   by construction.
-- **autocannon is bundled for a different reason**: its transitive tree
-  carries a uuid advisory with no upstream fix. Our build patches it via a
-  pnpm override, and overrides do not propagate to consumers — bundling
-  ships the patched tree.
+- **autocannon is bundled too**, to keep the install small: its dependency
+  tree is several dozen packages that consumers would otherwise download
+  for one load generator.
 - **Security scanners will flag this package, and the flags are expected**:
   it takes heap snapshots, forces GC through V8 debug APIs, injects
   instrumentation into the measured app via `--import`, and spawns child
