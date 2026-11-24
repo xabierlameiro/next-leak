@@ -253,7 +253,7 @@ export function assessPressureVerdict(input: PressureVerdictInput): TrendResult 
   // `source` is left as measured. It names which post-GC series produced the
   // growth figure that travels with this result, and that is still true; which
   // ceiling the run approached is the peak note's job to say.
-  return { ...input.trend, verdict: "pressure" };
+  return { ...input.trend, verdict: "pressure", promotedFrom: input.trend.verdict };
 }
 
 const mb = (bytes: number): string => `${(bytes / MB).toFixed(1)} MB`;

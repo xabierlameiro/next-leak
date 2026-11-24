@@ -130,6 +130,33 @@ describe("formatReport", () => {
     expect(output).not.toContain("✔ /  ");
   });
 
+  it("does not claim nothing was retained when the curve was saturating", () => {
+    // Measured on the vercel/next.js#100492 reproduction, 2026-11-23: external
+    // memory went 5 → 337 MB across four cycles, the post-GC verdict was
+    // `saturating`, and peaks promoted it to `pressure`. The line under the
+    // headline said nothing was retained between cycles.
+    const report = makeRunReport();
+    report.parameters = { ...report.parameters, maxOldSpaceMb: 6144 };
+    const route = report.routes[0];
+    if (route?.status !== "measured") {
+      throw new Error("fixture broken");
+    }
+    route.trend = {
+      verdict: "pressure",
+      promotedFrom: "saturating",
+      growthPerCycle: 69 * MB,
+      deltas: [111 * MB, 81 * MB, 14 * MB],
+      source: "external",
+    };
+    route.growthPer1000Requests = 5.75 * MB;
+    const output = formatReport(report);
+
+    expect(output).toContain("▲ /  pressure");
+    expect(output).not.toContain("nothing was retained between cycles");
+    expect(output).toContain("is levelling off");
+    expect(output).toContain("forced GC that production never runs");
+  });
+
   it("reports unreclaimed retention beside a stable verdict", () => {
     // The vercel/next.js#96533 shape, measured 2026-08-18: arrayBuffers held
     // between collections against a flat 0.32 MB after one. The pre-collection
