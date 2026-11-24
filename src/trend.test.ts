@@ -599,6 +599,51 @@ describe("saturation that reaches zero", () => {
   });
 });
 
+describe("saturation that stops at a budget", () => {
+  // Field series, the vercel/next.js#100492 reproduction on Next 16.4.6 with an
+  // exact-size `use cache` handler, 2026-11-23, 12000 requests per cycle (gate
+  // 614 KiB). The LRU grows at full rate until its 50 MB budget, then evicts:
+  // external memory stops in one step and holds there for five cycles. It
+  // was reported `leak`, because the stop was reached at full rate.
+  const BUDGET_HEAP = [
+    33832032, 42210984, 51233888, 59578576, 61062056, 61403208, 65087920, 65139120, 65168600,
+  ];
+  const BUDGET_EXTERNAL = [
+    4484986, 23486173, 42494173, 56824653, 56824653, 56824653, 56824653, 56824653, 56824653,
+  ];
+  const gate = { minGrowthPerCycle: minGrowthFor(12000) };
+
+  it("calls a store that stops at its budget and stays there saturating", () => {
+    const result = classifyTrend(BUDGET_EXTERNAL, gate);
+    expect(result.deltas).toEqual([19008000, 14330480, 0, 0, 0, 0, 0]);
+    expect(result.verdict).toBe("saturating");
+  });
+
+  it("no longer reports the measured run a leak once both memories are judged", () => {
+    const result = classifyMemoryTrend(BUDGET_HEAP, BUDGET_EXTERNAL, gate);
+    expect(result.verdict).toBe("saturating");
+  });
+
+  it("does not decide on the first four cycles, where the stop has held once", () => {
+    // Deltas [19.0, 14.3, 0] MB: one flat cycle is still a pause.
+    expect(classifyTrend(BUDGET_EXTERNAL.slice(0, 5), gate).verdict).toBe("leak");
+  });
+
+  it("needs the flat stretch to last as long as the climb", () => {
+    // Four cycles at 8 MB, then three flat: the stop has not yet outlasted
+    // the growth before it.
+    const climb = [28, 30, 38, 46, 54, 62, 62, 62, 62].map((mb) => mb * MB);
+    expect(classifyTrend(climb).verdict).toBe("leak");
+    expect(classifyTrend([...climb, 62 * MB]).verdict).toBe("saturating");
+  });
+
+  it("keeps a ceiling that resumes a leak", () => {
+    // Deltas [8, 8, 0, 0, 0, 8] MB: growth coming back is a staircase.
+    const samples = [28, 30, 38, 46, 46, 46, 46, 54].map((mb) => mb * MB);
+    expect(classifyTrend(samples).verdict).toBe("leak");
+  });
+});
+
 describe("cache-driven context", () => {
   it("records the context without moving the verdict", () => {
     // Same series, both ways round: the flag is disclosure, not a threshold.
