@@ -874,6 +874,9 @@ describe("first-cycle step", () => {
     expect(found).toHaveLength(1);
     expect(found[0]?.detail).toContain("91.89 MB");
     expect(found[0]?.detail).toContain("743.14 MB");
+    expect(found[0]?.detail).toContain("the later cycles kept it");
+    expect(found[0]?.detail).toContain("leaves that cycle out as warm-up");
+    expect(found[0]?.detail).toContain("does not describe this step");
     expect(found[0]?.detail).toContain("--requests");
   });
 
@@ -899,24 +902,51 @@ describe("first-cycle step", () => {
   });
 
   it("needs the step to at least double the baseline", () => {
-    // +200 MiB on a 1 GiB process is a fifth of it.
+    // +200 MiB on a 1 GiB process is a fifth of it; +150 on 150 is exactly double.
     expect(steps(mib([[1024, 0], [1224, 0], [1224, 0], [1224, 0]]))).toHaveLength(0);
+    expect(steps(mib([[150, 0], [300, 0], [300, 0], [300, 0]]))).toHaveLength(1);
   });
 
   it("stays quiet when the later cycles hand the step back", () => {
     expect(steps(mib([[60, 30], [370, 400], [250, 200], [90, 40]]))).toHaveLength(0);
+    // 400 MiB step on a 200 MiB baseline, of which the last cycle still holds
+    // 250: under three quarters of it.
+    expect(steps(mib([[200, 0], [600, 0], [500, 0], [450, 0]]))).toHaveLength(0);
   });
 
-  it("leaves curves the verdict already reads alone", () => {
-    const growth = { growthPerCycle: 5 * MIB, deltas: [5 * MIB, 5 * MIB, 5 * MIB] };
-    expect(steps(NODE22_16_3_6, { verdict: "leak", ...growth })).toHaveLength(0);
-    expect(steps(NODE22_16_3_6, { verdict: "saturating", ...growth })).toHaveLength(0);
+  it("counts a step held at exactly three quarters as kept", () => {
+    expect(steps(mib([[200, 0], [600, 0], [550, 0], [500, 0]]))).toHaveLength(1);
+  });
+
+  it("flags the re-run that came out a leak at +0.50 MB per cycle", () => {
+    // The same arm re-measured at 8 cycles: a 652 MB first step, then a few MB
+    // across seven cycles. The verdict read the few MB.
+    const rerun = mib([
+      [57.3, 34.6],
+      [354.1, 389.6],
+      [355.4, 389.6],
+      [355.9, 389.6],
+      [356.7, 389.6],
+      [357.6, 389.6],
+      [357.6, 389.6],
+      [357.7, 389.6],
+      [357.6, 389.6],
+    ]);
+    const leak: TrendResult = { verdict: "leak", growthPerCycle: 0.5 * MIB, deltas: [] };
+    expect(steps(rerun, leak)).toHaveLength(1);
+  });
+
+  it("leaves a leak that keeps growing at the rate of its first step alone", () => {
+    // 16.3.4 on Node 24: about 660 MB on the first cycle and on every later one.
+    const leak: TrendResult = { verdict: "leak", growthPerCycle: 660 * MIB, deltas: [] };
     expect(
-      steps(NODE22_16_3_6, { verdict: "pressure", promotedFrom: "saturating", ...growth })
+      steps(mib([[48, 35], [265, 482], [483, 929], [700, 1376], [916, 1823]]), leak)
     ).toHaveLength(0);
   });
 
-  it("still flags a flat curve that peaks promoted to pressure", () => {
-    expect(steps(NODE22_16_3_6, { ...flat, verdict: "pressure", promotedFrom: "stable" })).toHaveLength(1);
+  it("needs the step to be at least four times the later growth", () => {
+    // 200 MiB step: 50 MiB after it is exactly a quarter, 51 MiB is more.
+    expect(steps(mib([[60, 0], [260, 0], [285, 0], [310, 0]]))).toHaveLength(1);
+    expect(steps(mib([[60, 0], [260, 0], [285, 0], [311, 0]]))).toHaveLength(0);
   });
 });

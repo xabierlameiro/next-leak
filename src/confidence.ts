@@ -20,9 +20,9 @@ import { MIN_GROWTH_NOISE_FLOOR, type TrendResult, type TrendVerdict } from "./t
  * `warm-up-baseline`    — the baseline sat far above the level the cycles
  *   settled at, so it carries warm-up's own retention rather than the app's
  *   resting size
- * `first-cycle-step`    — the first cycle retained far more than warm-up costs
- *   and the later cycles kept it, which the verdict cannot see because it
- *   leaves that cycle out
+ * `first-cycle-step`    — the first cycle retained far more than warm-up costs,
+ *   far more than the later cycles grew, and the later cycles kept it: the
+ *   verdict cannot see it because it leaves that cycle out
  */
 export type WarningCode =
   | "unsettled"
@@ -450,37 +450,43 @@ const FIRST_CYCLE_STEP_BASELINE_MULTIPLE = 1;
  */
 const FIRST_CYCLE_STEP_HELD_SHARE = 0.75;
 
+/**
+ * How many times the growth the verdict does read the step has to be.
+ *
+ * Whatever the verdict, the question is whether it describes the memory. A
+ * leak that keeps growing at the rate of its first step is described by its
+ * own rate — 16.3.4 on Node 24 added about 660 MB on the first cycle and as
+ * much on every later one. A re-run of the #97938 Node 22 arm came out `leak`
+ * at +0.50 MB per cycle against a 652 MB first step: the verdict was true and
+ * the number under it said nothing about where the memory was.
+ */
+const FIRST_CYCLE_STEP_DWARF_MULTIPLE = 4;
+
 const retainedOf = (sample: HeapSample): number => sample.heapUsed + sample.external;
 
 /**
  * Whether the first cycle retained what the verdict cannot see.
  *
- * Only on a curve judged flat: a leak already says memory is retained, and a
- * saturating curve shows its growth in the cycles the verdict does read.
  * Reported, never corrected: counting the first delta would turn every app's
  * warm-up into evidence. The user gets the step and a run that can show its
  * shape — fewer requests per cycle spread the fill across cycles.
  */
 function firstCycleStepWarnings(input: ConfidenceInput): MeasurementWarning[] {
-  const curve = input.trend.promotedFrom ?? input.trend.verdict;
   const samples = input.memorySamples;
   const baselineSample = samples?.[0];
   const firstSample = samples?.[1];
   const lastSample = samples?.at(-1);
-  if (
-    curve !== "stable" ||
-    baselineSample === undefined ||
-    firstSample === undefined ||
-    lastSample === undefined
-  ) {
+  if (baselineSample === undefined || firstSample === undefined || lastSample === undefined) {
     return [];
   }
   const baseline = retainedOf(baselineSample);
   const firstCycle = retainedOf(firstSample);
   const step = firstCycle - baseline;
+  const laterGrowth = Math.max(retainedOf(lastSample) - firstCycle, 0);
   if (
     step < FIRST_CYCLE_STEP_FLOOR_BYTES ||
     step < baseline * FIRST_CYCLE_STEP_BASELINE_MULTIPLE ||
+    step < laterGrowth * FIRST_CYCLE_STEP_DWARF_MULTIPLE ||
     retainedOf(lastSample) - baseline < step * FIRST_CYCLE_STEP_HELD_SHARE
   ) {
     return [];
@@ -490,8 +496,8 @@ function firstCycleStepWarnings(input: ConfidenceInput): MeasurementWarning[] {
     detail:
       `heap plus external memory went from ${mb(baseline)} to ${mb(firstCycle)} on ` +
       `the first cycle and the later cycles kept it — the verdict leaves that ` +
-      `cycle out as warm-up, so something that fills in one cycle and stops ` +
-      `reads as flat; re-run with fewer --requests per cycle to see how it fills`,
+      `cycle out as warm-up, so whatever it says about the later cycles does not ` +
+      `describe this step; re-run with fewer --requests per cycle to see how it fills`,
   }];
 }
 
