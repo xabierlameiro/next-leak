@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0](https://github.com/xabierlameiro/next-leak/compare/v0.13.5...v0.14.0) (2026-11-25)
+
+
+### Features
+
+* build tree and cache warnings, borderline confirmation, specific findings, Node comparison ([53a6f63](https://github.com/xabierlameiro/next-leak/commit/53a6f639a98b673008259d020daa69ad9a58420f))
+* **build:** report the whole process tree and Next's security stop ([c2e0658](https://github.com/xabierlameiro/next-leak/commit/c2e065810f21133e1864f5bbcd38a1dcf2b07db9))
+* **build:** warn when a compiler cache may serve compilation ([aeb6c4b](https://github.com/xabierlameiro/next-leak/commit/aeb6c4b0508c3b3dd7973510bad50eeb52da3c97))
+* **dev:** measure routes on next dev ([b661010](https://github.com/xabierlameiro/next-leak/commit/b6610109484e34d483669d9e84b9841974b43be3))
+* **dev:** measure routes on next dev ([cf0962c](https://github.com/xabierlameiro/next-leak/commit/cf0962c415eb312d0d2ee2aebaea807f017e6c3b))
+* **report:** lead with the most specific finding ([f9870a0](https://github.com/xabierlameiro/next-leak/commit/f9870a018fe158bfff6437301c66f1fc74a452e7))
+* **runner:** confirm a borderline leak from a fresh server ([b0b2fc5](https://github.com/xabierlameiro/next-leak/commit/b0b2fc563bacc94d925fe509c0daf4b0daba6093))
+* **runner:** run the measured server on chosen Node binaries ([d990da7](https://github.com/xabierlameiro/next-leak/commit/d990da754f36aa8b6f9211c481ff3d4987c4b217))
+
 ## [0.13.5](https://github.com/xabierlameiro/next-leak/compare/v0.13.4...v0.13.5) (2026-11-24)
 
 
