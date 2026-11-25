@@ -31,12 +31,12 @@ async function holdsEntries(dir: string): Promise<boolean> {
  * makes a build of an affected version stop every time it runs under an agent.
  */
 export async function warmCompilerCache(appDir: string): Promise<string | null> {
-  const found: string[] = [];
-  for (const name of COMPILER_CACHES) {
-    if (await holdsEntries(path.join(appDir, ".next", "cache", name))) {
-      found.push(`.next/cache/${name}`);
-    }
-  }
+  const warm = await Promise.all(
+    COMPILER_CACHES.map((name) => holdsEntries(path.join(appDir, ".next", "cache", name)))
+  );
+  const found = COMPILER_CACHES.filter((_, index) => warm[index]).map(
+    (name) => `.next/cache/${name}`
+  );
   if (found.length === 0) {
     return null;
   }
