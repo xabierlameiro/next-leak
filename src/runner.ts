@@ -768,7 +768,8 @@ async function measureRepeatedly(
 ): Promise<RouteReport> {
   const repeat = context.options.repeat ?? 1;
   if (repeat <= 1) {
-    return measureWithResolution(context, route, requestPath, index, label);
+    const first = await measureWithResolution(context, route, requestPath, index, label);
+    return confirmBorderline(context, route, requestPath, index, label, first);
   }
 
   const passes: RouteReport[] = [];
@@ -784,6 +785,66 @@ async function measureRepeatedly(
     }
   }
   return aggregateRepetitions(passes);
+}
+
+/**
+ * Why a single measurement needs a second one from a fresh server, or null.
+ *
+ * Only a leak whose growth sits in the noise band: that is the verdict that did
+ * not hold between processes. On the vercel/next.js#97938 reproduction (16.3.6,
+ * Node 22.23, 300 requests per cycle) one run came out `stable` with high
+ * confidence and the next `leak` at +0.50 MB per cycle against a 0.25 MB gate.
+ * A leak well clear of the gate has reproduced on every run measured, and
+ * confirming those would double the cost of every real finding. A stable
+ * verdict is not confirmed: missing a leak costs less than accusing a route.
+ */
+function confirmationReason(report: RouteReport): string | null {
+  if (report.status !== "measured" || effectiveVerdict(report) !== "leak") {
+    return null;
+  }
+  return report.confidence.warnings.some((warning) => warning.code === "near-threshold")
+    ? "its growth barely clears the threshold"
+    : null;
+}
+
+/**
+ * Measures a borderline leak once more from a fresh server and judges it on
+ * both passes, by the same unanimity rule `--repeat` uses.
+ *
+ * A confirmation that fails to measure is a lost bonus, not a finding: the
+ * first pass is kept. One that runs out of heap is the stronger evidence and is
+ * what gets reported.
+ */
+async function confirmBorderline(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  requestPath: string,
+  index: number,
+  label: string,
+  first: RouteReport
+): Promise<RouteReport> {
+  const reason = confirmationReason(first);
+  if (
+    reason === null ||
+    context.options.resolveInconclusive === false ||
+    context.options.signal?.aborted === true
+  ) {
+    return first;
+  }
+  context.progress(`confirming ${label} from a fresh server: ${reason}`);
+  const second = await measureWithResolution(
+    context,
+    route,
+    requestPath,
+    index,
+    label,
+    "-confirm"
+  );
+  if (second.status === "failed") {
+    context.progress(`confirmation of ${label} did not measure — keeping the first pass`);
+    return first;
+  }
+  return aggregateRepetitions([first, second]);
 }
 
 /**

@@ -138,7 +138,7 @@ const FLAGS: FlagSpec[] = [
   {
     flag: "--no-resolve",
     value: "none",
-    help: "Do not re-measure inconclusive routes with more cycles (default: re-measure once)",
+    help: "Do not measure a route again: neither inconclusive routes with more cycles nor borderline leaks from a fresh server (default: once each)",
   },
   {
     flag: "--self-check",

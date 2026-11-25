@@ -1592,3 +1592,165 @@ describe("repeat runs the whole measurement again", () => {
     expect(route.repetitions).toBeUndefined();
   });
 });
+
+// A leak whose growth sits under twice the gate did not hold between processes:
+// on the vercel/next.js#97938 reproduction (16.3.6, Node 22.23) one run came out
+// `stable` with high confidence and the next `leak` at +0.50 MB per cycle.
+describe("confirming a borderline leak from a fresh server", () => {
+  type Pass = {
+    verdict: "leak" | "stable" | "saturating" | "pressure";
+    growth: number;
+    deltas?: number[];
+  };
+  const BORDERLINE: Pass = { verdict: "leak", growth: 0.3 * MB };
+  const CLEAR: Pass = { verdict: "leak", growth: 2.5 * MB };
+  const FLAT: Pass = { verdict: "stable", growth: 0.1 * MB };
+
+  async function run(
+    passes: readonly Pass[],
+    options: { repeat?: number; resolveInconclusive?: boolean; abortAfterFirst?: boolean } = {}
+  ) {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progress: string[] = [];
+    const workDirs: string[] = [];
+    const controller = new AbortController();
+    let call = 0;
+    const { abortAfterFirst, ...runOptions } = options;
+    const report = await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        onProgress: (line) => progress.push(line),
+        signal: controller.signal,
+        ...runOptions,
+      },
+      {
+        ...makeDeps([]),
+        ritual: async (ritualOptions) => {
+          const pass = passes[call] ?? FLAT;
+          call += 1;
+          workDirs.push(ritualOptions.workDir);
+          if (abortAfterFirst === true) controller.abort();
+          const base = ritualResult(ritualOptions.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return {
+            ...base,
+            trend: { verdict: pass.verdict, growthPerCycle: pass.growth, deltas: pass.deltas ?? [] },
+          };
+        },
+      }
+    );
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("expected a measured route");
+    return { route, calls: call, progress, workDirs };
+  }
+
+  it("keeps the verdict when the confirmation agrees", async () => {
+    const { route, calls, progress } = await run([BORDERLINE, BORDERLINE]);
+
+    expect(calls).toBe(2);
+    expect(route.repetitions?.map((entry) => entry.verdict)).toEqual(["leak", "leak"]);
+    expect(route.confidence.supersededVerdict).toBeUndefined();
+    expect(
+      progress.some((line) =>
+        line.includes("from a fresh server: its growth barely clears the threshold")
+      )
+    ).toBe(true);
+  });
+
+  it("measures the confirmation in a directory of its own", async () => {
+    const { workDirs } = await run([BORDERLINE, BORDERLINE]);
+
+    expect(workDirs).toHaveLength(2);
+    expect(workDirs[1]?.endsWith("-confirm")).toBe(true);
+    expect(workDirs[0]).not.toBe(workDirs[1]);
+  });
+
+  it("does not confirm a clear leak that carries some other warning", async () => {
+    // Spiky growth: one cycle many times the smallest, and far above the gate.
+    const { calls } = await run([
+      { verdict: "leak", growth: 2.8 * MB, deltas: [10 * MB, 1 * MB, 1 * MB, 1 * MB, 1 * MB] },
+    ]);
+
+    expect(calls).toBe(1);
+  });
+
+  it("leaves a borderline leak the audit already withdrew to re-measurement", async () => {
+    // Three small deltas: thin evidence, so the verdict is already inconclusive
+    // and goes back for more cycles instead of to a fresh-server confirmation.
+    const thin: Pass = { verdict: "leak", growth: 0.3 * MB, deltas: [0.3 * MB, 0.3 * MB, 0.3 * MB] };
+    const { calls, progress } = await run([thin, thin, thin]);
+
+    // First pass, then the longer re-measurement, which is still withdrawn.
+    expect(calls).toBe(2);
+    expect(progress.some((line) => line.includes("from a fresh server"))).toBe(false);
+  });
+
+  it("does not start a confirmation after an interrupt", async () => {
+    const { calls } = await run([BORDERLINE, BORDERLINE], { abortAfterFirst: true });
+
+    expect(calls).toBe(1);
+  });
+
+  it("reports inconclusive when the confirmation disagrees", async () => {
+    const { route, calls } = await run([BORDERLINE, FLAT]);
+
+    expect(calls).toBe(2);
+    expect(route.repetitions?.map((entry) => entry.verdict)).toEqual(["leak", "stable"]);
+    expect(route.confidence.supersededVerdict).toBe("inconclusive");
+    expect(route.confidence.warnings.some((warning) => warning.code === "repetitions-disagree")).toBe(true);
+  });
+
+  it("measures a clear leak once", async () => {
+    const { route, calls } = await run([CLEAR]);
+
+    expect(calls).toBe(1);
+    expect(route.repetitions).toBeUndefined();
+  });
+
+  it("does not confirm verdicts other than leak", async () => {
+    for (const pass of [FLAT, { verdict: "pressure", growth: 0.3 * MB }] as const) {
+      const { calls } = await run([pass]);
+      expect(calls).toBe(1);
+    }
+  });
+
+  it("does not confirm under --no-resolve", async () => {
+    const { route, calls } = await run([BORDERLINE], { resolveInconclusive: false });
+
+    expect(calls).toBe(1);
+    expect(route.repetitions).toBeUndefined();
+  });
+
+  it("adds nothing to the repetitions the user asked for", async () => {
+    const { route, calls } = await run([BORDERLINE, BORDERLINE], { repeat: 2 });
+
+    expect(calls).toBe(2);
+    expect(route.repetitions).toHaveLength(2);
+  });
+
+  it("keeps the first pass when the confirmation fails to measure", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progress: string[] = [];
+    let call = 0;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (line) => progress.push(line) },
+      {
+        ...makeDeps([]),
+        ritual: async (ritualOptions) => {
+          call += 1;
+          if (call === 2) throw new Error("port race lost");
+          const base = ritualResult(ritualOptions.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return { ...base, trend: { verdict: "leak", growthPerCycle: 0.3 * MB, deltas: [] } };
+        },
+      }
+    );
+    const route = report.routes[0];
+
+    expect(call).toBe(2);
+    expect(progress.some((line) => line.includes("keeping the first pass"))).toBe(true);
+    expect(route?.status).toBe("measured");
+    if (route?.status !== "measured") return;
+    expect(route.trend.verdict).toBe("leak");
+    expect(route.repetitions).toBeUndefined();
+  });
+});
