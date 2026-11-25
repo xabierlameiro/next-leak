@@ -64,6 +64,7 @@ describe("what the reports write to the terminal", () => {
       levels: [],
       workers: [],
       parentSamples: [],
+      treeSamples: [],
       peakWorkerRssBytes: 0,
       netGrowthBytes: 0,
       pagesGenerated: null,

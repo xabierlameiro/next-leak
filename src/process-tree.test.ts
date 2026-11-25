@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { descendantsOf, isStaticGenWorker, parseProcessTable } from "./process-tree.js";
+import {
+  descendantsOf,
+  isStaticGenWorker,
+  isTurbopackPoolProcess,
+  parseProcessTable,
+} from "./process-tree.js";
 
 // Real `ps -axo pid,ppid,rss,command` output, trimmed to the build's own
 // processes, captured while reproducing vercel/next.js#97464 on 16.3.1.
@@ -92,5 +97,24 @@ describe("isStaticGenWorker", () => {
     // would cancel the finding out.
     const parent = rows.find((row) => row.pid === 97131);
     expect(parent !== undefined && isStaticGenWorker(parent)).toBe(false);
+  });
+});
+
+describe("isTurbopackPoolProcess", () => {
+  // Command line of a loader pool on the vercel/next.js#100064 reproduction.
+  const POOL =
+    "node /app/.next/build/chunks/[turbopack]_runtime.js /app/.next/build/chunks/pool_entry-[turbopack-node]_transforms_webpack-loaders_ts_1b2c3d._.js";
+
+  it("recognises a Turbopack loader pool", () => {
+    const [row] = parseProcessTable(`5001 4242 61440 ${POOL}`);
+    expect(row !== undefined && isTurbopackPoolProcess(row)).toBe(true);
+  });
+
+  it("does not take a static-generation worker or the build for one", () => {
+    const rows = parseProcessTable(
+      "4242 1 307200 node /app/node_modules/.bin/next build\n" +
+        "4243 4242 102400 /bin/node /app/node_modules/next/dist/compiled/jest-worker/processChild.js"
+    );
+    expect(rows.some(isTurbopackPoolProcess)).toBe(false);
   });
 });

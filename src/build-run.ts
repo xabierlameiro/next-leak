@@ -23,6 +23,7 @@ import { registerChild, unregisterChild } from "./launcher.js";
 import {
   descendantsOf,
   isStaticGenWorker,
+  isTurbopackPoolProcess,
   sampleProcessTable,
   type ProcessRow,
   type ProcessTableSample,
@@ -35,6 +36,19 @@ const POLL_MS = 500;
 export type WorkerSeries = {
   pid: number;
   samples: BuildSample[];
+};
+
+/**
+ * One poll of the build's whole process tree: the build, its workers and
+ * everything else it started.
+ */
+export type TreeSample = {
+  atMs: number;
+  rssBytes: number;
+  /** Processes in the tree, the build's own included. */
+  processes: number;
+  poolProcesses: number;
+  poolRssBytes: number;
 };
 
 export type BuildCapture = {
@@ -70,6 +84,13 @@ export type BuildRunResult = {
   workers: WorkerSeries[];
   /** The build's own process, reported but never judged: it sheds while workers climb. */
   parentSamples: BuildSample[];
+  /**
+   * The whole tree, reported but never judged. Compilation runs outside the
+   * workers: vercel/next.js#100064 spawned a Turbopack pool per loader chain
+   * and context, 104 Node processes and 7.56 GiB on 16.4.0, while the workers
+   * this run judges peaked at 115.9 MB.
+   */
+  treeSamples: TreeSample[];
   peakWorkerRssBytes: number;
   netGrowthBytes: number;
   pagesGenerated: number | null;
@@ -158,13 +179,26 @@ function recordSample(
   rootPid: number,
   atMs: number,
   workers: Map<number, BuildSample[]>,
-  parentSamples: BuildSample[]
+  parentSamples: BuildSample[],
+  treeSamples: TreeSample[]
 ): void {
   const root = rows.find((row) => row.pid === rootPid);
   if (root !== undefined) {
     parentSamples.push({ atMs, rssBytes: root.rssBytes });
   }
-  for (const row of descendantsOf(rows, rootPid)) {
+  const descendants = descendantsOf(rows, rootPid);
+  const pools = descendants.filter(isTurbopackPoolProcess);
+  const tree = root === undefined ? descendants : [root, ...descendants];
+  if (tree.length > 0) {
+    treeSamples.push({
+      atMs,
+      rssBytes: tree.reduce((sum, row) => sum + row.rssBytes, 0),
+      processes: tree.length,
+      poolProcesses: pools.length,
+      poolRssBytes: pools.reduce((sum, row) => sum + row.rssBytes, 0),
+    });
+  }
+  for (const row of descendants) {
     if (!isStaticGenWorker(row)) {
       continue;
     }
@@ -300,6 +334,7 @@ export async function runBuildMeasurement(
   const startedAt = deps.now();
   const workerSamples = new Map<number, BuildSample[]>();
   const parentSamples: BuildSample[] = [];
+  const treeSamples: TreeSample[] = [];
   let finished = false;
   const exit = new Promise<number | null>((resolve) => {
     child.once("exit", (code) => {
@@ -379,7 +414,14 @@ export async function runBuildMeasurement(
         samplingFailure = sample.reason;
         return;
       }
-      recordSample(sample.rows, child.pid, deps.now() - startedAt, workerSamples, parentSamples);
+      recordSample(
+        sample.rows,
+        child.pid,
+        deps.now() - startedAt,
+        workerSamples,
+        parentSamples,
+        treeSamples
+      );
       if (capturing) {
         stepCapture(sample.rows, child.pid);
       }
@@ -425,6 +467,7 @@ export async function runBuildMeasurement(
       levels: [],
       workers,
       parentSamples,
+      treeSamples,
       peakWorkerRssBytes: 0,
       netGrowthBytes: 0,
       pagesGenerated,
@@ -476,6 +519,7 @@ export async function runBuildMeasurement(
     levels: measured ? levels : [],
     workers,
     parentSamples,
+    treeSamples,
     peakWorkerRssBytes,
     netGrowthBytes: measured ? growthBytes : 0,
     pagesGenerated,

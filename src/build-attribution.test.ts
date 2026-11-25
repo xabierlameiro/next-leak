@@ -30,6 +30,7 @@ const measured = (
   levels: [],
   workers: [{ pid: 500, samples: [] }],
   parentSamples: [],
+  treeSamples: [],
   peakWorkerRssBytes: 3400 * MB,
   netGrowthBytes: 0,
   pagesGenerated: null,
