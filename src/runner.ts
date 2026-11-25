@@ -42,6 +42,7 @@ import {
 } from "./ritual.js";
 import { matchSignatures, readNextVersion, type MatchedSignature } from "./signatures.js";
 import { validateTarget, type ValidatedTarget } from "./target.js";
+import { validateDevTarget } from "./dev-target.js";
 import { planRevalidation, revalidateSecondsFor, revalidates } from "./isr.js";
 import { minGrowthFor, type TrendResult, type TrendVerdict } from "./trend.js";
 
@@ -239,6 +240,8 @@ export type RunReport = {
   appDir: string;
   startedAt: string;
   workDir: string;
+  /** `dev` when the run measured `next dev`; absent for a standalone server. */
+  server?: "dev";
   /** Carried so the report can suggest sample params the build already knows. */
   prerender?: PrerenderManifest;
   /**
@@ -300,6 +303,12 @@ export type RunOptions = {
    * measure each route once per binary; the first is the headline.
    */
   nodeBinaries?: NodeBinary[];
+  /**
+   * Measure on `next dev` instead of a standalone build. Routes come from the
+   * app's source, there is no ISR to drive and no production chunk set to name
+   * owners from.
+   */
+  dev?: boolean;
   /**
    * Growth the self-check measured on its planted leak, when one ran before
    * this measurement. Its presence is what lets the report say a `stable`
@@ -542,6 +551,7 @@ async function measureRoute(
   const headers = Object.keys(merged).length === 0 ? undefined : merged;
   const result = await deps.ritual({
     serverPath: target.standaloneServer,
+    ...(options.dev === true && { dev: { appDir: target.appDir } }),
     route: requestPath,
     workDir: path.join(
       workDir,
@@ -1112,7 +1122,11 @@ async function planRun(
     routes = filterRoutes(routes, options.routeFilter, progress);
   }
 
-  const registry = await deps.registry(path.join(target.appDir, ".next", "server"));
+  // A dev server has no production chunk set to read module ids from.
+  const registry: Awaited<ReturnType<typeof deps.registry>> =
+    options.dev === true
+      ? new Map()
+      : await deps.registry(path.join(target.appDir, ".next", "server"));
   const nextVersion = await deps.nextVersion(target.appDir);
   const routeConfig = await loadRouteConfig(target.appDir);
   progress(
@@ -1157,6 +1171,22 @@ async function planRun(
 }
 
 /**
+ * A dev app in the shape the run reads: the Next CLI stands where the
+ * standalone server would, and nothing is prerendered.
+ */
+async function devTarget(appDir: string): Promise<ValidatedTarget> {
+  const dev = await validateDevTarget(appDir);
+  return {
+    appDir: dev.appDir,
+    standaloneServer: dev.nextBin,
+    appPaths: dev.appPaths,
+    pages: dev.pages,
+    routes: undefined,
+    prerender: undefined,
+  };
+}
+
+/**
  * Full measurement run: validate the target, discover routes, run the ritual
  * per route in a fresh process, diff snapshots for non-stable verdicts, and
  * persist `run.json` plus raw snapshots under the work directory.
@@ -1166,7 +1196,7 @@ export async function runMeasurement(
   deps: RunnerDeps = defaultDeps
 ): Promise<RunReport> {
   const progress = options.onProgress ?? (() => {});
-  const target = await validateTarget(options.appDir);
+  const target = options.dev === true ? await devTarget(options.appDir) : await validateTarget(options.appDir);
   const { routes, routeConfig, registry, nextVersion, parameters } = await planRun(
     options,
     target,
@@ -1195,6 +1225,7 @@ export async function runMeasurement(
     appDir: target.appDir,
     startedAt: startedAt.toISOString(),
     workDir,
+    ...(options.dev === true && { server: "dev" as const }),
     ...(target.prerender !== undefined && { prerender: target.prerender }),
     harness:
       options.harnessVerifiedAt === undefined

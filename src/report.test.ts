@@ -904,3 +904,39 @@ describe("a route measured on several Node versions", () => {
     expect(formatReport(makeRunReport())).not.toContain("by Node version");
   });
 });
+
+describe("a run on next dev", () => {
+  it("says so in the header, and why findings name no owner", () => {
+    const report = { ...makeRunReport(), server: "dev" as const };
+    const output = formatReport(report);
+
+    expect(output.split("\n")[0]).toBe("next-leak — /apps/shop · next dev");
+    expect(output).toContain("findings name no owner, because a dev server has no");
+  });
+
+  it("says nothing about dev on a server run", () => {
+    expect(formatReport(makeRunReport())).not.toContain("next dev");
+  });
+});
+
+describe("a route whose server Next stopped for a security upgrade", () => {
+  it("explains the stop and how to get the route measured", () => {
+    const report = makeRunReport();
+    report.routes = [
+      {
+        route: "/",
+        status: "failed",
+        reason:
+          "the measured process exited mid-run. stderr:\n**We strongly recommend you upgrade Next.js.**\nThis command stopped to show the upgrade recommendation.",
+      },
+    ];
+    const output = formatReport(report);
+
+    expect(output).toContain("Next stopped this server to recommend a security upgrade");
+    expect(output).toContain("re-run the routes that failed (--routes), or upgrade Next");
+  });
+
+  it("adds nothing to any other failure", () => {
+    expect(formatReport(makeRunReport())).not.toContain("security upgrade");
+  });
+});

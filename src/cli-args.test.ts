@@ -24,6 +24,7 @@ describe("parseCliArgs", () => {
       kind: "run",
       options: {
         appDir: "./my-app",
+        dev: false,
         routes: null,
         cycles: null,
         repeat: null,
@@ -57,6 +58,7 @@ describe("parseCliArgs", () => {
     }
     expect(parsed.options).toEqual({
       appDir: "app",
+      dev: false,
       routes: ["/api", "/dashboard"],
       cycles: 6,
       repeat: 3,
@@ -426,5 +428,31 @@ describe("--node", () => {
 
   it("is listed in --help", () => {
     expect(helpText("0.0.0")).toContain("--node <paths>");
+  });
+});
+
+describe("the dev command", () => {
+  it("runs on next dev and takes the server-run options", () => {
+    const parsed = parseCliArgs(["dev", "./app", "--routes", "/,/dynamic", "--requests", "400"]);
+    if (parsed.kind !== "run") throw new Error(`expected run, got ${parsed.kind}`);
+
+    expect(parsed.options.dev).toBe(true);
+    expect(parsed.options.appDir).toBe("./app");
+    expect(parsed.options.routes).toEqual(["/", "/dynamic"]);
+    expect(parsed.options.requests).toBe(400);
+  });
+
+  it("still reaches a directory named dev as a server run", () => {
+    const parsed = parseCliArgs(["./dev"]);
+
+    expect(parsed.kind === "run" && parsed.options.dev).toBe(false);
+  });
+
+  it("refuses the build-only option like a server run does", () => {
+    expect(parseCliArgs(["dev", "app", "--attribute"]).kind).toBe("error");
+  });
+
+  it("is described in --help", () => {
+    expect(helpText("0.0.0")).toContain('next-leak dev <app-dir> [options]    measure "next dev"');
   });
 });

@@ -42,6 +42,13 @@ export type LaunchOptions = {
   bootstrapPath: string;
   /** Node binary the server runs on. Default: the one running next-leak. */
   nodePath?: string;
+  /**
+   * Run `next dev` instead of a standalone server: `serverPath` is then the
+   * app's Next CLI entry, started in `appDir`. Next forks the process that
+   * renders and copies `NODE_OPTIONS` into it, so the instrumentation goes
+   * there, and both processes open a channel.
+   */
+  dev?: { appDir: string };
   hostname?: string;
   /**
    * Path the readiness probe asks for. Defaults to `/`, but a run should pass
@@ -108,9 +115,12 @@ const STDERR_WINDOW = 4096;
 /** Interrupt safety: no measured-app process may outlive the CLI. */
 export function killActiveChildren(): void {
   for (const child of activeChildren) {
-    child.kill("SIGKILL");
+    stop(child, "SIGKILL", devServers.has(child));
   }
 }
+
+/** Measured processes started as dev servers, whose whole group has to go. */
+const devServers = new WeakSet<ChildProcess>();
 
 /**
  * Puts a process this tool spawned under the same interrupt safety as a
@@ -281,6 +291,76 @@ async function pollUntil<T>(
   }
 }
 
+type SpawnSpec = {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+};
+
+/** The process to start: a standalone `server.js`, or the app's `next dev`. */
+export function spawnSpec(
+  options: LaunchOptions,
+  hostname: string,
+  controlToken: string
+): SpawnSpec {
+  const instrumentation = [
+    "--expose-gc",
+    `--max-old-space-size=${options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB}`,
+    "--import",
+    pathToFileURL(options.bootstrapPath).href,
+  ];
+  const channel = { NEXT_LEAK_DIR: options.workDir, NEXT_LEAK_TOKEN: controlToken };
+  const command = options.nodePath ?? process.execPath;
+  if (options.dev !== undefined) {
+    // Through NODE_OPTIONS, which Next copies into the fork that renders. The
+    // heap cap has to travel there too: without one, Next gives the fork half
+    // of the machine's memory.
+    const inherited = options.env?.["NODE_OPTIONS"] ?? process.env["NODE_OPTIONS"] ?? "";
+    return {
+      command,
+      args: [options.serverPath, "dev", "-p", String(options.appPort), "-H", hostname],
+      cwd: options.dev.appDir,
+      env: {
+        ...process.env,
+        ...options.env,
+        NODE_OPTIONS: `${inherited} ${instrumentation.join(" ")}`.trim(),
+        ...channel,
+      },
+    };
+  }
+  return {
+    command,
+    args: [...instrumentation, options.serverPath],
+    cwd: path.dirname(options.serverPath),
+    env: {
+      ...process.env,
+      ...options.env,
+      NODE_ENV: "production",
+      PORT: String(options.appPort),
+      HOSTNAME: hostname,
+      ...channel,
+    },
+  };
+}
+
+/**
+ * Whether a control channel belongs to the process to measure.
+ *
+ * A standalone server measures whichever of its processes answers. A dev server
+ * never measures the process the launcher spawned: that is the `next dev` CLI,
+ * which renders nothing. On 16.4.6 it held 15 MB of heap while the fork
+ * rendering every request held 65 MB, and the first channel to answer could be
+ * either.
+ */
+export function isMeasuredChannel(
+  channelPid: number,
+  spawnedPid: number | undefined,
+  dev: boolean
+): boolean {
+  return !dev || channelPid !== spawnedPid;
+}
+
 /**
  * Spawns the measured server in a fresh child process with GC exposed and the
  * control-channel bootstrap preloaded, and waits until both the app port and
@@ -293,29 +373,15 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
   // control file is readable by anyone who can list the work directory.
   const controlToken = randomBytes(32).toString("hex");
 
-  const child: ChildProcess = spawn(
-    options.nodePath ?? process.execPath,
-    [
-      "--expose-gc",
-      `--max-old-space-size=${options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB}`,
-      "--import",
-      pathToFileURL(options.bootstrapPath).href,
-      options.serverPath,
-    ],
-    {
-      cwd: path.dirname(options.serverPath),
-      env: {
-        ...process.env,
-        ...options.env,
-        NODE_ENV: "production",
-        PORT: String(options.appPort),
-        HOSTNAME: hostname,
-        NEXT_LEAK_DIR: options.workDir,
-        NEXT_LEAK_TOKEN: controlToken,
-      },
-      stdio: ["ignore", "ignore", "pipe"],
-    }
-  );
+  const spec = spawnSpec(options, hostname, controlToken);
+  const child: ChildProcess = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    env: spec.env,
+    stdio: ["ignore", "ignore", "pipe"],
+    // A dev server runs in its own process group so stopping it reaches the
+    // fork Next starts, not just the CLI process that started it.
+    detached: options.dev !== undefined,
+  });
 
   // Head AND tail, not tail alone. A real V8 fatal dump puts its one
   // load-bearing line ("FATAL ERROR: ... heap out of memory") ahead of ~75
@@ -338,6 +404,9 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
       : `${stderrHead}\n[...]\n${stderrTailBuffer}`;
   let exited = false;
   activeChildren.add(child);
+  if (options.dev !== undefined) {
+    devServers.add(child);
+  }
   child.once("exit", () => {
     exited = true;
     activeChildren.delete(child);
@@ -365,6 +434,9 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
             const parsed = controlFileSchema.parse(
               JSON.parse(await readFile(path.join(options.workDir, entry), "utf8"))
             );
+            if (!isMeasuredChannel(parsed.pid, child.pid, options.dev !== undefined)) {
+              continue;
+            }
             const response = await fetch(`http://127.0.0.1:${parsed.port}/gc`, {
               headers: { [CONTROL_TOKEN_HEADER]: controlToken },
             });
@@ -434,14 +506,31 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
           return;
         }
         const gone = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-        child.kill("SIGTERM");
-        const killTimer = setTimeout(() => child.kill("SIGKILL"), 3000);
+        stop(child, "SIGTERM", options.dev !== undefined);
+        const killTimer = setTimeout(() => stop(child, "SIGKILL", options.dev !== undefined), 3000);
         await gone;
         clearTimeout(killTimer);
+        if (options.dev !== undefined) {
+          // The fork can outlive the CLI that started it; the group cannot.
+          stop(child, "SIGKILL", true);
+        }
       },
     };
   } catch (cause) {
-    child.kill("SIGKILL");
+    stop(child, "SIGKILL", options.dev !== undefined);
     throw cause;
   }
+}
+
+/** Signals the measured process, or its whole group when it is a dev server. */
+function stop(child: ChildProcess, signal: NodeJS.Signals, group: boolean): void {
+  if (group && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group is already gone; fall through to the process itself.
+    }
+  }
+  child.kill(signal);
 }

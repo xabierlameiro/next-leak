@@ -34,6 +34,8 @@ export type RitualOptions = {
   idleMs?: number;
   /** Node binary the measured server runs on. Default: the one running next-leak. */
   nodePath?: string;
+  /** Run `next dev` in this app instead of a standalone server; `serverPath` is its Next CLI. */
+  dev?: { appDir: string };
   /** Old-space cap for the measured process (MB). Default: 512. */
   maxOldSpaceMb?: number;
   /** How long the process gets to start listening (ms). Default: 60_000. */
@@ -385,6 +387,7 @@ export async function runRitual(
     ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(options.readyTimeoutMs !== undefined && { readyTimeoutMs: options.readyTimeoutMs }),
     ...(options.nodePath !== undefined && { nodePath: options.nodePath }),
+    ...(options.dev !== undefined && { dev: options.dev }),
   };
   let app;
   try {

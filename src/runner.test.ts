@@ -1931,3 +1931,60 @@ describe("measuring on chosen Node binaries", () => {
     expect(route.nodeVersions?.[1]).toEqual({ version: "v24.22.3", status: "failed" });
   });
 });
+
+// vercel/next.js#99983: `next dev` retains heap on every App Router render.
+describe("measuring on next dev", () => {
+  async function devApp(): Promise<string> {
+    const appDir = await mkdtemp(path.join(tmpdir(), "next-leak-runner-dev-"));
+    for (const file of ["app/page.jsx", "app/dynamic/page.jsx", "node_modules/next/dist/bin/next"]) {
+      await mkdir(path.dirname(path.join(appDir, file)), { recursive: true });
+      await writeFile(path.join(appDir, file), "");
+    }
+    return appDir;
+  }
+
+  it("runs next dev for each route found in source, with no build", async () => {
+    const appDir = await devApp();
+    const seen: Array<{ route: string; serverPath: string; dev: unknown }> = [];
+    let registryAsked = false;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", dev: true },
+      {
+        ...makeDeps([]),
+        registry: async () => {
+          registryAsked = true;
+          return new Map();
+        },
+        ritual: async (options) => {
+          seen.push({ route: options.route, serverPath: options.serverPath, dev: options.dev });
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    expect(seen.map((entry) => entry.route)).toEqual(["/", "/dynamic"]);
+    expect(seen[0]?.serverPath).toBe(path.join(appDir, "node_modules", "next", "dist", "bin", "next"));
+    expect(seen[0]?.dev).toEqual({ appDir });
+    expect(registryAsked).toBe(false);
+    expect(report.server).toBe("dev");
+    expect(report.prerender).toBeUndefined();
+  });
+
+  it("leaves a server run unmarked and on its standalone server", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let dev: unknown = "unset";
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          dev = options.dev;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    expect(dev).toBeUndefined();
+    expect(report.server).toBeUndefined();
+  });
+});

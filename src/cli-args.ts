@@ -2,6 +2,8 @@ import path from "node:path";
 
 export type CliRunOptions = {
   appDir: string;
+  /** `next-leak dev`: measure on `next dev` instead of a standalone build. */
+  dev: boolean;
   routes: string[] | null;
   cycles: number | null;
   /**
@@ -51,6 +53,9 @@ export type ParsedCli =
 
 /** The command name that switches from measuring a server to measuring a build. */
 const BUILD_COMMAND = "build";
+
+/** The command name that switches from a standalone server to `next dev`. */
+const DEV_COMMAND = "dev";
 
 /**
  * Flags that shape HTTP load or the per-route ritual, and so mean nothing to a
@@ -184,6 +189,7 @@ route, and whose fault it is.
 
 Usage:
   next-leak <app-dir> [options]        measure a built server under load
+  next-leak dev <app-dir> [options]    measure "next dev" under the same load
   next-leak build <app-dir>            measure the memory of "next build"
 
 The app must be built with output: "standalone" (next build). For each
@@ -191,6 +197,10 @@ discovered route, next-leak boots a fresh instrumented process and runs:
 warm-up → GC → baseline snapshot → [load → idle → GC → sample] × cycles →
 snapshot. Evidence (report.html, ISSUE drafts, raw snapshots, run.json) is
 written under the output directory.
+
+The dev command needs no build either: it starts the app's own "next dev" for
+each route, measures the process Next forks to render, and takes the same
+options as a server run. Routes come from app/, src/app/, pages/ and src/pages/.
 
 The build command needs neither a previous build nor standalone output: it runs
 the build itself and samples the resident memory of each static-generation
@@ -389,9 +399,11 @@ export function parseCliArgs(argv: string[]): ParsedCli {
   // meaning. Only an exact first token counts, so a directory named "build" is
   // still reachable as `next-leak ./build`.
   const isBuild = argv[0] === BUILD_COMMAND;
-  const rest = isBuild ? argv.slice(1) : argv;
+  const isDev = argv[0] === DEV_COMMAND;
+  const rest = isBuild || isDev ? argv.slice(1) : argv;
   const options: CliRunOptions = {
     appDir: "",
+    dev: isDev,
     routes: null,
     cycles: null,
     repeat: null,

@@ -428,3 +428,25 @@ describe("a route measured on several Node versions", () => {
     expect(markdown).not.toContain("more than one Node version");
   });
 });
+
+describe("a run on next dev", () => {
+  it("gives the dev deployment and the dev command to reproduce", () => {
+    const report = { ...makeRunReport(), server: "dev" as const };
+    const route = report.routes.find((entry) => entry.route === "/leaky");
+    const markdown = renderIssueMarkdown(route as MeasuredRoute, report);
+
+    expect(markdown).toContain("Deployment: next dev, NODE_OPTIONS=--expose-gc --max-old-space-size=");
+    expect(markdown).toContain("npx next-leak dev <app-dir>");
+    expect(markdown).toContain("measures the server Next forks to render");
+    expect(markdown).not.toContain('output: "standalone"');
+  });
+
+  it("keeps the standalone steps on a server run", () => {
+    const report = makeRunReport();
+    const route = report.routes.find((entry) => entry.route === "/leaky");
+    const markdown = renderIssueMarkdown(route as MeasuredRoute, report);
+
+    expect(markdown).toContain('Deployment: output "standalone"');
+    expect(markdown).toContain(".next/standalone/server.js");
+  });
+});

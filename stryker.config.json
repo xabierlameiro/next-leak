@@ -52,7 +52,9 @@
     "src/build-cache.ts",
     "src/finding-selection.ts",
     "src/node-binaries.ts",
-    "src/node-comparison.ts"
+    "src/node-comparison.ts",
+    "src/dev-target.ts",
+    "src/security-stop.ts"
   ],
   "thresholds": {
     "high": 90,

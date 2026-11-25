@@ -8,6 +8,7 @@ import { attributeBuildCapture } from "./build-attribution.js";
 import { formatBuildReport } from "./build-report.js";
 import { runBuildMeasurement } from "./build-run.js";
 import { discardPendingSnapshotsSync } from "./build-snapshot.js";
+import { validateDevTarget } from "./dev-target.js";
 import { helpText, parseCliArgs, type ParsedCli } from "./cli-args.js";
 import { checkRuntime } from "./guards.js";
 import { NodeBinaryError, resolveNodeBinaries, type NodeBinary } from "./node-binaries.js";
@@ -147,8 +148,11 @@ async function runBuildCommand(
  * this cannot reconstruct, and losing them to a convenience flag is worse than
  * printing the fragment and letting them merge it.
  */
-async function writeConfigSkeleton(appDir: string): Promise<void> {
-  const target = await validateTarget(appDir);
+async function writeConfigSkeleton(appDir: string, dev: boolean): Promise<void> {
+  // A dev app has no build to read, and nothing prerendered to suggest values from.
+  const target = dev
+    ? { ...(await validateDevTarget(appDir)), prerender: undefined }
+    : await validateTarget(appDir);
   const routes = [...discoverRoutes(target.appPaths), ...discoverPagesRoutes(target.pages)]
     .filter((route) => route.dynamic && route.unaddressableReason === undefined)
     .map((route) => route.path);
@@ -189,7 +193,7 @@ async function main(): Promise<void> {
     return;
   }
   if (parsed.options.writeConfig) {
-    await writeConfigSkeleton(parsed.options.appDir);
+    await writeConfigSkeleton(parsed.options.appDir, parsed.options.dev);
     return;
   }
   if (!hasHeapHeadroom()) {
@@ -260,6 +264,7 @@ async function main(): Promise<void> {
     ...(options.cycles !== null && { cycles: options.cycles }),
     ...(options.repeat !== null && { repeat: options.repeat }),
     ...(nodeBinaries !== undefined && { nodeBinaries }),
+    ...(options.dev && { dev: true }),
     ...(options.requests !== null && { loadRequests: options.requests }),
     ...(options.connections !== null && { connections: options.connections }),
     ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),

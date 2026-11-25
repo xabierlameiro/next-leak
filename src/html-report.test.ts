@@ -395,3 +395,16 @@ describe("a route measured on several Node versions", () => {
     expect(html).toContain("node v22.23.5 vs v24.22.3");
   });
 });
+
+describe("a run on next dev", () => {
+  it("names next dev in the title and explains the missing owners", () => {
+    const html = renderHtmlReport({ ...makeRunReport(), server: "dev" });
+
+    expect(html).toContain("<h1>next-leak report · next dev</h1>");
+    expect(html).toContain("a dev server has no production chunks");
+  });
+
+  it("leaves a server run's title alone", () => {
+    expect(renderHtmlReport(makeRunReport())).toContain("<h1>next-leak report</h1>");
+  });
+});

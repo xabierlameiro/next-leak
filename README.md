@@ -38,6 +38,7 @@ checked 2026-09-19; #97938 and #100492 re-measured 2026-11-23:
 | [#96533](https://github.com/vercel/next.js/issues/96533) | ISR revalidation holds RSC buffers between collections | 4–5 MB of `arrayBuffers` held vs 0.32 MB retained | **open** |
 | [#97464](https://github.com/vercel/next.js/issues/97464) | Static-gen worker retains per prerendered page | OOM after 1617 and 1525 of 2504 pages on 16.3.3; 16.2.12 finishes at 0.05 MB/page | closed Aug 31 as a duplicate; same fix, in 16.3.5 — not re-measured here yet |
 | [#100492](https://github.com/vercel/next.js/issues/100492) | Default `use cache` handler keeps a 64 KB Buffer-pool slab alive per small entry, so `cacheMaxMemorySize` undercounts what it holds | external memory +9.85 MB/1000 req on 16.4.1, +10.72 on 16.4.6, +3.13 on 16.5.0-canary.61; +1.51 with an exact-size handler. Past the 50 MB budget (48,000 distinct URLs, 16.4.6): the default handler levels off at 337 MB, the exact-size one at 54 MB | **open** — fix proposed in [#100503](https://github.com/vercel/next.js/pull/100503) |
+| [#99983](https://github.com/vercel/next.js/issues/99983) | `next dev` retains memory on every App Router render | `next-leak dev`, 400 sequential renders × 4 cycles, Node 24.22: `/` +50.78 MB/1000 renders and `/dynamic` +67.19 on 16.4.6 (+50.78 and +66.82 on 16.4.0), almost all of it external memory, held by a `Map` under `reactDebugChannelsByHtmlRequestId`. The heap alone grew 4–7 KB per render; the issue measured the heap only (16–26 KB per render, Windows, Node 22.16) | **open** |
 | [#97802](https://github.com/vercel/next.js/issues/97802) | Turbopack compilation saturates the container before rendering anything | not attributable to a version: see below. [#98581](https://github.com/vercel/next.js/pull/98581) (merged Sep 16, in `16.4.0-canary.34`) doesn't move it: cold build peak 5,161 MB on canary.33 and 5,279 MB on canary.35 (`next-leak build`); under 4 GB neither finishes compiling in 600 s, under 5 GB both compile in about a minute | **open** — the other fix from Vercel, [#98611](https://github.com/vercel/next.js/pull/98611), is still a draft |
 | [#100064](https://github.com/vercel/next.js/issues/100064) | Turbopack `next build` spawns a webpack-loader pool per loader chain × context: hundreds of Node processes | reproduction, 4 cores, Node 24.22, `TURBO_TASKS_AVAILABLE_PARALLELISM=2`: 2 pool processes and 1.72 GiB on 16.3.8; 55–59 and 4.8–5.0 GiB on 16.4.0–16.4.2; 2 and 1.68 GiB on 16.4.3; 2 and 1.54 GiB on 16.4.6. Default parallelism on 16.4.0: 104 processes, 7.56 GiB. `next-leak build` on 16.4.0: workers 110 MB, tree 7,798 MB with 106 pools | **open**, but not reproducible from **16.4.3** (Oct 23), consistent with the revert of the cause in [#100414](https://github.com/vercel/next.js/pull/100414) (merged Oct 19) |
 | [#98707](https://github.com/vercel/next.js/issues/98707) | `next dev`: a route handler compiled after N pages costs ~16 MB × N | reproduced independently (10 pages, 34 handlers, Node 24.18): 851 MB on `16.3.0-canary.100`, **2,354 MB on canary.101**, 1,704 MB on 16.3.5; 1,461 MB requesting the handlers first | **open** — the reporter's bisect to `16.3.0-canary.101` holds |
@@ -116,6 +117,9 @@ next build
 # 2. Measure it
 npx next-leak .
 ```
+
+Measuring a memory problem you see in development instead? `npx next-leak dev .`
+runs the same measurement on `next dev`, with no build.
 
 For each discovered route, in a fresh process, it runs the validated ritual:
 
@@ -519,6 +523,18 @@ through the build's source maps.
   to projects using `experimental.workerThreads: true`: a worker thread has no
   resident memory of its own to sample, and the run says so instead of
   reporting a number that would be measuring the parent.
+- **`next-leak dev <dir>`** measures routes on `next dev` instead of a
+  standalone server, with the same ritual and options. It needs no build: routes
+  come from `app/`, `src/app/`, `pages/` and `src/pages/`, and each route gets a
+  fresh `next dev`. Next forks the process that renders and copies
+  `NODE_OPTIONS` into it, so the instrumentation goes there and the samples come
+  from that fork, never from the `next dev` command process
+  ([#99983](https://github.com/vercel/next.js/issues/99983)). Findings name no
+  owner: a dev server has no production chunks to read module ids from.
+  Compilation that grows with the number of routes
+  ([#98707](https://github.com/vercel/next.js/issues/98707)) and HMR
+  ([#100367](https://github.com/vercel/next.js/issues/100367)) are not
+  measured.
 - **`next-leak build <dir> --attribute`** additionally names *what* the worker
   retained, by signalling it for a pair of heap snapshots. **Opt-in, and slow
   by nature:** the signal makes the worker write its whole heap to disk, which
