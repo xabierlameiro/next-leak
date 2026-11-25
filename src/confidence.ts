@@ -331,7 +331,7 @@ function noiseFloorWarnings(trend: TrendResult, minGrowth: number): MeasurementW
     code: "near-threshold",
     detail:
       `growth of ${mb(trend.growthPerCycle)}/cycle barely clears the ` +
-      `${mb(minGrowth)} threshold — raise --load-requests so the signal ` +
+      `${mb(minGrowth)} threshold — raise --requests so the signal ` +
       `outgrows the noise`,
   }];
 }

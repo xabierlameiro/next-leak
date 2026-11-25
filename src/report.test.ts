@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatReport } from "./report.js";
-import { makeRunReport } from "./run-report.fixture.js";
+import { makeRunReport, wrappedStoreFindings } from "./run-report.fixture.js";
 
 const MB = 1024 * 1024;
 
@@ -853,5 +853,54 @@ describe("formatReport repetitions", () => {
     ]);
     expect(output).toContain("they disagreed (leak, stable)");
     expect(output).toContain("no single verdict is reported");
+  });
+});
+
+const withWrappedStore = () => {
+  const report = makeRunReport();
+  const route = report.routes.find((entry) => entry.route === "/leaky");
+  if (route?.status !== "measured") throw new Error("fixture broken");
+  Object.assign(route, wrappedStoreFindings());
+  return { report, route };
+};
+
+// vercel/next.js#100492: the store with an owner was the fourth finding, one
+// past what the terminal shows, behind three wrappers holding the same bytes.
+describe("findings that wrap one another", () => {
+  it("names the store, its owner and the wrappers folded into it", () => {
+    const output = formatReport(withWrappedStore().report);
+
+    expect(output).toContain(
+      "↳ grown [object] LRUCache 91.2 MB — next (default use cache handler) (framework) · 3 findings around it hold the same bytes"
+    );
+    expect(output).not.toContain("grown [object] global");
+  });
+});
+
+const withNodeComparison = () => {
+  const report = makeRunReport();
+  report.environment = {
+    ...report.environment,
+    nodeVersion: "v22.23.5",
+    comparedNodeVersions: ["v22.23.5", "v24.22.3"],
+  };
+  const route = report.routes.find((entry) => entry.route === "/leaky");
+  if (route?.status !== "measured") throw new Error("fixture broken");
+  route.nodeVersions = [
+    { version: "v22.23.5", status: "measured", verdict: "leak", growthPer1000Requests: 0.54 * 1024 * 1024, heldBytes: 747.5 * 1024 * 1024 },
+    { version: "v24.22.3", status: "measured", verdict: "stable", growthPer1000Requests: 0, heldBytes: 48 * 1024 * 1024 },
+  ];
+  return { report, route };
+};
+
+describe("a route measured on several Node versions", () => {
+  it("prints each version's verdict and what it held", () => {
+    const output = formatReport(withNodeComparison().report);
+
+    expect(output).toContain("      by Node version: v22.23.5 leak, holds 747.5 MB · v24.22.3 stable, holds 48.0 MB — the versions differ");
+  });
+
+  it("prints nothing about versions on an ordinary run", () => {
+    expect(formatReport(makeRunReport())).not.toContain("by Node version");
   });
 });

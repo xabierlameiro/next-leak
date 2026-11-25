@@ -363,6 +363,22 @@ describe("noise floor auditing", () => {
     expect(codesOf(result)).toEqual(["near-threshold"]);
   });
 
+  it("names the flag that raises the traffic per cycle", () => {
+    // The advice used to name --load-requests, which the CLI does not accept.
+    const result = assessConfidence(
+      input({
+        trend: trend({
+          growthPerCycle: 1.5 * MIN_GROWTH,
+          deltas: Array.from({ length: 5 }, () => 1.5 * MIN_GROWTH),
+        }),
+      })
+    );
+    const detail = result.warnings.find((warning) => warning.code === "near-threshold")?.detail;
+
+    expect(detail).toContain("raise --requests");
+    expect(detail).not.toContain("--load-requests");
+  });
+
   it("does not apply the noise floor to a stable verdict", () => {
     const result = assessConfidence(
       input({ trend: trend({ verdict: "stable", growthPerCycle: 1 * KB, deltas: [1 * KB, 0] }) })

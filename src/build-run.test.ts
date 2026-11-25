@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -11,6 +11,8 @@ const MB = 1024 * 1024;
 const BUILD_PID = 4242;
 const WORKER_PID = 4243;
 const WORKER_COMMAND = "/bin/node /repo/node_modules/next/dist/compiled/jest-worker/processChild.js";
+const POOL_COMMAND =
+  "node /repo/.next/build/chunks/pool_entry-[turbopack-node]_transforms_webpack-loaders_ts._.js";
 
 async function makeProject(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "next-leak-build-run-"));
@@ -56,6 +58,8 @@ function makeDeps(
     onSignal?: (pid: number) => void;
     /** From this poll on, the worker pid is reported outside the build tree. */
     detachAfterPoll?: number;
+    /** Turbopack pool processes alive at each poll, children of the build. */
+    poolsPerPoll?: number[];
   } = {}
 ): BuildRunDeps {
   let poll = 0;
@@ -84,10 +88,16 @@ function makeDeps(
       const workerRow = detached
         ? `${WORKER_PID} 1 ${workerRss * 1024} /usr/bin/unrelated\n`
         : `${WORKER_PID} ${BUILD_PID} ${workerRss * 1024} ${WORKER_COMMAND}\n`;
+      const pools = options.poolsPerPoll?.[poll - 1] ?? 0;
+      const poolRows = Array.from(
+        { length: pools },
+        (_, index) =>
+          `${6000 + index} ${BUILD_PID} ${60 * 1024} ${POOL_COMMAND}\n`
+      ).join("");
       return {
         ok: true,
         rows: parseProcessTable(
-          options.noWorker === true ? parentRow : `${parentRow}${workerRow}`
+          (options.noWorker === true ? parentRow : `${parentRow}${workerRow}`) + poolRows
         ),
       };
     },
@@ -390,5 +400,90 @@ describe("runBuildMeasurement capture", () => {
 
     // A snapshot up there is written, costs the disk, and cannot be read back.
     expect(signalled).toEqual([]);
+  });
+});
+
+// vercel/next.js#100064: compilation spawned 104 Turbopack pool processes on
+// 16.4.0 while the static-generation workers it judges stayed near 100 MB. The
+// tree is recorded so the report can say so; the verdict still reads workers.
+describe("runBuildMeasurement records the whole tree", () => {
+  it("sums the build, its workers and its pools on every poll", async () => {
+    const appDir = await makeProject();
+    const result = await runBuildMeasurement(
+      { appDir },
+      makeDeps([100, 110, 115, 116], { parentMb: [1200], poolsPerPoll: [0, 50, 104, 2] })
+    );
+
+    expect(result.treeSamples.map((sample) => sample.poolProcesses)).toEqual([0, 50, 104, 2]);
+    expect(result.treeSamples.map((sample) => sample.processes)).toEqual([2, 52, 106, 4]);
+    const peak = result.treeSamples[2];
+    expect(peak?.rssBytes).toBe((1200 + 115 + 104 * 60) * MB);
+    expect(peak?.poolRssBytes).toBe(104 * 60 * MB);
+  });
+
+  it("leaves the worker verdict to the workers", async () => {
+    const appDir = await makeProject();
+    const quiet = await runBuildMeasurement({ appDir }, makeDeps([100, 110, 115, 116]));
+    const crowded = await runBuildMeasurement(
+      { appDir },
+      makeDeps([100, 110, 115, 116], { poolsPerPoll: [104, 104, 104, 104] })
+    );
+
+    expect(crowded.verdict).toBe(quiet.verdict);
+    expect(crowded.peakWorkerRssBytes).toBe(quiet.peakWorkerRssBytes);
+  });
+
+  it("keeps the tree when no worker ever ran", async () => {
+    // Compilation is where #97802 and #100064 spend their memory; a build that
+    // dies there has no worker, and the tree is all the evidence there is.
+    const appDir = await makeProject();
+    const result = await runBuildMeasurement(
+      { appDir },
+      makeDeps([0, 0], { noWorker: true, exitCode: 1, poolsPerPoll: [57, 57] })
+    );
+
+    expect(result.status).toBe("build-failed");
+    expect(result.treeSamples.map((sample) => sample.poolProcesses)).toEqual([57, 57]);
+  });
+});
+
+describe("runBuildMeasurement with a warm compiler cache", () => {
+  it("warns before building and carries the warning into the result", async () => {
+    const appDir = await makeProject();
+    await mkdir(path.join(appDir, ".next", "cache", "turbopack"), { recursive: true });
+    await writeFile(path.join(appDir, ".next", "cache", "turbopack", "00001.sst"), "x");
+    const progress: string[] = [];
+
+    const result = await runBuildMeasurement(
+      { appDir, onProgress: (line) => progress.push(line) },
+      makeDeps([100, 110, 115, 116])
+    );
+
+    expect(result.warmCacheWarning).toContain(".next/cache/turbopack");
+    const warned = progress.findIndex((line) => line.includes(".next/cache/turbopack"));
+    const built = progress.findIndex((line) => line.startsWith("building "));
+    expect(warned).toBeGreaterThanOrEqual(0);
+    expect(warned).toBeLessThan(built);
+  });
+
+  it("carries no warning for a cold project", async () => {
+    const appDir = await makeProject();
+    const result = await runBuildMeasurement({ appDir }, makeDeps([100, 110, 115, 116]));
+
+    expect(result.warmCacheWarning).toBeNull();
+  });
+
+  it("keeps the warning on a build that failed", async () => {
+    const appDir = await makeProject();
+    await mkdir(path.join(appDir, ".next", "cache", "webpack"), { recursive: true });
+    await writeFile(path.join(appDir, ".next", "cache", "webpack", "pack"), "x");
+
+    const result = await runBuildMeasurement(
+      { appDir },
+      makeDeps([0], { noWorker: true, exitCode: 1 })
+    );
+
+    expect(result.status).toBe("build-failed");
+    expect(result.warmCacheWarning).toContain(".next/cache/webpack");
   });
 });

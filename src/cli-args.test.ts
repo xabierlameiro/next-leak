@@ -27,6 +27,7 @@ describe("parseCliArgs", () => {
         routes: null,
         cycles: null,
         repeat: null,
+        node: null,
         requests: null,
         connections: null,
         idleSeconds: null,
@@ -46,7 +47,7 @@ describe("parseCliArgs", () => {
 
   it("parses every flag", () => {
     const parsed = parseCliArgs([
-      "app", "--routes", "/api,/dashboard", "--cycles", "6", "--repeat", "3", "--requests", "1000",
+      "app", "--routes", "/api,/dashboard", "--cycles", "6", "--repeat", "3", "--node", "/opt/node22/bin/node", "--requests", "1000",
       "--connections", "20", "--idle", "8", "--warmup", "50", "--max-old-space", "2048",
       "--ready-timeout", "120", "--quick",
       "--diff-all", "--no-resolve", "--self-check", "--write-config", "--output", "/tmp/out",
@@ -59,6 +60,7 @@ describe("parseCliArgs", () => {
       routes: ["/api", "/dashboard"],
       cycles: 6,
       repeat: 3,
+      node: ["/opt/node22/bin/node"],
       requests: 1000,
       connections: 20,
       idleSeconds: 8,
@@ -379,5 +381,50 @@ describe("--warmup", () => {
   it("rejects nonsense like every other numeric flag", () => {
     expect(parseCliArgs(["/app", "--warmup", "0"]).kind).toBe("error");
     expect(parseCliArgs(["/app", "--warmup", "abc"]).kind).toBe("error");
+  });
+});
+
+describe("--node", () => {
+  it("takes one or more binaries, made absolute when given as a path", () => {
+    const parsed = parseCliArgs(["app", "--node", "/opt/node22/bin/node, ./bin/node,node"]);
+    if (parsed.kind !== "run") throw new Error(`expected run, got ${parsed.kind}`);
+
+    expect(parsed.options.node).toEqual([
+      "/opt/node22/bin/node",
+      path.resolve("./bin/node"),
+      "node",
+    ]);
+  });
+
+  it("needs at least one binary", () => {
+    expect(parseCliArgs(["app", "--node", " , "])).toEqual({
+      kind: "error",
+      message: 'option "--node" needs at least one path to a Node binary',
+    });
+  });
+
+  it("refuses several binaries with --repeat", () => {
+    const parsed = parseCliArgs(["app", "--node", "/a/node,/b/node", "--repeat", "2"]);
+
+    expect(parsed.kind).toBe("error");
+    expect(parsed.kind === "error" && parsed.message).toContain("cannot be combined");
+  });
+
+  it("allows one binary with --repeat, and several with --repeat 1", () => {
+    expect(parseCliArgs(["app", "--node", "/a/node", "--repeat", "2"]).kind).toBe("run");
+    expect(parseCliArgs(["app", "--node", "/a/node,/b/node", "--repeat", "1"]).kind).toBe("run");
+  });
+
+  it("is refused by the build command like any run-only option", () => {
+    const parsed = parseCliArgs(["build", "app", "--node", "/a/node"]);
+
+    expect(parsed).toEqual({
+      kind: "error",
+      message: 'option "--node" shapes HTTP load and does not apply to "next-leak build" — see --help',
+    });
+  });
+
+  it("is listed in --help", () => {
+    expect(helpText("0.0.0")).toContain("--node <paths>");
   });
 });

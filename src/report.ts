@@ -1,6 +1,8 @@
 import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendResult, type TrendVerdict } from "./trend.js";
+import { enclosingNote, shownFindings } from "./finding-selection.js";
+import { nodeComparisonText } from "./node-comparison.js";
 import {
   effectiveVerdict,
   resolveCycles,
@@ -143,6 +145,11 @@ function repetitionLines(route: MeasuredRouteView): string[] {
   return [`      across ${repetitions.length} repetitions: ${range} — ${agreement}`];
 }
 
+function nodeVersionLines(route: MeasuredRouteView): string[] {
+  const text = nodeComparisonText(route.nodeVersions);
+  return text === null ? [] : [`      ${text}`];
+}
+
 function cacheLines(route: MeasuredRouteView): string[] {
   const lines: string[] = [];
   if (route.trend.verdict === "saturating") {
@@ -283,15 +290,14 @@ function diffFindingLines(route: MeasuredRouteView): string[] {
   if (route.diff === null) {
     return [];
   }
-  const findings = [...route.diff.grownNodes, ...route.diff.newNodes];
-  return findings.slice(0, 3).map((finding, index) => {
+  return shownFindings(route.diff).slice(0, 3).map(({ finding, index, enclosing }) => {
     const size = formatMb(finding.retainedBytes);
     const attribution = route.attribution?.findings[index];
     const owner = attribution === undefined ? null : ownerLabel(attribution);
     const detail = owner ?? (finding.retainerChain === "" ? "" : finding.retainerChain);
     return `      ↳ ${finding.kind} [${finding.nodeType}] ${finding.name} ${size}${
       detail === "" ? "" : ` — ${detail}`
-    }`;
+    }${enclosingNote(enclosing)}`;
   });
 }
 
@@ -382,6 +388,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
       route.growthPer1000Requests
     )})  heap ${curve}${resolved}`,
     ...repetitionLines(route),
+    ...nodeVersionLines(route),
     ...revalidationLines(route),
     ...cacheLines(route),
     ...pressureLines(verdict, route.trend),

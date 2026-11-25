@@ -64,6 +64,7 @@ describe("what the reports write to the terminal", () => {
       levels: [],
       workers: [],
       parentSamples: [],
+      treeSamples: [],
       peakWorkerRssBytes: 0,
       netGrowthBytes: 0,
       pagesGenerated: null,
@@ -73,6 +74,7 @@ describe("what the reports write to the terminal", () => {
       captureRequested: false,
       captureFailure: null,
       strippedCapWarning: null,
+      warmCacheWarning: null,
       exitCode: 1,
       output: `${ESC}[31mType error${ESC}[39m: nope\r\n${ESC}]0;owned${BEL}done`,
     };

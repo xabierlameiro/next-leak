@@ -13,6 +13,7 @@ const baseResult: BuildRunResult = {
   levels: [1070, 1400, 1930, 2380, 2700, 2960].map((value) => value * MB),
   workers: [{ pid: 97155, samples: [] }],
   parentSamples: [],
+  treeSamples: [],
   peakWorkerRssBytes: 2960 * MB,
   netGrowthBytes: 1560 * MB,
   pagesGenerated: 1700,
@@ -22,6 +23,7 @@ const baseResult: BuildRunResult = {
   captureRequested: false,
   captureFailure: null,
   strippedCapWarning: null,
+  warmCacheWarning: null,
   exitCode: 1,
   output: "",
 };
@@ -287,5 +289,140 @@ describe("the build's own process", () => {
 
     expect(output).toContain("static-generation worker  leak");
     expect(output).toContain("peak worker rss 2960.0 MB");
+  });
+});
+
+// vercel/next.js#100064 on 16.4.0, 2026-11-25: 104 Turbopack pool processes
+// and 7.56 GiB across the tree while the workers peaked at 115.9 MB, and the
+// report said only that the build was too short to judge.
+describe("the whole build tree", () => {
+  const tree = (
+    points: ReadonlyArray<readonly [number, number, number, number]>
+  ): BuildRunResult["treeSamples"] =>
+    points.map(([rss, processes, pools, poolRss], index) => ({
+      atMs: index * 500,
+      rssBytes: rss * MB,
+      processes,
+      poolProcesses: pools,
+      poolRssBytes: poolRss * MB,
+    }));
+
+  it("reports the tree peak and the pools behind it", () => {
+    const output = formatBuildReport({
+      ...baseResult,
+      treeSamples: tree([
+        [1500, 4, 0, 0],
+        [7741, 108, 104, 6175],
+        [1400, 5, 2, 120],
+      ]),
+    });
+
+    expect(output).toContain("whole build tree peaked at 7741.0 MB across 108 processes");
+    expect(output).toContain("up to 104 of them were Turbopack Node.js pools");
+    expect(output).toContain("holding 6175.0 MB between them");
+    expect(output).toContain("reported, not judged");
+  });
+
+  it("names the poll with the most pools, which need not be the tree peak", () => {
+    const output = formatBuildReport({
+      ...baseResult,
+      treeSamples: tree([
+        [3000, 60, 57, 3300],
+        [3500, 6, 2, 100],
+      ]),
+    });
+
+    expect(output).toContain("peaked at 3500.0 MB across 6 processes");
+    expect(output).toContain("up to 57 of them");
+  });
+
+  it("does not mention pools on a build that started none", () => {
+    const output = formatBuildReport({ ...baseResult, treeSamples: tree([[1500, 4, 0, 0]]) });
+
+    expect(output).toContain("whole build tree peaked at 1500.0 MB");
+    expect(output).not.toContain("Turbopack");
+  });
+
+  it("says nothing when the tree was never sampled", () => {
+    expect(formatBuildReport(baseResult)).not.toContain("whole build tree");
+  });
+
+  it("reports the tree on a failed build and on one with no worker", () => {
+    const samples = tree([[4880, 60, 57, 3370]]);
+    const failed = formatBuildReport({
+      ...baseResult,
+      status: "build-failed",
+      treeSamples: samples,
+    });
+    const empty = formatBuildReport({
+      ...baseResult,
+      status: "nothing-to-measure",
+      treeSamples: samples,
+    });
+
+    expect(failed).toContain("up to 57 of them were Turbopack Node.js pools");
+    expect(empty).toContain("up to 57 of them were Turbopack Node.js pools");
+  });
+
+  it("leaves the worker verdict untouched", () => {
+    const output = formatBuildReport({
+      ...baseResult,
+      treeSamples: tree([[7741, 108, 104, 6175]]),
+    });
+
+    expect(output).toContain("static-generation worker  leak");
+    expect(output).toContain("peak worker rss 2960.0 MB");
+  });
+});
+
+describe("a build Next stopped for a security upgrade", () => {
+  const stopped: BuildRunResult = {
+    ...baseResult,
+    status: "build-failed",
+    exitCode: 1,
+    output:
+      "> Build error occurred\nError [SecurityFatalError]: Your version of Next.js is affected by a known security vulnerability.\n",
+  };
+
+  it("explains the stop and how to get past it", () => {
+    const output = formatBuildReport(stopped);
+
+    expect(output).toContain("failed for a reason that is not memory");
+    expect(output).toContain("Next stopped the build to recommend a security upgrade");
+    expect(output).toContain("when it detects an AI agent");
+    expect(output).toContain("next-agentic-upgrade-retries");
+    expect(output).toContain("re-run without deleting");
+  });
+
+  it("says nothing about it on any other failure", () => {
+    const output = formatBuildReport({ ...stopped, output: "Type error: x is not assignable" });
+
+    expect(output).not.toContain("security upgrade");
+  });
+});
+
+describe("a warm compiler cache", () => {
+  const warning =
+    ".next/cache/turbopack holds a compiler cache from an earlier build, so compilation may be served from it rather than measured. Delete .next/cache/turbopack (not the rest of .next/cache) for a cold build";
+
+  it("leads the report, before the verdict", () => {
+    const output = formatBuildReport({ ...baseResult, warmCacheWarning: warning });
+
+    expect(output).toContain(`▲ ${warning}`);
+    expect(output.indexOf(warning)).toBeLessThan(output.indexOf("static-generation worker"));
+  });
+
+  it("is reported on a failed build as well", () => {
+    const output = formatBuildReport({
+      ...baseResult,
+      status: "build-failed",
+      warmCacheWarning: warning,
+    });
+
+    expect(output).toContain(warning);
+  });
+
+  it("is absent when the build compiled cold", () => {
+    expect(formatBuildReport(baseResult)).not.toContain("compiler cache");
   });
 });

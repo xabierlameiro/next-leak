@@ -3,7 +3,7 @@ import {
   type BuildAttribution,
   type BuildAttributionGap,
 } from "./build-attribution.js";
-import type { BuildRunResult } from "./build-run.js";
+import type { BuildRunResult, TreeSample } from "./build-run.js";
 import { terminalSafe } from "./terminal-text.js";
 
 const MB = 1024 * 1024;
@@ -111,11 +111,16 @@ function buildReportText(
   if (result.strippedCapWarning !== null) {
     lines.push(`  ▲ ${result.strippedCapWarning}`, "");
   }
+  if (result.warmCacheWarning !== null) {
+    lines.push(`  ▲ ${result.warmCacheWarning}`, "");
+  }
 
   if (result.status === "build-failed") {
     lines.push(
       `  ✖ the build failed for a reason that is not memory (exit ${result.exitCode ?? "?"})`,
       `      no memory claim is made; the build's own output follows`,
+      ...securityStopLines(result),
+      ...treePeakLines(result),
       "",
       ...result.output.trimEnd().split("\n").slice(-20).map((line) => `      ${line}`)
     );
@@ -164,10 +169,69 @@ function parentPeakLines(result: BuildRunResult): string[] {
   ];
 }
 
+/**
+ * What the whole process tree reached, next to the two figures above and never
+ * mixed into them.
+ *
+ * Compilation does not happen in a worker. On the vercel/next.js#100064
+ * reproduction, 16.4.0 spawned a Turbopack Node.js pool per loader chain and
+ * context: 104 processes and 7.56 GiB across the tree on four cores, while the
+ * workers peaked at 115.9 MB and the run said the build was too short to judge.
+ * The tree figure is what a CI runner's limit is enforced against.
+ */
+function treePeakLines(result: BuildRunResult): string[] {
+  const peak = result.treeSamples.reduce<TreeSample | null>(
+    (highest, sample) => (highest === null || sample.rssBytes > highest.rssBytes ? sample : highest),
+    null
+  );
+  if (peak === null || peak.rssBytes === 0) {
+    return [];
+  }
+  const lines = [
+    `      the whole build tree peaked at ${mb(peak.rssBytes)} across ${peak.processes} ` +
+      `processes — reported, not judged`,
+  ];
+  const mostPools = result.treeSamples.reduce<TreeSample | null>(
+    (most, sample) =>
+      sample.poolProcesses > 0 && (most === null || sample.poolProcesses > most.poolProcesses)
+        ? sample
+        : most,
+    null
+  );
+  if (mostPools !== null) {
+    lines.push(
+      `      up to ${mostPools.poolProcesses} of them were Turbopack Node.js pools ` +
+        `(webpack loaders, PostCSS), holding ${mb(mostPools.poolRssBytes)} between them`
+    );
+  }
+  return lines;
+}
+
+/**
+ * Next refuses a clean build once when it detects an AI agent and the
+ * installed version has a security advisory, and lets the same command through
+ * on a retry while a receipt in `.next/cache/next-agentic-upgrade-retries`
+ * survives. Deleting `.next` between runs, which a clean measurement wants,
+ * deletes the receipt, so the build fails every time. Measured on the
+ * vercel/next.js#100064 reproduction on 16.4.0, 2026-11-25.
+ */
+function securityStopLines(result: BuildRunResult): string[] {
+  if (!result.output.includes("SecurityFatalError")) {
+    return [];
+  }
+  return [
+    `      Next stopped the build to recommend a security upgrade: it does this once`,
+    `      per clean build when it detects an AI agent, and lets a retry through while`,
+    `      .next/cache/next-agentic-upgrade-retries survives — re-run without deleting`,
+    `      .next/cache`,
+  ];
+}
+
   if (result.status === "nothing-to-measure") {
     lines.push(
       `  – no static-generation worker ran, so there was nothing to measure`,
-      `      a build with no prerendered pages does not exercise this path`
+      `      a build with no prerendered pages does not exercise this path`,
+      ...treePeakLines(result)
     );
     return lines.join("\n");
   }
@@ -202,6 +266,7 @@ function parentPeakLines(result: BuildRunResult): string[] {
   lines.push(
     ...attributionLines(attribution),
     ...parentPeakLines(result),
+    ...treePeakLines(result),
     "",
     `  peak worker rss ${mb(result.peakWorkerRssBytes)} · sampled from the process tree, so a`,
     `  spike shorter than the polling interval is not observed`

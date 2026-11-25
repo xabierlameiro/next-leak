@@ -81,6 +81,19 @@ export function descendantsOf(rows: readonly ProcessRow[], rootPid: number): Pro
   return [...found.values()];
 }
 
+/**
+ * A Turbopack Node.js pool process: where webpack loaders and PostCSS run
+ * during compilation. Each is a full Node runtime, spawned from the build's
+ * own process and named after the pool's entry chunk
+ * (`pool_entry-[turbopack-node]_transforms_webpack-loaders`).
+ */
+const TURBOPACK_POOL_MARKER = "pool_entry";
+
+/** Whether a row is a Turbopack Node.js pool process. */
+export function isTurbopackPoolProcess(row: ProcessRow): boolean {
+  return row.command.includes(TURBOPACK_POOL_MARKER);
+}
+
 /** Whether a row is one of the build's static-generation workers. */
 export function isStaticGenWorker(row: ProcessRow): boolean {
   return row.command.includes(STATIC_WORKER_MARKER);

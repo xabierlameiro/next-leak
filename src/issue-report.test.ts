@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderIssueMarkdown } from "./issue-report.js";
 import type { MeasuredRoute } from "./runner.js";
-import { makeRunReport } from "./run-report.fixture.js";
+import { makeRunReport, wrappedStoreFindings } from "./run-report.fixture.js";
 
 function leakyRoute(): MeasuredRoute {
   const route = makeRunReport().routes.find(
@@ -372,5 +372,59 @@ describe("cache-driven disclosure", () => {
   it("says nothing about caches on a route that was not cache-driven", () => {
     const markdown = renderIssueMarkdown(leakyRoute(), makeRunReport());
     expect(markdown).not.toContain("cache keys it had never served");
+  });
+});
+
+const withWrappedStore = () => {
+  const report = makeRunReport();
+  const route = report.routes.find((entry) => entry.route === "/leaky");
+  if (route?.status !== "measured") throw new Error("fixture broken");
+  Object.assign(route, wrappedStoreFindings());
+  return { report, route };
+};
+
+describe("findings that wrap one another", () => {
+  it("puts the store first in the evidence, with its owner", () => {
+    const { report, route } = withWrappedStore();
+    const markdown = renderIssueMarkdown(route as MeasuredRoute, report);
+
+    expect(markdown).toContain("`[object] LRUCache` 91.24 MB retained");
+    expect(markdown).toContain("· 3 findings around it hold the same bytes");
+    expect(markdown).not.toContain("`[object] global`");
+  });
+});
+
+const withNodeComparison = () => {
+  const report = makeRunReport();
+  report.environment = {
+    ...report.environment,
+    nodeVersion: "v22.23.5",
+    comparedNodeVersions: ["v22.23.5", "v24.22.3"],
+  };
+  const route = report.routes.find((entry) => entry.route === "/leaky");
+  if (route?.status !== "measured") throw new Error("fixture broken");
+  route.nodeVersions = [
+    { version: "v22.23.5", status: "measured", verdict: "leak", growthPer1000Requests: 0.54 * 1024 * 1024, heldBytes: 747.5 * 1024 * 1024 },
+    { version: "v24.22.3", status: "measured", verdict: "stable", growthPer1000Requests: 0, heldBytes: 48 * 1024 * 1024 },
+  ];
+  return { report, route };
+};
+
+describe("a route measured on several Node versions", () => {
+  it("names the version measured and the ones compared, and the comparison", () => {
+    const { report, route } = withNodeComparison();
+    const markdown = renderIssueMarkdown(route as MeasuredRoute, report);
+
+    expect(markdown).toContain("Node.js: v22.23.5 (compared with v24.22.3)");
+    expect(markdown).toContain("Measured on more than one Node version, by Node version: v22.23.5 leak, holds 747.5 MB · v24.22.3 stable, holds 48.0 MB — the versions differ.");
+  });
+
+  it("names only the version on an ordinary run", () => {
+    const report = makeRunReport();
+    const route = report.routes.find((entry) => entry.route === "/leaky");
+    const markdown = renderIssueMarkdown(route as MeasuredRoute, report);
+
+    expect(markdown).toContain("Node.js: v24.15.0\n");
+    expect(markdown).not.toContain("more than one Node version");
   });
 });

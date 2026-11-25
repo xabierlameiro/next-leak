@@ -10,6 +10,7 @@ import { runBuildMeasurement } from "./build-run.js";
 import { discardPendingSnapshotsSync } from "./build-snapshot.js";
 import { helpText, parseCliArgs, type ParsedCli } from "./cli-args.js";
 import { checkRuntime } from "./guards.js";
+import { NodeBinaryError, resolveNodeBinaries, type NodeBinary } from "./node-binaries.js";
 import { runSelfCheck } from "./self-check.js";
 import { killActiveChildren } from "./launcher.js";
 import { formatReport } from "./report.js";
@@ -209,6 +210,23 @@ async function main(): Promise<void> {
     : {};
   const bootstrapPath = fileURLToPath(new URL("./bootstrap.js", import.meta.url));
 
+  let nodeBinaries: NodeBinary[] | undefined;
+  if (options.node !== null) {
+    try {
+      nodeBinaries = await resolveNodeBinaries(options.node);
+    } catch (cause) {
+      if (!(cause instanceof NodeBinaryError)) {
+        throw cause;
+      }
+      console.error(`error: ${terminalSafe(cause.message)}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.error(
+      `· measured server runs on Node ${nodeBinaries.map((binary) => binary.version).join(", ")}`
+    );
+  }
+
   // Run before the app, not after: a harness that cannot see its own planted
   // leak makes every verdict that follows worthless, and measuring the app
   // first would spend the time to produce them anyway.
@@ -241,6 +259,7 @@ async function main(): Promise<void> {
     ...(options.routes !== null && { routeFilter: options.routes }),
     ...(options.cycles !== null && { cycles: options.cycles }),
     ...(options.repeat !== null && { repeat: options.repeat }),
+    ...(nodeBinaries !== undefined && { nodeBinaries }),
     ...(options.requests !== null && { loadRequests: options.requests }),
     ...(options.connections !== null && { connections: options.connections }),
     ...(options.idleSeconds !== null && { idleMs: options.idleSeconds * 1000 }),
