@@ -1,5 +1,6 @@
 import { effectiveVerdict, withdrawnByDisagreement } from "./confidence.js";
 import { enclosingNote, shownFindings } from "./finding-selection.js";
+import { nodeComparisonText } from "./node-comparison.js";
 import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
 import type { TrendVerdict } from "./trend.js";
@@ -172,6 +173,7 @@ function measuredSection(route: RouteReport, parameters: RunParameters): string 
     `<code>${escapeHtml(route.route)}</code></h2>` +
     heapCurveSvg(route.samples, color) +
     `<p class="curve">heap ${curve} MB · ${(route.growthPer1000Requests / MB).toFixed(2)} MB/1000 req</p>` +
+    nodeComparisonBlock(route) +
     withdrawn +
     warnings +
     peakBlock(route, parameters) +
@@ -183,6 +185,11 @@ function measuredSection(route: RouteReport, parameters: RunParameters): string 
 }
 
 /** Self-contained report page: renders offline, from file://, no requests. */
+function nodeComparisonBlock(route: Extract<RouteReport, { status: "measured" }>): string {
+  const text = nodeComparisonText(route.nodeVersions);
+  return text === null ? "" : `<p class="curve">${escapeHtml(text)}</p>`;
+}
+
 export function renderHtmlReport(run: RunReport): string {
   const measured = run.routes.filter((route) => route.status === "measured");
   const skipped = run.routes.filter((route) => route.status === "skipped");
@@ -207,7 +214,7 @@ code{background:#f4f4f4;padding:0 4px;border-radius:3px}
 </style></head><body>
 <h1>next-leak report</h1>
 <p class="meta">${escapeHtml(run.appDir)} · ${escapeHtml(run.startedAt)} · node ${escapeHtml(
-    environment.nodeVersion
+    environment.comparedNodeVersions?.join(" vs ") ?? environment.nodeVersion
   )} · ${escapeHtml(environment.platform)}/${escapeHtml(environment.arch)} · next ${escapeHtml(
     environment.nextVersion ?? "unknown"
   )} · next-leak ${escapeHtml(environment.nextLeakVersion)}</p>

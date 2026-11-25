@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { FindingAttribution } from "./attribution.js";
 import { enclosingNote, shownFindings } from "./finding-selection.js";
+import { nodeComparisonText } from "./node-comparison.js";
 import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import type { MeasuredRoute, RunReport } from "./runner.js";
 
@@ -110,6 +111,11 @@ function evidenceRows(route: MeasuredRoute): string {
     .join("\n");
 }
 
+function nodeComparisonParagraph(route: MeasuredRoute): string {
+  const text = nodeComparisonText(route.nodeVersions);
+  return text === null ? "" : `\n\nMeasured on more than one Node version, ${text}.`;
+}
+
 /**
  * Issue draft in the Next.js bug-template section order. The attribution
  * gates the preamble: app/dependency-owned leaks warn against filing
@@ -200,7 +206,11 @@ the raw heap snapshots referenced at the bottom.
 ### Provide environment information
 
 \`\`\`
-Node.js: ${environment.nodeVersion}
+Node.js: ${environment.nodeVersion}${
+    environment.comparedNodeVersions === undefined
+      ? ""
+      : ` (compared with ${environment.comparedNodeVersions.filter((version) => version !== environment.nodeVersion).join(", ")})`
+  }
 OS: ${environment.platform} ${environment.arch}${environment.cpuModel ? ` (${environment.cpuModel})` : ""}
 Memory: ${(environment.totalMemoryBytes / (1024 * MB)).toFixed(0)} GB
 Next.js: ${environment.nextVersion ?? "unknown"}
@@ -224,7 +234,7 @@ Deployment: output "standalone", node --expose-gc --max-old-space-size=${paramet
 
 **Current:** retained heap after forced GC keeps growing every cycle —
 ${curve} MB (per-cycle deltas ${deltas} MB), ≈ **${(route.growthPer1000Requests / MB).toFixed(2)} MB per 1000 requests**.
-The first cycle is excluded from the verdict (engine warm-up).
+The first cycle is excluded from the verdict (engine warm-up).${nodeComparisonParagraph(route)}
 
 **Expected:** retained heap flattens after warm-up (plateau), as measured on this app's healthy routes.
 

@@ -370,3 +370,28 @@ describe("findings that wrap one another", () => {
     expect(html).not.toContain("<td>global</td>");
   });
 });
+
+const withNodeComparison = () => {
+  const report = makeRunReport();
+  report.environment = {
+    ...report.environment,
+    nodeVersion: "v22.23.5",
+    comparedNodeVersions: ["v22.23.5", "v24.22.3"],
+  };
+  const route = report.routes.find((entry) => entry.route === "/leaky");
+  if (route?.status !== "measured") throw new Error("fixture broken");
+  route.nodeVersions = [
+    { version: "v22.23.5", status: "measured", verdict: "leak", growthPer1000Requests: 0.54 * 1024 * 1024, heldBytes: 747.5 * 1024 * 1024 },
+    { version: "v24.22.3", status: "measured", verdict: "stable", growthPer1000Requests: 0, heldBytes: 48 * 1024 * 1024 },
+  ];
+  return { report, route };
+};
+
+describe("a route measured on several Node versions", () => {
+  it("shows the comparison and every version in the header", () => {
+    const html = renderHtmlReport(withNodeComparison().report);
+
+    expect(html).toContain("by Node version: v22.23.5 leak, holds 747.5 MB · v24.22.3 stable, holds 48.0 MB — the versions differ");
+    expect(html).toContain("node v22.23.5 vs v24.22.3");
+  });
+});

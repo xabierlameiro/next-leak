@@ -1754,3 +1754,180 @@ describe("confirming a borderline leak from a fresh server", () => {
     expect(route.repetitions).toBeUndefined();
   });
 });
+
+// vercel/next.js#97938, 16.3.6: the same build held about 650 MB after 300
+// requests on Node 22.23 and nothing on Node 24.22.
+describe("measuring on chosen Node binaries", () => {
+  const NODE22 = { path: "/opt/node22/bin/node", version: "v22.23.5" };
+  const NODE24 = { path: "/opt/node24/bin/node", version: "v24.22.3" };
+
+  async function run(
+    nodeBinaries: Array<{ path: string; version: string }>,
+    pass: (nodePath: string | undefined, call: number) => { verdict: "leak" | "stable"; growth: number; heldMb: number }
+  ) {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const seen: Array<{ nodePath: string | undefined; workDir: string }> = [];
+    const progress: string[] = [];
+    let call = 0;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", nodeBinaries, onProgress: (line) => progress.push(line) },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          seen.push({ nodePath: options.nodePath, workDir: options.workDir });
+          const outcome = pass(options.nodePath, call);
+          call += 1;
+          const base = ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return {
+            ...base,
+            memorySamples: base.memorySamples.map((sample, index, all) =>
+              index === all.length - 1 ? { ...sample, heapUsed: outcome.heldMb * MB, external: 0 } : sample
+            ),
+            trend: { verdict: outcome.verdict, growthPerCycle: outcome.growth, deltas: [] },
+          };
+        },
+      }
+    );
+    return { report, seen, progress };
+  }
+
+  it("runs every measured server on the one binary given, and records its version", async () => {
+    const { report, seen } = await run([NODE22], () => ({ verdict: "stable", growth: 0.1 * MB, heldMb: 48 }));
+
+    expect(seen.map((entry) => entry.nodePath)).toEqual([NODE22.path]);
+    expect(report.environment.nodeVersion).toBe("v22.23.5");
+    expect(report.environment.comparedNodeVersions).toBeUndefined();
+    const route = report.routes[0];
+    expect(route?.status === "measured" && route.nodeVersions).toBeUndefined();
+  });
+
+  it("keeps next-leak's own Node when no binary is given", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let nodePath: string | undefined = "unset";
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          nodePath = options.nodePath;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    expect(nodePath).toBeUndefined();
+    expect(report.environment.nodeVersion).toBe(process.version);
+  });
+
+  it("treats an empty list like no binary at all", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    let nodePath: string | undefined = "unset";
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", nodeBinaries: [] },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          nodePath = options.nodePath;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    expect(nodePath).toBeUndefined();
+  });
+
+  it("measures once per binary, each in its own directory, and compares them", async () => {
+    const { report, seen, progress } = await run([NODE22, NODE24], (nodePath) =>
+      nodePath === NODE22.path
+        ? { verdict: "stable", growth: 0.1 * MB, heldMb: 747 }
+        : { verdict: "stable", growth: 0.1 * MB, heldMb: 48 }
+    );
+
+    expect(seen.map((entry) => entry.nodePath)).toEqual([NODE22.path, NODE24.path]);
+    expect(seen[0]?.workDir.endsWith("-node1")).toBe(true);
+    expect(seen[1]?.workDir.endsWith("-node2")).toBe(true);
+    expect(progress.some((line) => line.includes("on Node v24.22.3"))).toBe(true);
+    expect(report.environment.nodeVersion).toBe("v22.23.5");
+    expect(report.environment.comparedNodeVersions).toEqual(["v22.23.5", "v24.22.3"]);
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("expected a measured route");
+    expect(route.nodeVersions).toEqual([
+      { version: "v22.23.5", status: "measured", verdict: "stable", growthPer1000Requests: expect.any(Number), heldBytes: 747 * MB },
+      { version: "v24.22.3", status: "measured", verdict: "stable", growthPer1000Requests: expect.any(Number), heldBytes: 48 * MB },
+    ]);
+  });
+
+  it("gives each version the borderline confirmation a single run would", async () => {
+    // Node 22 is a borderline leak and gets confirmed on Node 22; Node 24 is flat.
+    const { seen, report } = await run([NODE22, NODE24], (nodePath) =>
+      nodePath === NODE22.path
+        ? { verdict: "leak", growth: 0.3 * MB, heldMb: 60 }
+        : { verdict: "stable", growth: 0.1 * MB, heldMb: 48 }
+    );
+
+    expect(seen.map((entry) => entry.nodePath)).toEqual([NODE22.path, NODE22.path, NODE24.path]);
+    expect(seen[1]?.workDir.endsWith("-node1-confirm")).toBe(true);
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("expected a measured route");
+    expect(route.nodeVersions?.map((entry) => entry.verdict)).toEqual(["leak", "stable"]);
+  });
+
+  it("stops comparing after an interrupt and keeps what ran", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const controller = new AbortController();
+    const seen: Array<string | undefined> = [];
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", nodeBinaries: [NODE22, NODE24], signal: controller.signal },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          seen.push(options.nodePath);
+          controller.abort();
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    const route = report.routes[0];
+
+    expect(seen).toEqual([NODE22.path]);
+    expect(route?.status === "measured" && route.nodeVersions?.map((entry) => entry.version)).toEqual([
+      "v22.23.5",
+    ]);
+  });
+
+  it("reports the first version's failure as the route's result", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", nodeBinaries: [NODE22, NODE24] },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          if (options.nodePath === NODE22.path) throw new Error("port race lost");
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    expect(report.routes[0]?.status).toBe("failed");
+    // A failure carries no comparison: there is no headline result to set it beside.
+    expect(report.routes[0] !== undefined && "nodeVersions" in report.routes[0]).toBe(false);
+  });
+
+  it("records a later version that did not measure", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", nodeBinaries: [NODE22, NODE24] },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          if (options.nodePath === NODE24.path) throw new Error("port race lost");
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("expected a measured route");
+
+    expect(route.nodeVersions?.[1]).toEqual({ version: "v24.22.3", status: "failed" });
+  });
+});

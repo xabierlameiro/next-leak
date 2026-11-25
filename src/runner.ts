@@ -14,6 +14,7 @@ import {
 } from "./confidence.js";
 import type { HeapSample } from "./control-server.js";
 import { captureEnvironment, type MeasurementEnvironment } from "./environment.js";
+import type { NodeBinary } from "./node-binaries.js";
 import { diffSnapshotFiles, SnapshotError, type HeapDiff } from "./heap-diff.js";
 import { DEFAULT_MAX_OLD_SPACE_MB } from "./launcher.js";
 import {
@@ -49,6 +50,17 @@ export type RepetitionSummary = {
   verdict: TrendVerdict;
   /** Growth normalized by traffic, so repetitions stay comparable. */
   growthPer1000Requests: number;
+};
+
+/** One Node version's result for a route, when a run compared several. */
+export type NodeVersionResult = {
+  version: string;
+  status: RouteReport["status"];
+  /** The verdict as reported, after the audit. Absent when the route did not measure. */
+  verdict?: TrendVerdict;
+  growthPer1000Requests?: number;
+  /** Heap plus external memory after the last cycle. */
+  heldBytes?: number;
 };
 
 export type RouteReport =
@@ -118,6 +130,8 @@ export type RouteReport =
        * its existing shape unless repetition was asked for.
        */
       repetitions?: RepetitionSummary[];
+      /** One entry per `--node` binary, in order, when the run compared several. */
+      nodeVersions?: NodeVersionResult[];
       /**
        * The early-disconnect regime, when the route asked for one. Recorded
        * because a curve measured with cuts landing mid-stream and one measured
@@ -281,6 +295,11 @@ export type RunOptions = {
    * variance that makes a number unpublishable is between processes.
    */
   repeat?: number;
+  /**
+   * Node binaries the measured server runs on, checked up front. Several
+   * measure each route once per binary; the first is the headline.
+   */
+  nodeBinaries?: NodeBinary[];
   /**
    * Growth the self-check measured on its planted leak, when one ran before
    * this measurement. Its presence is what lets the report say a `stable`
@@ -486,13 +505,22 @@ function skipReason(route: DiscoveredRoute, requestPath: string | null): string 
   return null;
 }
 
+/** The binary a pass runs on: its own, else the run's first, else next-leak's. */
+function nodePathOption(
+  options: RunOptions,
+  passNodePath: string | undefined
+): { nodePath?: string } {
+  const nodePath = passNodePath ?? options.nodeBinaries?.[0]?.path;
+  return nodePath === undefined ? {} : { nodePath };
+}
+
 /** Ritual, audit, diff and attribution for one route in a fresh process. */
 async function measureRoute(
   context: MeasurementContext,
   route: DiscoveredRoute,
   requestPath: string,
   index: number,
-  pass: { cycles?: number; dirSuffix: string } | undefined = undefined
+  pass: { cycles?: number; dirSuffix: string; nodePath?: string } | undefined = undefined
 ): Promise<RouteReport> {
   const { deps, options, target, workDir, routeConfig, registry, nextVersion, progress } = context;
   // An ISR route whose keys repeat serves its cache unless the request carries
@@ -521,6 +549,7 @@ async function measureRoute(
     ),
     bootstrapPath: options.bootstrapPath,
     appPort: await deps.freePort(),
+    ...nodePathOption(options, pass?.nodePath),
     ...(cacheDriven && { cacheDriven: true }),
     ...(options.warmupRequests !== undefined && { warmupRequests: options.warmupRequests }),
     ...(options.loadRequests !== undefined && { loadRequests: options.loadRequests }),
@@ -766,6 +795,10 @@ async function measureRepeatedly(
   index: number,
   label: string
 ): Promise<RouteReport> {
+  const binaries = context.options.nodeBinaries ?? [];
+  if (binaries.length > 1) {
+    return compareNodeVersions(context, route, requestPath, index, label, binaries);
+  }
   const repeat = context.options.repeat ?? 1;
   if (repeat <= 1) {
     const first = await measureWithResolution(context, route, requestPath, index, label);
@@ -785,6 +818,73 @@ async function measureRepeatedly(
     }
   }
   return aggregateRepetitions(passes);
+}
+
+/**
+ * Measures a route once per Node binary and reports the first, with every
+ * version's result beside it.
+ *
+ * Each binary gets the follow-ups a single run on it would: re-measurement of
+ * an undecided result and confirmation of a borderline leak. On the
+ * vercel/next.js#97938 reproduction (16.3.6) Node 22.23 and Node 24.22 both came
+ * out `stable`, one holding about 750 MB and the other under 100, so the
+ * comparison records what each held as well as its verdict.
+ */
+async function compareNodeVersions(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  requestPath: string,
+  index: number,
+  label: string,
+  binaries: readonly NodeBinary[]
+): Promise<RouteReport> {
+  const reports: Array<{ binary: NodeBinary; report: RouteReport }> = [];
+  for (const [position, binary] of binaries.entries()) {
+    context.progress(`measuring ${label} on Node ${binary.version}`);
+    const suffix = `-node${position + 1}`;
+    const first = await measureWithResolution(
+      context,
+      route,
+      requestPath,
+      index,
+      label,
+      suffix,
+      binary.path
+    );
+    const report = await confirmBorderline(context, route, requestPath, index, label, first, {
+      suffix,
+      nodePath: binary.path,
+    });
+    reports.push({ binary, report });
+    if (context.options.signal?.aborted === true) {
+      break;
+    }
+  }
+  const headline = reports[0]?.report;
+  if (headline === undefined) {
+    return { route: route.path, status: "failed", reason: "no Node version produced a result" };
+  }
+  if (headline.status !== "measured") {
+    return headline;
+  }
+  return {
+    ...headline,
+    nodeVersions: reports.map(({ binary, report }) => nodeVersionResult(binary, report)),
+  };
+}
+
+function nodeVersionResult(binary: NodeBinary, report: RouteReport): NodeVersionResult {
+  if (report.status !== "measured") {
+    return { version: binary.version, status: report.status };
+  }
+  const last = report.memorySamples.at(-1);
+  return {
+    version: binary.version,
+    status: report.status,
+    verdict: effectiveVerdict(report),
+    growthPer1000Requests: report.growthPer1000Requests,
+    ...(last !== undefined && { heldBytes: last.heapUsed + last.external }),
+  };
 }
 
 /**
@@ -821,7 +921,8 @@ async function confirmBorderline(
   requestPath: string,
   index: number,
   label: string,
-  first: RouteReport
+  first: RouteReport,
+  pass: { suffix: string; nodePath?: string } = { suffix: "" }
 ): Promise<RouteReport> {
   const reason = confirmationReason(first);
   if (
@@ -838,7 +939,8 @@ async function confirmBorderline(
     requestPath,
     index,
     label,
-    "-confirm"
+    `${pass.suffix}-confirm`,
+    pass.nodePath
   );
   if (second.status === "failed") {
     context.progress(`confirmation of ${label} did not measure — keeping the first pass`);
@@ -910,7 +1012,8 @@ async function measureWithResolution(
   requestPath: string,
   index: number,
   label: string,
-  repetitionSuffix = ""
+  repetitionSuffix = "",
+  nodePath?: string
 ): Promise<RouteReport> {
   const { progress } = context;
   try {
@@ -921,7 +1024,9 @@ async function measureWithResolution(
       route,
       requestPath,
       index,
-      repetitionSuffix === "" ? undefined : { dirSuffix: repetitionSuffix }
+      repetitionSuffix === "" && nodePath === undefined
+        ? undefined
+        : { dirSuffix: repetitionSuffix, ...(nodePath !== undefined && { nodePath }) }
     );
     const reason = first.status === "measured" ? reasonToResolve(effectiveVerdict(first)) : null;
     if (first.status !== "measured" || context.options.resolveInconclusive === false || reason === null) {
@@ -939,6 +1044,7 @@ async function measureWithResolution(
       return await measureRoute(context, route, requestPath, index, {
         cycles,
         dirSuffix: `${repetitionSuffix}-resolve`,
+        ...(nodePath !== undefined && { nodePath }),
       });
     } catch (cause) {
       // The second pass is a bonus, not a bet: losing it (port race lost
@@ -1085,7 +1191,10 @@ export async function runMeasurement(
       options.harnessVerifiedAt === undefined
         ? { verified: false }
         : { verified: true, growthPer1000Requests: options.harnessVerifiedAt },
-    environment: captureEnvironment(nextVersion),
+    environment: captureEnvironment(
+      nextVersion,
+      (options.nodeBinaries ?? []).map((binary) => binary.version)
+    ),
     parameters,
     routes: reports,
     bundle: { htmlReport: path.join(workDir, "report.html"), issues: [] },

@@ -2,6 +2,7 @@ import type { FindingAttribution } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendResult, type TrendVerdict } from "./trend.js";
 import { enclosingNote, shownFindings } from "./finding-selection.js";
+import { nodeComparisonText } from "./node-comparison.js";
 import {
   effectiveVerdict,
   resolveCycles,
@@ -142,6 +143,11 @@ function repetitionLines(route: MeasuredRouteView): string[] {
       : `they disagreed (${verdicts.join(", ")}), so no single verdict is reported`;
   const range = `${low >= 0 ? "+" : ""}${(low / MB).toFixed(2)} to ${formatGrowth(high)}`;
   return [`      across ${repetitions.length} repetitions: ${range} — ${agreement}`];
+}
+
+function nodeVersionLines(route: MeasuredRouteView): string[] {
+  const text = nodeComparisonText(route.nodeVersions);
+  return text === null ? [] : [`      ${text}`];
 }
 
 function cacheLines(route: MeasuredRouteView): string[] {
@@ -382,6 +388,7 @@ function routeLines(route: RouteReport, parameters: RunParameters): string[] {
       route.growthPer1000Requests
     )})  heap ${curve}${resolved}`,
     ...repetitionLines(route),
+    ...nodeVersionLines(route),
     ...revalidationLines(route),
     ...cacheLines(route),
     ...pressureLines(verdict, route.trend),

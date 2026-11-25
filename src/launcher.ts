@@ -40,6 +40,8 @@ export type LaunchOptions = {
   appPort: number;
   /** Path to the built bootstrap module loaded with `--import`. */
   bootstrapPath: string;
+  /** Node binary the server runs on. Default: the one running next-leak. */
+  nodePath?: string;
   hostname?: string;
   /**
    * Path the readiness probe asks for. Defaults to `/`, but a run should pass
@@ -292,7 +294,7 @@ export async function launchInstrumented(options: LaunchOptions): Promise<Launch
   const controlToken = randomBytes(32).toString("hex");
 
   const child: ChildProcess = spawn(
-    process.execPath,
+    options.nodePath ?? process.execPath,
     [
       "--expose-gc",
       `--max-old-space-size=${options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB}`,

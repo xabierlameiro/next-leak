@@ -50,7 +50,9 @@
     "src/build-run.ts",
     "src/build-report.ts",
     "src/build-cache.ts",
-    "src/finding-selection.ts"
+    "src/finding-selection.ts",
+    "src/node-binaries.ts",
+    "src/node-comparison.ts"
   ],
   "thresholds": {
     "high": 90,

@@ -13,6 +13,12 @@ export type CliRunOptions = {
    * one build and 39 MB on a fourth.
    */
   repeat: number | null;
+  /**
+   * Node binaries the measured server runs on, in order. Several compare the
+   * versions within one run: vercel/next.js#97938 held about 650 MB after 300
+   * requests on Node 22 and nothing on Node 24, same build, same command.
+   */
+  node: string[] | null;
   requests: number | null;
   connections: number | null;
   idleSeconds: number | null;
@@ -55,6 +61,7 @@ const RUN_ONLY_FLAGS: ReadonlyArray<[keyof CliRunOptions, string]> = [
   ["routes", "--routes"],
   ["cycles", "--cycles"],
   ["repeat", "--repeat"],
+  ["node", "--node"],
   ["requests", "--requests"],
   ["connections", "--connections"],
   ["idleSeconds", "--idle"],
@@ -102,6 +109,14 @@ const FLAGS: FlagSpec[] = [
     help:
       "Measure each route n times from a fresh server (default 1) — the run takes n times as long, " +
       "and routes whose repetitions disagree are reported inconclusive",
+  },
+  {
+    flag: "--node",
+    value: "list",
+    argName: "<paths>",
+    help:
+      "Node binaries the measured server runs on, comma-separated (default: the Node running next-leak) — " +
+      "with several, each route is measured once per binary and the report compares them",
   },
   { flag: "--requests", value: "int", argName: "<n>", help: "Requests per cycle (default 5000)" },
   { flag: "--connections", value: "int", argName: "<n>", help: "Concurrent connections (default 100)" },
@@ -228,6 +243,17 @@ function applyRoutesFlag(value: string, options: CliRunOptions): FlagOutcome {
   return FLAG_OK;
 }
 
+function applyNodeFlag(value: string, options: CliRunOptions): FlagOutcome {
+  const binaries = value.split(",").map((binary) => binary.trim()).filter((binary) => binary !== "");
+  if (binaries.length === 0) {
+    return flagError(`option "--node" needs at least one path to a Node binary`);
+  }
+  // A bare name ("node") is left for the OS to find on PATH; a path is made
+  // absolute, because the server is spawned from another directory.
+  options.node = binaries.map((binary) => (binary.includes(path.sep) ? path.resolve(binary) : binary));
+  return FLAG_OK;
+}
+
 function applyNumericFlag(flag: string, value: string, options: CliRunOptions): FlagOutcome {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -263,6 +289,8 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
   switch (spec.flag) {
     case "--routes":
       return applyRoutesFlag(value, options);
+    case "--node":
+      return applyNodeFlag(value, options);
     case "--cycles":
     case "--repeat":
     case "--requests":
@@ -353,6 +381,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     routes: null,
     cycles: null,
     repeat: null,
+    node: null,
     requests: null,
     connections: null,
     idleSeconds: null,
@@ -408,6 +437,14 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     return {
       kind: "error",
       message: `option "--attribute" applies only to "next-leak build": a run already names what it retains — see --help`,
+    };
+  }
+  if ((options.node?.length ?? 0) > 1 && (options.repeat ?? 1) > 1) {
+    return {
+      kind: "error",
+      message:
+        `options "--node" with several binaries and "--repeat" cannot be combined — ` +
+        `compare Node versions or repeat one, not both`,
     };
   }
   return { kind: "run", options };
