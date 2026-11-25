@@ -32,15 +32,32 @@ export type ShownFinding = {
  */
 export function shownFindings(diff: Pick<HeapDiff, "grownNodes" | "newNodes">): ShownFinding[] {
   const all = [...diff.grownNodes, ...diff.newNodes];
+  const explainedBy = explainers(all);
+  const shown: ShownFinding[] = [];
+  const named = new Set<number>();
+  for (const index of all.keys()) {
+    const { representative, enclosing } = innermost(index, explainedBy);
+    const finding = all[representative];
+    if (finding === undefined || named.has(representative)) {
+      continue;
+    }
+    named.add(representative);
+    shown.push({ finding, index: representative, enclosing });
+  }
+  return shown;
+}
+
+/**
+ * For each container, the largest held finding that explains it. A tie keeps
+ * the first in size order.
+ */
+function explainers(all: readonly NodeFinding[]): Array<number | undefined> {
   const indexById = new Map<number, number>();
   for (const [index, finding] of all.entries()) {
     if (finding.nodeId !== undefined) {
       indexById.set(finding.nodeId, index);
     }
   }
-
-  // For each container, the largest held finding that explains it. A tie keeps
-  // the first in size order.
   const explainedBy: Array<number | undefined> = all.map(() => undefined);
   for (const [index, finding] of all.entries()) {
     const holder = indexById.get(finding.containedIn ?? Number.NaN);
@@ -57,30 +74,27 @@ export function shownFindings(diff: Pick<HeapDiff, "grownNodes" | "newNodes">): 
       explainedBy[holder] = index;
     }
   }
+  return explainedBy;
+}
 
-  const shown: ShownFinding[] = [];
-  const named = new Set<number>();
-  for (const index of all.keys()) {
-    let representative = index;
-    let enclosing = 0;
-    const visited = new Set<number>([index]);
-    for (
-      let next = explainedBy[representative];
-      next !== undefined && !visited.has(next);
-      next = explainedBy[representative]
-    ) {
-      visited.add(next);
-      representative = next;
-      enclosing += 1;
-    }
-    const finding = all[representative];
-    if (finding === undefined || named.has(representative)) {
-      continue;
-    }
-    named.add(representative);
-    shown.push({ finding, index: representative, enclosing });
+/** Follows the explainers down from one finding, refusing to revisit any. */
+function innermost(
+  start: number,
+  explainedBy: ReadonlyArray<number | undefined>
+): { representative: number; enclosing: number } {
+  let representative = start;
+  let enclosing = 0;
+  const visited = new Set<number>([start]);
+  for (
+    let next = explainedBy[representative];
+    next !== undefined && !visited.has(next);
+    next = explainedBy[representative]
+  ) {
+    visited.add(next);
+    representative = next;
+    enclosing += 1;
   }
-  return shown;
+  return { representative, enclosing };
 }
 
 /** How many findings around this one hold the same bytes, when any were folded in. */
