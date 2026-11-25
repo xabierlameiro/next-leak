@@ -3,6 +3,7 @@ import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendResult, type TrendVerdict } from "./trend.js";
 import { enclosingNote, shownFindings } from "./finding-selection.js";
 import { nodeComparisonText } from "./node-comparison.js";
+import { stoppedForSecurityUpgrade } from "./security-stop.js";
 import {
   effectiveVerdict,
   resolveCycles,
@@ -350,12 +351,31 @@ function unreclaimedLines(route: MeasuredRouteView, verdict: TrendVerdict): stri
     : [`      ▲ unreclaimed: ${describeUnreclaimedRetention(retention)}`];
 }
 
+/**
+ * Why a route failed when Next stopped its server for a security upgrade.
+ *
+ * Each route runs on a fresh server, and each successful start consumes the
+ * retry receipt, so an affected version run under an agent fails every other
+ * route. Measured on the vercel/next.js#99983 reproduction on 16.4.0 under
+ * `next dev`, 2026-11-25: `/` failed, `/dynamic` measured, `/` failed again.
+ */
+function securityStopLines(reason: string): string[] {
+  if (!stoppedForSecurityUpgrade(reason)) {
+    return [];
+  }
+  return [
+    `      Next stopped this server to recommend a security upgrade: it does this when it`,
+    `      detects an AI agent and the installed version has an advisory, and lets the next`,
+    `      start through — re-run the routes that failed (--routes), or upgrade Next`,
+  ];
+}
+
 function routeLines(route: RouteReport, parameters: RunParameters): string[] {
   if (route.status === "skipped") {
     return [`  – ${route.route}  skipped: ${route.reason}`];
   }
   if (route.status === "failed") {
-    return [`  ✖ ${route.route}  failed: ${route.reason}`];
+    return [`  ✖ ${route.route}  failed: ${route.reason}`, ...securityStopLines(route.reason)];
   }
   // Deliberately not `stable`: the load could not have exercised this route, so
   // the flat curve it would have produced says nothing about the app.
@@ -535,7 +555,16 @@ function harnessLine(report: RunReport): string[] {
 }
 
 export function formatReport(report: RunReport): string {
-  const lines = [`next-leak — ${report.appDir}`, ""];
+  const lines = [
+    `next-leak — ${report.appDir}${report.server === "dev" ? " · next dev" : ""}`,
+    ...(report.server === "dev"
+      ? [
+          `  measured on next dev: findings name no owner, because a dev server has no`,
+          `  production chunks to read module ids from`,
+        ]
+      : []),
+    "",
+  ];
   for (const route of report.routes) {
     lines.push(...routeLines(route, report.parameters));
   }

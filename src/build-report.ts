@@ -4,6 +4,7 @@ import {
   type BuildAttributionGap,
 } from "./build-attribution.js";
 import type { BuildRunResult, TreeSample } from "./build-run.js";
+import { stoppedForSecurityUpgrade } from "./security-stop.js";
 import { terminalSafe } from "./terminal-text.js";
 
 const MB = 1024 * 1024;
@@ -216,7 +217,7 @@ function treePeakLines(result: BuildRunResult): string[] {
  * vercel/next.js#100064 reproduction on 16.4.0, 2026-11-25.
  */
 function securityStopLines(result: BuildRunResult): string[] {
-  if (!result.output.includes("SecurityFatalError")) {
+  if (!stoppedForSecurityUpgrade(result.output)) {
     return [];
   }
   return [

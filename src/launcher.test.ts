@@ -15,6 +15,7 @@ const hangingServer = fileURLToPath(
 const hostileRootServer = fileURLToPath(
   new URL("./__fixtures__/hostile-root-server.js", import.meta.url)
 );
+const fakeNextDev = fileURLToPath(new URL("./__fixtures__/fake-next-dev.js", import.meta.url));
 const dropsConnectionsServer = fileURLToPath(
   new URL("./__fixtures__/accepts-then-drops-server.js", import.meta.url)
 );
@@ -194,5 +195,62 @@ describe("launchInstrumented", () => {
         bootstrapPath,
       })
     ).rejects.toMatchObject({ name: "LaunchError" });
+  }, 30_000);
+});
+
+// `next dev` forks the process that renders and copies NODE_OPTIONS into it,
+// so both load the bootstrap. Measured on 16.4.6: the CLI held 15 MB of heap,
+// the fork rendering every request 65 MB.
+describe("launching a dev server", () => {
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("measures the fork that renders, never the process it started", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-dev-launch-"));
+    app = await launchInstrumented({
+      serverPath: fakeNextDev,
+      workDir,
+      appPort: await freePort(),
+      bootstrapPath,
+      readyTimeoutMs: 10_000,
+      dev: { appDir: workDir },
+    });
+
+    const response = await fetch(`http://127.0.0.1:${app.controlPort}/gc`, {
+      headers: { "x-next-leak-token": app.controlToken },
+    });
+    const sample = (await response.json()) as { pid: number; ppid: number };
+    expect(sample.pid).not.toBe(app.pid);
+    expect(sample.ppid).toBe(app.pid);
+  }, 30_000);
+
+  it("takes the fork down with the process it started", async () => {
+    const workDir = await mkdtemp(path.join(tmpdir(), "next-leak-dev-close-"));
+    const launched = await launchInstrumented({
+      serverPath: fakeNextDev,
+      workDir,
+      appPort: await freePort(),
+      bootstrapPath,
+      readyTimeoutMs: 10_000,
+      dev: { appDir: workDir },
+    });
+    const response = await fetch(`http://127.0.0.1:${launched.controlPort}/gc`, {
+      headers: { "x-next-leak-token": launched.controlToken },
+    });
+    const { pid: renderer } = (await response.json()) as { pid: number };
+
+    await launched.close();
+    // The group is signalled before close resolves; give the kernel a moment.
+    for (let attempt = 0; attempt < 50 && alive(renderer); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    expect(alive(renderer)).toBe(false);
   }, 30_000);
 });

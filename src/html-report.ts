@@ -212,7 +212,11 @@ td,th{border:1px solid #ddd;padding:2px 8px;text-align:left}
 .warn{color:#8a5a00;background:#fff8e6;border-left:3px solid #e67e22;padding:.4rem .7rem;font-size:.85rem}
 code{background:#f4f4f4;padding:0 4px;border-radius:3px}
 </style></head><body>
-<h1>next-leak report</h1>
+<h1>next-leak report${run.server === "dev" ? " · next dev" : ""}</h1>${
+    run.server === "dev"
+      ? `\n<p class="meta">measured on next dev: findings name no owner, because a dev server has no production chunks to read module ids from</p>`
+      : ""
+  }
 <p class="meta">${escapeHtml(run.appDir)} · ${escapeHtml(run.startedAt)} · node ${escapeHtml(
     environment.comparedNodeVersions?.join(" vs ") ?? environment.nodeVersion
   )} · ${escapeHtml(environment.platform)}/${escapeHtml(environment.arch)} · next ${escapeHtml(

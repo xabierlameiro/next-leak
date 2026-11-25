@@ -215,16 +215,22 @@ OS: ${environment.platform} ${environment.arch}${environment.cpuModel ? ` (${env
 Memory: ${(environment.totalMemoryBytes / (1024 * MB)).toFixed(0)} GB
 Next.js: ${environment.nextVersion ?? "unknown"}
 next-leak: ${environment.nextLeakVersion}
-Deployment: output "standalone", node --expose-gc --max-old-space-size=${parameters.maxOldSpaceMb}
+Deployment: ${
+    run.server === "dev"
+      ? `next dev, NODE_OPTIONS=--expose-gc --max-old-space-size=${parameters.maxOldSpaceMb}`
+      : `output "standalone", node --expose-gc --max-old-space-size=${parameters.maxOldSpaceMb}`
+  }
 \`\`\`
 
 ### To Reproduce
 
-1. Build the app with \`output: "standalone"\` and run:
-   \`\`\`
-   npx next-leak <app-dir>
-   \`\`\`
-2. next-leak boots \`.next/standalone/server.js\` in a fresh process per route and runs, against ${codeSpan(route.requestPath)}:
+${
+    run.server === "dev"
+      ? `1. Install the app's dependencies and run:\n   \`\`\`\n   npx next-leak dev <app-dir>\n   \`\`\`\n` +
+        `2. next-leak starts \`next dev\` in a fresh process per route, measures the server Next forks to render, and runs, against ${codeSpan(route.requestPath)}:`
+      : `1. Build the app with \`output: "standalone"\` and run:\n   \`\`\`\n   npx next-leak <app-dir>\n   \`\`\`\n` +
+        `2. next-leak boots \`.next/standalone/server.js\` in a fresh process per route and runs, against ${codeSpan(route.requestPath)}:`
+  }
    warm-up ${parameters.warmupRequests} requests → forced GC → baseline heap snapshot →
    ${parameters.cycles} × [${parameters.loadRequests} requests at ${parameters.connections} connections → ${(parameters.idleMs / 1000).toFixed(0)}s idle → forced GC → post-GC sample] → final snapshot.
 3. A cycle counts as growing when it retains at least ${(parameters.minGrowthPerCycle / 1024).toFixed(0)} KiB
