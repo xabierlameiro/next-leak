@@ -12,7 +12,7 @@ export type DevTarget = {
   pages: PagesManifest;
 };
 
-const PAGE_EXTENSIONS = [".js", ".jsx", ".ts", ".tsx", ".mdx"];
+const PAGE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mdx"]);
 const APP_ENTRIES = new Set(["page", "route"]);
 
 async function exists(file: string): Promise<boolean> {
@@ -36,7 +36,7 @@ async function firstDir(appDir: string, candidates: readonly string[]): Promise<
 
 function routeFile(name: string): { stem: string } | null {
   const extension = path.extname(name);
-  return PAGE_EXTENSIONS.includes(extension) ? { stem: name.slice(0, -extension.length) } : null;
+  return PAGE_EXTENSIONS.has(extension) ? { stem: name.slice(0, -extension.length) } : null;
 }
 
 /**
@@ -48,10 +48,12 @@ function routeFile(name: string): { stem: string } | null {
 async function scanApp(root: string): Promise<AppPathsManifest> {
   const manifest: AppPathsManifest = {};
   const walk = async (dir: string, segments: string[]): Promise<void> => {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const folders: Array<Promise<void>> = [];
+    for (const entry of entries) {
       if (entry.isDirectory()) {
         if (!entry.name.startsWith("_") && entry.name !== "node_modules") {
-          await walk(path.join(dir, entry.name), [...segments, entry.name]);
+          folders.push(walk(path.join(dir, entry.name), [...segments, entry.name]));
         }
         continue;
       }
@@ -61,6 +63,7 @@ async function scanApp(root: string): Promise<AppPathsManifest> {
         manifest[key] = path.relative(path.dirname(root), path.join(dir, entry.name));
       }
     }
+    await Promise.all(folders);
   };
   await walk(root, []);
   return manifest;
@@ -73,10 +76,12 @@ async function scanApp(root: string): Promise<AppPathsManifest> {
 async function scanPages(root: string): Promise<PagesManifest> {
   const manifest: PagesManifest = {};
   const walk = async (dir: string, segments: string[]): Promise<void> => {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const folders: Array<Promise<void>> = [];
+    for (const entry of entries) {
       if (entry.isDirectory()) {
         if (entry.name !== "node_modules") {
-          await walk(path.join(dir, entry.name), [...segments, entry.name]);
+          folders.push(walk(path.join(dir, entry.name), [...segments, entry.name]));
         }
         continue;
       }
@@ -87,6 +92,7 @@ async function scanPages(root: string): Promise<PagesManifest> {
       const parts = file.stem === "index" ? segments : [...segments, file.stem];
       manifest[`/${parts.join("/")}`] = path.relative(path.dirname(root), path.join(dir, entry.name));
     }
+    await Promise.all(folders);
   };
   await walk(root, []);
   return manifest;
