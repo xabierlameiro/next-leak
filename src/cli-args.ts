@@ -370,6 +370,20 @@ function parseFlagAt(argv: string[], index: number, options: CliRunOptions): Fla
   return { consumed: spec.value === "none" ? 0 : 1 };
 }
 
+/** Options a server run accepts one at a time but not together. */
+function runConflict(options: CliRunOptions): string | null {
+  if (options.attributeBuild) {
+    return `option "--attribute" applies only to "next-leak build": a run already names what it retains — see --help`;
+  }
+  if ((options.node?.length ?? 0) > 1 && (options.repeat ?? 1) > 1) {
+    return (
+      `options "--node" with several binaries and "--repeat" cannot be combined — ` +
+      `compare Node versions or repeat one, not both`
+    );
+  }
+  return null;
+}
+
 export function parseCliArgs(argv: string[]): ParsedCli {
   // `next-leak build <dir>` measures a build; anything else keeps the original
   // meaning. Only an exact first token counts, so a directory named "build" is
@@ -433,19 +447,6 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       },
     };
   }
-  if (options.attributeBuild) {
-    return {
-      kind: "error",
-      message: `option "--attribute" applies only to "next-leak build": a run already names what it retains — see --help`,
-    };
-  }
-  if ((options.node?.length ?? 0) > 1 && (options.repeat ?? 1) > 1) {
-    return {
-      kind: "error",
-      message:
-        `options "--node" with several binaries and "--repeat" cannot be combined — ` +
-        `compare Node versions or repeat one, not both`,
-    };
-  }
-  return { kind: "run", options };
+  const conflict = runConflict(options);
+  return conflict === null ? { kind: "run", options } : { kind: "error", message: conflict };
 }

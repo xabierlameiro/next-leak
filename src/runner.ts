@@ -922,7 +922,7 @@ async function confirmBorderline(
   index: number,
   label: string,
   first: RouteReport,
-  pass: { suffix: string; nodePath?: string } = { suffix: "" }
+  pass?: { suffix: string; nodePath?: string }
 ): Promise<RouteReport> {
   const reason = confirmationReason(first);
   if (
@@ -939,8 +939,8 @@ async function confirmBorderline(
     requestPath,
     index,
     label,
-    `${pass.suffix}-confirm`,
-    pass.nodePath
+    `${pass?.suffix ?? ""}-confirm`,
+    pass?.nodePath
   );
   if (second.status === "failed") {
     context.progress(`confirmation of ${label} did not measure — keeping the first pass`);
@@ -1006,6 +1006,17 @@ export function aggregateRepetitions(passes: readonly RouteReport[]): RouteRepor
   };
 }
 
+/** The first pass of a measurement: the defaults unless it is a repetition or on a chosen Node. */
+function firstPass(
+  suffix: string,
+  nodePath: string | undefined
+): { dirSuffix: string; nodePath?: string } | undefined {
+  if (suffix === "" && nodePath === undefined) {
+    return undefined;
+  }
+  return { dirSuffix: suffix, ...(nodePath !== undefined && { nodePath }) };
+}
+
 async function measureWithResolution(
   context: MeasurementContext,
   route: DiscoveredRoute,
@@ -1024,9 +1035,7 @@ async function measureWithResolution(
       route,
       requestPath,
       index,
-      repetitionSuffix === "" && nodePath === undefined
-        ? undefined
-        : { dirSuffix: repetitionSuffix, ...(nodePath !== undefined && { nodePath }) }
+      firstPass(repetitionSuffix, nodePath)
     );
     const reason = first.status === "measured" ? reasonToResolve(effectiveVerdict(first)) : null;
     if (first.status !== "measured" || context.options.resolveInconclusive === false || reason === null) {

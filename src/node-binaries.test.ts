@@ -20,6 +20,18 @@ describe("resolveNodeBinaries", () => {
     ]);
   });
 
+  it("names the first failing binary in the order given, not the first to fail", async () => {
+    const slowFirst = async (binary: string) => {
+      if (binary === "/a") {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error("a is broken");
+      }
+      throw new Error("b is broken");
+    };
+
+    await expect(resolveNodeBinaries(["/a", "/b"], slowFirst)).rejects.toThrow("--node /a could not be run");
+  });
+
   it("names a binary that does not run", async () => {
     await expect(resolveNodeBinaries(["/nope/node"], versions({}))).rejects.toThrow(
       new NodeBinaryError("--node /nope/node could not be run: spawn /nope/node ENOENT")

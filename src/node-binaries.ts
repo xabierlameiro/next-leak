@@ -34,27 +34,34 @@ export async function resolveNodeBinaries(
   paths: readonly string[],
   read: ReadVersion = readVersion
 ): Promise<NodeBinary[]> {
-  const binaries: NodeBinary[] = [];
-  for (const binary of paths) {
-    let version: string;
-    try {
-      version = await read(binary);
-    } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause);
-      throw new NodeBinaryError(`--node ${binary} could not be run: ${reason}`);
-    }
-    const match = /^v(\d+)\.\d+\.\d+/.exec(version);
-    if (match === null) {
-      throw new NodeBinaryError(
-        `--node ${binary} did not report a Node version (got "${version.slice(0, 80)}")`
-      );
-    }
-    if (Number(match[1]) < MIN_SERVER_NODE_MAJOR) {
-      throw new NodeBinaryError(
-        `--node ${binary} is ${version}; the measured server needs Node ${MIN_SERVER_NODE_MAJOR} or later`
-      );
-    }
-    binaries.push({ path: binary, version });
+  // Checked concurrently, reported in the order given: the first binary on the
+  // command line that fails is the one named, whichever finished first.
+  const settled = await Promise.allSettled(paths.map((binary) => checkBinary(binary, read)));
+  const failed = settled.find((outcome) => outcome.status === "rejected");
+  if (failed !== undefined) {
+    throw failed.reason;
   }
-  return binaries;
+  return settled.map((outcome) => (outcome as PromiseFulfilledResult<NodeBinary>).value);
+}
+
+async function checkBinary(binary: string, read: ReadVersion): Promise<NodeBinary> {
+  let version: string;
+  try {
+    version = await read(binary);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new NodeBinaryError(`--node ${binary} could not be run: ${reason}`);
+  }
+  const match = /^v(\d+)\.\d+\.\d+/.exec(version);
+  if (match === null) {
+    throw new NodeBinaryError(
+      `--node ${binary} did not report a Node version (got "${version.slice(0, 80)}")`
+    );
+  }
+  if (Number(match[1]) < MIN_SERVER_NODE_MAJOR) {
+    throw new NodeBinaryError(
+      `--node ${binary} is ${version}; the measured server needs Node ${MIN_SERVER_NODE_MAJOR} or later`
+    );
+  }
+  return { path: binary, version };
 }
