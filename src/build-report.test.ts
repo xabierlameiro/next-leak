@@ -23,6 +23,7 @@ const baseResult: BuildRunResult = {
   captureRequested: false,
   captureFailure: null,
   strippedCapWarning: null,
+  warmCacheWarning: null,
   exitCode: 1,
   output: "",
 };
@@ -397,5 +398,31 @@ describe("a build Next stopped for a security upgrade", () => {
     const output = formatBuildReport({ ...stopped, output: "Type error: x is not assignable" });
 
     expect(output).not.toContain("security upgrade");
+  });
+});
+
+describe("a warm compiler cache", () => {
+  const warning =
+    ".next/cache/turbopack holds a compiler cache from an earlier build, so compilation may be served from it rather than measured. Delete .next/cache/turbopack (not the rest of .next/cache) for a cold build";
+
+  it("leads the report, before the verdict", () => {
+    const output = formatBuildReport({ ...baseResult, warmCacheWarning: warning });
+
+    expect(output).toContain(`▲ ${warning}`);
+    expect(output.indexOf(warning)).toBeLessThan(output.indexOf("static-generation worker"));
+  });
+
+  it("is reported on a failed build as well", () => {
+    const output = formatBuildReport({
+      ...baseResult,
+      status: "build-failed",
+      warmCacheWarning: warning,
+    });
+
+    expect(output).toContain(warning);
+  });
+
+  it("is absent when the build compiled cold", () => {
+    expect(formatBuildReport(baseResult)).not.toContain("compiler cache");
   });
 });

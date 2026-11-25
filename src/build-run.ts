@@ -9,6 +9,7 @@ import {
   type CaptureStage,
   type CollectedPair,
 } from "./build-snapshot.js";
+import { warmCompilerCache } from "./build-cache.js";
 import { validateBuildTarget } from "./build-target.js";
 import {
   classifyBuildSamples,
@@ -113,6 +114,8 @@ export type BuildRunResult = {
   /** How far capture got before giving up, when it was requested and missed. */
   captureFailure: string | null;
   strippedCapWarning: string | null;
+  /** Set when a compiler cache from an earlier build may have served compilation. */
+  warmCacheWarning: string | null;
   exitCode: number | null;
   output: string;
 };
@@ -307,6 +310,10 @@ export async function runBuildMeasurement(
   if (strippedCapWarning !== null) {
     progress(strippedCapWarning);
   }
+  const warmCacheWarning = await warmCompilerCache(target.appDir);
+  if (warmCacheWarning !== null) {
+    progress(warmCacheWarning);
+  }
 
   // The worker inherits NODE_OPTIONS, which is how the signal handler gets
   // installed without touching the build. Appending rather than replacing:
@@ -480,6 +487,7 @@ export async function runBuildMeasurement(
           ? describeCaptureFailure(captureStage, capturePid, false)
           : null,
       strippedCapWarning,
+      warmCacheWarning,
       exitCode,
       output,
     };
@@ -541,6 +549,7 @@ export async function runBuildMeasurement(
             workerCapture !== null && workerCapture.pid !== worst?.pid
           ),
     strippedCapWarning,
+    warmCacheWarning,
     exitCode,
     output,
   };

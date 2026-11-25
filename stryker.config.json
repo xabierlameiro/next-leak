@@ -48,7 +48,8 @@
     "src/build-verdict.ts",
     "src/build-target.ts",
     "src/build-run.ts",
-    "src/build-report.ts"
+    "src/build-report.ts",
+    "src/build-cache.ts"
   ],
   "thresholds": {
     "high": 90,

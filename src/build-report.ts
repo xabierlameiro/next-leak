@@ -111,6 +111,9 @@ function buildReportText(
   if (result.strippedCapWarning !== null) {
     lines.push(`  ▲ ${result.strippedCapWarning}`, "");
   }
+  if (result.warmCacheWarning !== null) {
+    lines.push(`  ▲ ${result.warmCacheWarning}`, "");
+  }
 
   if (result.status === "build-failed") {
     lines.push(

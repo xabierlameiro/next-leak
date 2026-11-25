@@ -40,6 +40,7 @@ const measured = (
   captureRequested,
   captureFailure,
   strippedCapWarning: null,
+  warmCacheWarning: null,
   exitCode: 1,
   output: "",
 });

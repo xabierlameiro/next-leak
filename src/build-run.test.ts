@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -444,5 +444,46 @@ describe("runBuildMeasurement records the whole tree", () => {
 
     expect(result.status).toBe("build-failed");
     expect(result.treeSamples.map((sample) => sample.poolProcesses)).toEqual([57, 57]);
+  });
+});
+
+describe("runBuildMeasurement with a warm compiler cache", () => {
+  it("warns before building and carries the warning into the result", async () => {
+    const appDir = await makeProject();
+    await mkdir(path.join(appDir, ".next", "cache", "turbopack"), { recursive: true });
+    await writeFile(path.join(appDir, ".next", "cache", "turbopack", "00001.sst"), "x");
+    const progress: string[] = [];
+
+    const result = await runBuildMeasurement(
+      { appDir, onProgress: (line) => progress.push(line) },
+      makeDeps([100, 110, 115, 116])
+    );
+
+    expect(result.warmCacheWarning).toContain(".next/cache/turbopack");
+    const warned = progress.findIndex((line) => line.includes(".next/cache/turbopack"));
+    const built = progress.findIndex((line) => line.startsWith("building "));
+    expect(warned).toBeGreaterThanOrEqual(0);
+    expect(warned).toBeLessThan(built);
+  });
+
+  it("carries no warning for a cold project", async () => {
+    const appDir = await makeProject();
+    const result = await runBuildMeasurement({ appDir }, makeDeps([100, 110, 115, 116]));
+
+    expect(result.warmCacheWarning).toBeNull();
+  });
+
+  it("keeps the warning on a build that failed", async () => {
+    const appDir = await makeProject();
+    await mkdir(path.join(appDir, ".next", "cache", "webpack"), { recursive: true });
+    await writeFile(path.join(appDir, ".next", "cache", "webpack", "pack"), "x");
+
+    const result = await runBuildMeasurement(
+      { appDir },
+      makeDeps([0], { noWorker: true, exitCode: 1 })
+    );
+
+    expect(result.status).toBe("build-failed");
+    expect(result.warmCacheWarning).toContain(".next/cache/webpack");
   });
 });
