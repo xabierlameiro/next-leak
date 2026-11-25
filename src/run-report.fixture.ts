@@ -136,3 +136,46 @@ export function makeRunReport(): RunReport {
     ],
   };
 }
+
+/**
+ * The findings of the vercel/next.js#100492 short run on 16.4.6, 2026-11-23:
+ * three wrappers, each holding the next at 99.9% of its bytes, around the one
+ * `LRUCache` that has an owner. Attribution is aligned with the raw order.
+ */
+export function wrappedStoreFindings(): {
+  diff: NonNullable<Extract<RunReport["routes"][number], { status: "measured" }>["diff"]>;
+  attribution: NonNullable<Extract<RunReport["routes"][number], { status: "measured" }>["attribution"]>;
+} {
+  const node = (name: string, retainedBytes: number, nodeId: number, containedIn?: number) => ({
+    kind: "grown" as const,
+    nodeType: "object",
+    name,
+    retainedBytes,
+    retainerChain: `${name}#object[.x]`,
+    moduleIds: [],
+    nodeId,
+    ...(containedIn !== undefined && { containedIn }),
+  });
+  const unattributed = { owner: "unattributed" as const, source: null, packageName: null };
+  const cache = {
+    owner: "framework" as const,
+    source: null,
+    packageName: "next (default use cache handler)",
+  };
+  return {
+    diff: {
+      typeDeltas: [],
+      grownNodes: [
+        node("global", 95706560, 7069),
+        node("Object", 95686472, 232067, 7069),
+        node("system / Context", 95671064, 238759, 232067),
+        node("LRUCache", 95671064, 238805, 238759),
+      ],
+      newNodes: [],
+    },
+    attribution: {
+      findings: [unattributed, unattributed, unattributed, cache],
+      route: { ...cache, dominance: 1 },
+    },
+  };
+}

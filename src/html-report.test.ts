@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderHtmlReport } from "./html-report.js";
-import { makeRunReport } from "./run-report.fixture.js";
+import { makeRunReport, wrappedStoreFindings } from "./run-report.fixture.js";
 
 const MB = 1024 * 1024;
 
@@ -350,5 +350,23 @@ describe("readability", () => {
 
     expect(bodyRule).toContain("color:#222");
     expect(bodyRule).toContain("background:#fff");
+  });
+});
+
+const withWrappedStore = () => {
+  const report = makeRunReport();
+  const route = report.routes.find((entry) => entry.route === "/leaky");
+  if (route?.status !== "measured") throw new Error("fixture broken");
+  Object.assign(route, wrappedStoreFindings());
+  return { report, route };
+};
+
+describe("findings that wrap one another", () => {
+  it("lists the store first, with its owner and what was folded into it", () => {
+    const html = renderHtmlReport(withWrappedStore().report);
+
+    expect(html).toContain("<td>LRUCache · 3 findings around it hold the same bytes</td>");
+    expect(html).toContain("next (default use cache handler)");
+    expect(html).not.toContain("<td>global</td>");
   });
 });

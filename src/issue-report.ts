@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { FindingAttribution } from "./attribution.js";
+import { enclosingNote, shownFindings } from "./finding-selection.js";
 import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import type { MeasuredRoute, RunReport } from "./runner.js";
 
@@ -94,15 +95,15 @@ function missingEvidence(route: MeasuredRoute, run: RunReport): string {
 }
 
 function evidenceRows(route: MeasuredRoute): string {
-  const findings = [...(route.diff?.grownNodes ?? []), ...(route.diff?.newNodes ?? [])];
+  const findings = route.diff === null ? [] : shownFindings(route.diff);
   return findings
     .slice(0, 6)
-    .map((finding, index) => {
+    .map(({ finding, index, enclosing }) => {
       const attribution = route.attribution?.findings[index];
       const owner = ownerLabel(attribution);
       return (
         `- **${finding.kind}** ${codeSpan(`[${finding.nodeType}] ${finding.name}`)} ` +
-        `${(finding.retainedBytes / MB).toFixed(2)} MB retained (${owner})\n` +
+        `${(finding.retainedBytes / MB).toFixed(2)} MB retained (${owner})${enclosingNote(enclosing)}\n` +
         `  - retainers: ${codeSpan(finding.retainerChain || "(none)")}`
       );
     })

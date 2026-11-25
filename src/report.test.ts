@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatReport } from "./report.js";
-import { makeRunReport } from "./run-report.fixture.js";
+import { makeRunReport, wrappedStoreFindings } from "./run-report.fixture.js";
 
 const MB = 1024 * 1024;
 
@@ -853,5 +853,26 @@ describe("formatReport repetitions", () => {
     ]);
     expect(output).toContain("they disagreed (leak, stable)");
     expect(output).toContain("no single verdict is reported");
+  });
+});
+
+const withWrappedStore = () => {
+  const report = makeRunReport();
+  const route = report.routes.find((entry) => entry.route === "/leaky");
+  if (route?.status !== "measured") throw new Error("fixture broken");
+  Object.assign(route, wrappedStoreFindings());
+  return { report, route };
+};
+
+// vercel/next.js#100492: the store with an owner was the fourth finding, one
+// past what the terminal shows, behind three wrappers holding the same bytes.
+describe("findings that wrap one another", () => {
+  it("names the store, its owner and the wrappers folded into it", () => {
+    const output = formatReport(withWrappedStore().report);
+
+    expect(output).toContain(
+      "↳ grown [object] LRUCache 91.2 MB — next (default use cache handler) (framework) · 3 findings around it hold the same bytes"
+    );
+    expect(output).not.toContain("grown [object] global");
   });
 });

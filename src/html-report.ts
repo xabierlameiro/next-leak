@@ -1,4 +1,5 @@
 import { effectiveVerdict, withdrawnByDisagreement } from "./confidence.js";
+import { enclosingNote, shownFindings } from "./finding-selection.js";
 import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
 import type { RouteReport, RunParameters, RunReport } from "./runner.js";
 import type { TrendVerdict } from "./trend.js";
@@ -152,15 +153,16 @@ function measuredSection(route: RouteReport, parameters: RunParameters): string 
           .map((warning) => `<li>${escapeHtml(warning.detail)}</li>`)
           .join("")}</ul>`;
   const curve = route.samples.map((sample) => (sample / MB).toFixed(1)).join(" → ");
-  const findings = [...(route.diff?.grownNodes ?? []), ...(route.diff?.newNodes ?? [])];
+  const findings = route.diff === null ? [] : shownFindings(route.diff);
   const findingRows = findings
     .slice(0, 6)
-    .map((finding, index) => {
+    .map(({ finding, index, enclosing }) => {
       const attribution = route.attribution?.findings[index];
       const owner = ownerCell(attribution);
       return (
         `<tr><td>${finding.kind}</td><td>${escapeHtml(finding.nodeType)}</td>` +
-        `<td>${escapeHtml(finding.name)}</td><td>${(finding.retainedBytes / MB).toFixed(2)} MB</td>` +
+        `<td>${escapeHtml(finding.name)}${escapeHtml(enclosingNote(enclosing))}</td>` +
+        `<td>${(finding.retainedBytes / MB).toFixed(2)} MB</td>` +
         `<td>${owner}</td></tr>`
       );
     })

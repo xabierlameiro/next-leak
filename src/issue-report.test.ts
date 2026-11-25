@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderIssueMarkdown } from "./issue-report.js";
 import type { MeasuredRoute } from "./runner.js";
-import { makeRunReport } from "./run-report.fixture.js";
+import { makeRunReport, wrappedStoreFindings } from "./run-report.fixture.js";
 
 function leakyRoute(): MeasuredRoute {
   const route = makeRunReport().routes.find(
@@ -372,5 +372,24 @@ describe("cache-driven disclosure", () => {
   it("says nothing about caches on a route that was not cache-driven", () => {
     const markdown = renderIssueMarkdown(leakyRoute(), makeRunReport());
     expect(markdown).not.toContain("cache keys it had never served");
+  });
+});
+
+const withWrappedStore = () => {
+  const report = makeRunReport();
+  const route = report.routes.find((entry) => entry.route === "/leaky");
+  if (route?.status !== "measured") throw new Error("fixture broken");
+  Object.assign(route, wrappedStoreFindings());
+  return { report, route };
+};
+
+describe("findings that wrap one another", () => {
+  it("puts the store first in the evidence, with its owner", () => {
+    const { report, route } = withWrappedStore();
+    const markdown = renderIssueMarkdown(route as MeasuredRoute, report);
+
+    expect(markdown).toContain("`[object] LRUCache` 91.24 MB retained");
+    expect(markdown).toContain("· 3 findings around it hold the same bytes");
+    expect(markdown).not.toContain("`[object] global`");
   });
 });
