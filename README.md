@@ -28,8 +28,10 @@ sandbox's `TimeoutsManager` never released timeout ids from middleware.
 next-leak found the growth, the retaining object and the chain that holds it —
 without being told what to look for. Next.js 16.3.0 has since fixed it.
 
-**Verified against real Next.js issues**, not synthetic fixtures. Issue states
-checked 2026-09-19; #97938 and #100492 re-measured 2026-11-23:
+**Verified against real Next.js issues**, not synthetic fixtures. Each row carries
+the date of its own last check or re-measurement where it has one (most recently
+#97938 and #100492 on 2026-11-23); rows without a date were last checked on
+2026-09-19:
 
 | Issue | What it is | Measured | State today |
 |---|---|---|---|
@@ -491,7 +493,24 @@ through the build's source maps.
 ## Scope and limits (read before filing issues)
 
 
-- **Supported (default command):** App Router · `output: "standalone"` · Node ≥ 22 · Linux/macOS. Pages Router, non-standalone, and Windows are rejected with a clear message.
+- **Supported (default command):** `output: "standalone"` · Node ≥ 22 · Linux/macOS. A build with an App Router manifest, a Pages Router manifest or both is measured; a non-standalone build and Windows are rejected with a clear message (see the matrix below).
+
+### Support matrix
+
+What each command measures and where it is known to work. "untested" means
+the code does not reject it and no measurement here covers it; "no" means the
+tool refuses or cannot do it.
+
+| Measures | App Router | Pages Router | Route handlers | ISR / `use cache` | Turbopack | webpack | Owner attribution | Node | OS | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Server (`next-leak`) | yes | accepted (untested here) | yes | ISR routes are driven with the build's revalidate header; `use cache` measured (#97938, #100492) | yes | measured, no attribution | file or package, Turbopack builds only | >= 22 | Linux, macOS; Windows rejected | needs `output: "standalone"` |
+| `next-leak dev` | yes | accepted (untested here) | yes | not driven: no build manifest, so no revalidate header | yes (#99983) | untested | none: no production chunks | >= 22 | Linux, macOS; Windows rejected | no build needed; samples the process `next dev` forks; no HMR or compile-growth measurement |
+| `next-leak build` | n/a (samples static-generation workers) | n/a | n/a | n/a | yes (#100064, #97802) | untested | `--attribute` only, Turbopack builds only | >= 22 | Linux, macOS; Windows rejected | no standalone output needed; `experimental.workerThreads: true` rejected |
+
+Node and OS limits come from one startup check shared by all three commands.
+
+### Other limits
+
 - **Monorepos work unchanged.** A workspace build does not put `server.js` at
   the root of `.next/standalone`: Next keeps the app's path relative to the
   workspace root, so an app in `client/` ships its server at
@@ -519,7 +538,14 @@ through the build's source maps.
   ([#97464](https://github.com/vercel/next.js/issues/97464)). The verdict reads
   the workers; the whole process tree is reported next to it, with how many
   Turbopack Node.js pools it held, because compilation runs outside the workers
-  ([#100064](https://github.com/vercel/next.js/issues/100064)). It does not apply
+  ([#100064](https://github.com/vercel/next.js/issues/100064)). The report warns
+  when `.next/cache/turbopack` or `.next/cache/webpack` survives from an earlier
+  build, because compilation may then be served from the cache instead of
+  measured (on #100064, 7,798 MB cold against 705 MB warm). Delete that
+  directory alone, not the rest of `.next/cache`. If Next stops a `next build`
+  or `next dev` run once to recommend a security upgrade (seen on 16.4 when the
+  installed version has an advisory), next-leak reports the stop instead of a
+  measurement. It does not apply
   to projects using `experimental.workerThreads: true`: a worker thread has no
   resident memory of its own to sample, and the run says so instead of
   reporting a number that would be measuring the parent.
@@ -565,7 +591,7 @@ through the build's source maps.
   4.2 GB capture outlasted every fixed deadline worth setting.
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
-- Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.0/16.3.1 and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). Most recent measurements, 2026-08-17/18: the runtime path on 16.2.12 and 16.3.1-canary.18, the build path on 16.2.12 and 16.3.1. The contracts it relies on are stable since Next 13–14, but older versions are untested.
+- Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.x, 16.4.0 to 16.4.6 and 16.5.0-canary.61** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). The 16.4 and 16.5 measurements are the rows of the table above (#100492, #100064, #99983, #97938, most recently 2026-11-23); the 15.5 to 16.3 range was validated earlier, most recently on 2026-08-17/18 (runtime path on 16.2.12 and 16.3.1-canary.18, build path on 16.2.12 and 16.3.1). The contracts it relies on are stable since Next 13–14, but older versions are untested.
 - **Each measured process runs under a 512 MB heap cap** by default, so a leak
   reaches a ceiling in minutes instead of the hours a production container
   takes. An app whose legitimate working set is larger needs
