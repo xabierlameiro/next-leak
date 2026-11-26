@@ -429,18 +429,28 @@ export async function runMeasurement(
   };
 
   const clock = deps.now ?? Date.now;
-  let spentSeconds = 0;
+  // Paced on the routes that ran, priced on the routes that will: a skipped
+  // route costs nothing, and counting it either way skews the estimate.
+  const willRun = routes.map(
+    (route) => skipReason(route, resolveRoutePath(route.path, routeConfig)) === null
+  );
+  let measuredSeconds = 0;
+  let measuredCount = 0;
   for (const [index, route] of routes.entries()) {
     if (options.signal?.aborted === true) {
       reports.push({ route: route.path, status: "skipped", reason: "interrupted" });
       continue;
     }
     const started = clock();
-    reports.push(await routeReportFor(context, route, index, routes.length));
-    spentSeconds += (clock() - started) / 1000;
-    const left = routes.length - index - 1;
-    if (left > 0) {
-      progress(remainingNote(left, spentSeconds / (index + 1), reports.at(-1)));
+    const report = await routeReportFor(context, route, index, routes.length);
+    reports.push(report);
+    if (report.status !== "skipped") {
+      measuredSeconds += (clock() - started) / 1000;
+      measuredCount += 1;
+      const left = willRun.slice(index + 1).filter(Boolean).length;
+      if (left > 0) {
+        progress(remainingNote(left, measuredSeconds / measuredCount, report));
+      }
     }
     await persist(buildReport());
   }

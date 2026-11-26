@@ -459,6 +459,13 @@ than a false accusation, and the warnings are on the report either way.
 └── <nn>-<route>/      # raw baseline/after .heapsnapshot per route
 ```
 
+`run.json` is written during the run too, before every pass that follows another
+and before every snapshot diff, so a run killed mid-route (SIGKILL, OOM, a
+container recycled) keeps what it measured. A route saved that way carries
+`"incomplete": true`: it is the best result in hand when the process stopped,
+not the route's final one. `report.html` and the issue drafts are written only
+when the run ends.
+
 `report.html` is the one you send to someone else. It is a real run below —
 three routes measured with `--self-check`, on the reproduction this repo tests
 against:

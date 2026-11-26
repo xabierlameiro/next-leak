@@ -248,7 +248,8 @@ export async function measureRoute(
   route: DiscoveredRoute,
   requestPath: string,
   index: number,
-  pass: Pass = undefined
+  pass: Pass = undefined,
+  onMeasured?: (provisional: MeasuredRoute) => Promise<void>
 ): Promise<RouteReport> {
   const { deps, options, routeConfig, registry, nextVersion, progress } = context;
   const cache = cachePlan(context, route, requestPath);
@@ -275,9 +276,7 @@ export async function measureRoute(
   if (confidence.supersededVerdict !== undefined) {
     progress(`withdrawing ${route.path} verdict: evidence does not support it`);
   }
-  const { diff, attributionGap } = await diffFor(context, route, result, verdict);
-
-  return {
+  const measured: MeasuredRoute = {
     route: route.path,
     status: "measured",
     requestPath,
@@ -307,6 +306,25 @@ export async function measureRoute(
     rssPer1000Requests: (rssTrend(result.memorySamples) / result.requestsPerCycle) * 1000,
     baselineSnapshot: result.baselineSnapshot,
     afterSnapshot: result.afterSnapshot,
+    diff: null,
+    attribution: null,
+    signatures: [],
+  };
+  // Saved before the diff, which on a large heap is minutes nothing can cut
+  // short: run 3 of the vercel/next.js#97938 stability series died there, in
+  // its first pass, and nothing had been written. Until the diff lands this
+  // copy says the snapshots were not compared, which is true if it never does.
+  await onMeasured?.({
+    ...measured,
+    attributionGap: {
+      reason: "interrupted",
+      detail: `baseline ${result.baselineSnapshot}, after ${result.afterSnapshot}`,
+    },
+  });
+  const { diff, attributionGap } = await diffFor(context, route, result, verdict);
+
+  return {
+    ...measured,
     diff,
     ...(attributionGap !== undefined && { attributionGap }),
     attribution: diff === null || registry.size === 0 ? null : attributeDiff(diff, registry),

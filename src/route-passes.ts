@@ -88,6 +88,11 @@ export async function measureRepeatedly(
 
   const passes: RouteReport[] = [];
   for (let attempt = 1; attempt <= repeat; attempt += 1) {
+    if (passes.length > 0) {
+      // Every repetition so far, not only the last: a run killed in the
+      // fourth of five keeps the three that finished.
+      await context.checkpoint?.(aggregateRepetitions(passes));
+    }
     context.progress(`repetition ${attempt}/${repeat} of ${label}`);
     passes.push(
       await measureWithResolution(context, route, requestPath, index, label, `-rep${attempt}`)
@@ -280,7 +285,7 @@ async function confirmBorderline(
     );
     return first;
   }
-  await context.checkpoint?.(first);
+  await checkpointFor(context, pass.suffix)?.(first);
   context.progress(
     `confirming ${label} from a fresh server: ${confirmation.reason}` +
       paceNote(pass.firstPassMs / 1000, "— what the first pass took")
@@ -316,6 +321,21 @@ async function confirmBorderline(
       ? "the two passes disagreed"
       : "both passes were stable while growing over the threshold",
   });
+}
+
+/**
+ * The checkpoint a single pass may write, or none.
+ *
+ * A pass's own result is the route's best only on a plain run. Under
+ * `--repeat` or several `--node` binaries it is one of many: saving it would
+ * overwrite the repetitions or versions already in hand, so those runs save
+ * their aggregate between passes instead.
+ */
+function checkpointFor(
+  context: MeasurementContext,
+  suffix: string
+): MeasurementContext["checkpoint"] {
+  return suffix === "" ? context.checkpoint : undefined;
 }
 
 function isAborted(context: MeasurementContext): boolean {
@@ -381,7 +401,7 @@ async function settleDisagreement(
     );
     return judged;
   }
-  await context.checkpoint?.(judged);
+  await checkpointFor(context, pass.suffix)?.(judged);
   context.progress(
     `settling ${label} over ${cycles} cycles from a fresh server: ${pass.why}` +
       paceNote(projectedMs / 1000, "at the pace of the first pass")
@@ -531,7 +551,8 @@ async function measureWithResolution(
       route,
       requestPath,
       index,
-      firstPass(repetitionSuffix, nodePath)
+      firstPass(repetitionSuffix, nodePath),
+      checkpointFor(context, repetitionSuffix)
     );
     const reason =
       first.status === "measured"
@@ -547,7 +568,7 @@ async function measureWithResolution(
       return first;
     }
     const cycles = resolveCycles(context.options.cycles ?? RITUAL_DEFAULTS.cycles);
-    await context.checkpoint?.(first);
+    await checkpointFor(context, repetitionSuffix)?.(first);
     progress(
       `re-measuring ${route.path} with ${cycles} cycles: ${reason}` +
         paceNote(passSecondsAt(first.timings, cycles), "at the pace of the first pass")

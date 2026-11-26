@@ -2841,6 +2841,11 @@ describe("saving progress within a route", () => {
         ...makeDeps([]),
         ritual: async (options) => {
           call += 1;
+          if (call === 1) {
+            // Nothing to save before the first repetition.
+            const [stamp] = await readdir(outputDir);
+            expect(await readdir(path.join(outputDir, stamp ?? ""))).not.toContain("run.json");
+          }
           if (call > 1) {
             const [stamp] = await readdir(outputDir);
             const saved = JSON.parse(
@@ -2880,6 +2885,36 @@ describe("saving progress within a route", () => {
     };
     expect(final.routes[0]?.incomplete).toBeUndefined();
     expect((await readdir(path.join(outputDir, stamp ?? ""))).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  // Run 3 of the series died during the first pass's diff, before the first
+  // checkpoint, which only came before a second pass.
+  it("saves the first pass before its snapshot diff starts", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-checkpoint-"));
+    const base = makeDeps([]);
+    let duringDiff: { status?: string; incomplete?: boolean; attributionGap?: { reason: string } } | undefined;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", outputDir },
+      {
+        ...base,
+        ritual: async () => ritualResult("/leaky", [29 * MB, 31 * MB, 33 * MB, 35 * MB]),
+        diff: async (...args) => {
+          const [stamp] = await readdir(outputDir);
+          const saved = JSON.parse(
+            await readFile(path.join(outputDir, stamp ?? "", "run.json"), "utf8")
+          ) as { routes: Array<typeof duringDiff> };
+          duringDiff = saved.routes[0];
+          return base.diff(...args);
+        },
+      }
+    );
+
+    expect(duringDiff).toMatchObject({
+      status: "measured",
+      incomplete: true,
+      attributionGap: { reason: "interrupted" },
+    });
   });
 
   it("keeps measuring when a checkpoint cannot be written", async () => {
@@ -2948,5 +2983,103 @@ describe("an interrupt during a pass", () => {
       reason: "interrupted",
       detail: "baseline /snap//leaky/baseline.heapsnapshot, after /snap//leaky/after.heapsnapshot",
     });
+  });
+});
+
+describe("pacing around skipped routes", () => {
+  it("prices only the routes that will run, at the pace of the ones that did", async () => {
+    // /a, /c and /d run; /b/[slug] has no sample params and is skipped.
+    const appDir = await makeAppDir({
+      "/a/page": "app/a/page.js",
+      "/b/[slug]/page": "app/b/[slug]/page.js",
+      "/c/page": "app/c/page.js",
+      "/d/page": "app/d/page.js",
+    });
+    let clockMs = 0;
+    const progress: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (line) => progress.push(line) },
+      {
+        ...makeDeps([]),
+        now: () => clockMs,
+        ritual: async (options) => {
+          clockMs += 120_000;
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    const notes = progress.filter((line) => line.includes("left ·"));
+    // Two minutes a measured route. After /a two are left to run, not three;
+    // the skip after it neither halves the pace nor gets its own note.
+    expect(notes).toEqual([
+      "2 routes left · ≈ 4m at the pace so far",
+      "1 route left · ≈ 2m at the pace so far",
+    ]);
+  });
+});
+
+describe("saving progress across repetitions", () => {
+  it("saves every repetition so far before the next one starts", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-checkpoint-"));
+    const seen: Array<number | undefined> = [];
+    let call = 0;
+    let firstSawRunJson: boolean | undefined;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", outputDir, repeat: 3 },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          call += 1;
+          if (call === 1) {
+            // Nothing to save before the first repetition.
+            const [stamp] = await readdir(outputDir);
+            firstSawRunJson = (await readdir(path.join(outputDir, stamp ?? ""))).includes("run.json");
+          }
+          if (call > 1) {
+            const [stamp] = await readdir(outputDir);
+            const saved = JSON.parse(
+              await readFile(path.join(outputDir, stamp ?? "", "run.json"), "utf8")
+            ) as { routes: Array<{ repetitions?: unknown[]; incomplete?: boolean }> };
+            seen.push(saved.routes[0]?.repetitions?.length);
+          }
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    // Before the second repetition: one; before the third: two. No single
+    // repetition's own save replaced them.
+    expect(seen).toEqual([1, 2]);
+    expect(firstSawRunJson).toBe(false);
+  });
+});
+
+describe("a repetition's own pass", () => {
+  it("does not replace the repetitions already saved", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-checkpoint-"));
+    const duringDiffs: Array<number | undefined> = [];
+    const base = makeDeps([]);
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", outputDir, repeat: 2 },
+      {
+        ...base,
+        // A leak, so each repetition reaches its diff.
+        ritual: async () => ritualResult("/leaky", [29 * MB, 31 * MB, 33 * MB, 35 * MB]),
+        diff: async (...args) => {
+          const [stamp] = await readdir(outputDir);
+          const file = path.join(outputDir, stamp ?? "", "run.json");
+          const saved = await readFile(file, "utf8").catch(() => null);
+          const parsed = saved === null ? null : (JSON.parse(saved) as { routes: Array<{ repetitions?: unknown[] }> });
+          duringDiffs.push(parsed?.routes[0]?.repetitions?.length);
+          return base.diff(...args);
+        },
+      }
+    );
+
+    // First repetition's diff: nothing saved yet. Second's: the aggregate of one.
+    expect(duringDiffs).toEqual([undefined, 1]);
   });
 });
