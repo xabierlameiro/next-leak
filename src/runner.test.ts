@@ -1737,6 +1737,7 @@ describe("confirming a borderline leak from a fresh server", () => {
       expect(workDirs[2]).toMatch(/-settle$/);
       expect(route.trend.verdict).toBe("leak");
       expect(route.resolvedWithCycles).toBe(16);
+      expect(route.settledBy).toEqual({ cycles: 16 });
       expect(route.confidence.supersededVerdict).toBeUndefined();
       expect(route.repetitions?.map((entry) => entry.verdict)).toEqual(["stable", "leak", "leak"]);
       // CLEAR: 2.5 MB per cycle over 5000 requests.
@@ -2005,6 +2006,7 @@ describe("confirming a borderline leak from a fresh server", () => {
     });
 
     it("does not escalate when the passes agree, or under --no-resolve", async () => {
+      expect((await run([{ ...FLAT, unsettled: true }, FLAT])).route.settledBy).toBeUndefined();
       expect((await run([{ ...FLAT, unsettled: true }, FLAT])).calls).toBe(2);
       expect((await run([BORDERLINE, FLAT], { resolveInconclusive: false })).calls).toBe(1);
     });
@@ -2739,5 +2741,130 @@ describe("cache entries the measured server writes", () => {
       makeDeps([])
     );
     expect(progress.some((line) => line.startsWith("removed"))).toBe(false);
+  });
+});
+
+// vercel/next.js#97938 slug route: one route, four passes over two hours,
+// killed during the last. Nothing had been written: run.json waited for the
+// route to finish.
+describe("saving progress within a route", () => {
+  it("writes the best result so far before each further pass", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-checkpoint-"));
+    const onDisk: Array<{ status: string; verdict?: string; incomplete?: boolean }> = [];
+    let call = 0;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", outputDir },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          call += 1;
+          if (call > 1) {
+            const [stamp] = await readdir(outputDir);
+            const saved = JSON.parse(
+              await readFile(path.join(outputDir, stamp ?? "", "run.json"), "utf8")
+            ) as { routes: Array<{ status: string; trend?: { verdict: string }; incomplete?: boolean }> };
+            const route = saved.routes[0];
+            onDisk.push({
+              status: route?.status ?? "missing",
+              ...(route?.trend !== undefined && { verdict: route.trend.verdict }),
+              ...(route?.incomplete === true && { incomplete: true }),
+            });
+          }
+          const base = ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return {
+            ...base,
+            ...(call === 1 && {
+              settleOutcomes: [{ phase: "cycle 1", status: "moving" as const, polls: 40 }],
+            }),
+            trend:
+              call === 2
+                ? { verdict: "leak" as const, growthPerCycle: 2.5 * MB, deltas: [] }
+                : { verdict: "stable" as const, growthPerCycle: 0.1 * MB, deltas: [] },
+          };
+        },
+      }
+    );
+
+    // Before the confirmation: the first pass. Before the settling pass: the
+    // first pass with the disagreement attached.
+    expect(onDisk).toEqual([
+      { status: "measured", verdict: "stable", incomplete: true },
+      { status: "measured", verdict: "stable", incomplete: true },
+    ]);
+    const [stamp] = await readdir(outputDir);
+    const final = JSON.parse(await readFile(path.join(outputDir, stamp ?? "", "run.json"), "utf8")) as {
+      routes: Array<{ incomplete?: boolean }>;
+    };
+    expect(final.routes[0]?.incomplete).toBeUndefined();
+    expect((await readdir(path.join(outputDir, stamp ?? ""))).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("keeps measuring when a checkpoint cannot be written", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const outputDir = await mkdtemp(path.join(tmpdir(), "next-leak-checkpoint-"));
+    const progress: string[] = [];
+    let call = 0;
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", outputDir, onProgress: (line) => progress.push(line) },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          call += 1;
+          if (call === 1) {
+            // run.json becomes a directory: the rename onto it fails.
+            const [stamp] = await readdir(outputDir);
+            await mkdir(path.join(outputDir, stamp ?? "", "run.json", "x"), { recursive: true });
+          }
+          const base = ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return {
+            ...base,
+            ...(call === 1 && {
+              settleOutcomes: [{ phase: "cycle 1", status: "moving" as const, polls: 40 }],
+            }),
+          };
+        },
+      }
+    ).catch((cause: unknown) => cause);
+
+    expect(call).toBe(2);
+    expect(progress.some((line) => line.startsWith("could not save progress to run.json:"))).toBe(true);
+    // The final write fails the same way and is not swallowed.
+    expect(report).toBeInstanceOf(Error);
+  });
+});
+
+describe("an interrupt during a pass", () => {
+  it("skips the snapshot diff and says the snapshots are on disk", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const controller = new AbortController();
+    const events: string[] = [];
+    const progress: string[] = [];
+    const report = await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        signal: controller.signal,
+        onProgress: (line) => progress.push(line),
+      },
+      {
+        ...makeDeps(events),
+        ritual: async () => {
+          // The interrupt lands while the leaking pass is running.
+          controller.abort();
+          return ritualResult("/leaky", [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    const route = report.routes[0];
+    if (route?.status !== "measured") throw new Error("expected a measured route");
+    expect(route.trend.verdict).toBe("leak");
+    expect(events.some((event) => event.startsWith("diff:"))).toBe(false);
+    expect(progress.some((line) => line.startsWith("diffing snapshots"))).toBe(false);
+    expect(route.attributionGap).toEqual({
+      reason: "interrupted",
+      detail: "baseline /snap//leaky/baseline.heapsnapshot, after /snap//leaky/after.heapsnapshot",
+    });
   });
 });

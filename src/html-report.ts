@@ -1,4 +1,5 @@
 import { effectiveVerdict, withdrawnByDisagreement } from "./confidence.js";
+import { gapCause } from "./attribution-gap.js";
 import { enclosingNote, shownFindings } from "./finding-selection.js";
 import { nodeComparisonText } from "./node-comparison.js";
 import { assessPeakPressure, describePeakPressure, retainedAfterLoad } from "./peak-pressure.js";
@@ -121,10 +122,7 @@ function attributionGapBlock(route: RouteReport): string {
   if (route.status !== "measured" || route.attributionGap === undefined) {
     return "";
   }
-  const cause =
-    route.attributionGap.reason === "snapshot-unavailable"
-      ? "the final heap snapshot was never taken"
-      : "the heap snapshots could not be read";
+  const cause = gapCause(route.attributionGap.reason);
   return (
     `<p class="warn">No attribution: ${cause}, so this run cannot name what ` +
     `retains the memory. The curve above is unaffected. ` +

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { resolveCycles, settleCycles, warrantsIssueDraft } from "./confidence.js";
@@ -375,16 +375,29 @@ export async function runMeasurement(
   );
   await mkdir(workDir, { recursive: true });
 
+  const reports: RouteReport[] = [];
   const context: MeasurementContext = {
     deps, options, target, workDir, routeConfig, registry, nextVersion, progress,
     confirmBudget: { remainingMs: options.confirmBudgetMs ?? DEFAULT_CONFIRM_BUDGET_MS },
+    checkpoint: async (inProgress) => {
+      const partial: RouteReport =
+        inProgress.status === "measured" ? { ...inProgress, incomplete: true } : inProgress;
+      try {
+        await persist({ ...buildReport(), routes: [...reports, partial] });
+      } catch (cause) {
+        // A checkpoint is insurance; failing to write one is not a reason to stop.
+        progress(`could not save progress to run.json: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    },
   };
-  const reports: RouteReport[] = [];
 
   /**
-   * Persisted after every route, not just at the end: a long run must not
-   * lose hours of measurements to a sudden death (OOM, a dependency calling
-   * process.exit, kill -9). The final write adds the bundle paths.
+   * Persisted after every route, and before every further pass of a route
+   * through `checkpoint`, not just at the end: a long run must not lose hours
+   * of measurements to a sudden death (OOM, a dependency calling process.exit,
+   * kill -9). One route of the vercel/next.js#97938 slug reproduction ran four
+   * passes over two hours and was killed in the last; nothing had been saved.
+   * The final write adds the bundle paths.
    */
   const buildReport = (): RunReport => ({
     appDir: target.appDir,
@@ -405,8 +418,13 @@ export async function runMeasurement(
     routes: reports,
     bundle: { htmlReport: path.join(workDir, "report.html"), issues: [] },
   });
+  // Written aside and renamed into place: a kill mid-write must leave the
+  // previous run.json, not half of the next one.
   const persist = async (report: RunReport): Promise<void> => {
-    await writeFile(path.join(workDir, "run.json"), `${JSON.stringify(report, null, 2)}\n`);
+    const target = path.join(workDir, "run.json");
+    const pending = `${target}.tmp`;
+    await writeFile(pending, `${JSON.stringify(report, null, 2)}\n`);
+    await rename(pending, target);
   };
 
   const clock = deps.now ?? Date.now;

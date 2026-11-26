@@ -279,6 +279,7 @@ async function confirmBorderline(
     );
     return first;
   }
+  await context.checkpoint?.(first);
   context.progress(
     `confirming ${label} from a fresh server: ${confirmation.reason}` +
       paceNote(pass.firstPassMs / 1000, "— what the first pass took")
@@ -352,6 +353,7 @@ async function settleDisagreement(
     );
     return judged;
   }
+  await context.checkpoint?.(judged);
   context.progress(
     `settling ${label} over ${cycles} cycles from a fresh server: the two passes disagreed` +
       paceNote(projectedMs / 1000, "at the pace of the first pass")
@@ -383,6 +385,7 @@ async function settleDisagreement(
   }
   return {
     ...settled,
+    settledBy: { cycles },
     repetitions: [
       ...(judged.repetitions ?? []),
       {
@@ -514,6 +517,7 @@ async function measureWithResolution(
       return first;
     }
     const cycles = resolveCycles(context.options.cycles ?? RITUAL_DEFAULTS.cycles);
+    await context.checkpoint?.(first);
     progress(
       `re-measuring ${route.path} with ${cycles} cycles: ${reason}` +
         paceNote(passSecondsAt(first.timings, cycles), "at the pace of the first pass")

@@ -104,6 +104,11 @@ export type RouteReport =
        * its existing shape unless repetition was asked for.
        */
       repetitions?: RepetitionSummary[];
+      /**
+       * Set when the first two passes disagreed and a longer pass, the last
+       * of `repetitions`, decided the verdict.
+       */
+      settledBy?: { cycles: number };
       /** One entry per `--node` binary, in order, when the run compared several. */
       nodeVersions?: NodeVersionResult[];
       /**
@@ -172,9 +177,10 @@ export type RouteReport =
         /**
          * `snapshot-unreadable`: both snapshots exist, the diff refused them.
          * `snapshot-unavailable`: the final snapshot was never taken, so there
-         * is nothing to diff. Either way the verdict below still stands.
+         * is nothing to diff. `interrupted`: both exist, and the run was
+         * stopped before comparing them. Either way the verdict still stands.
          */
-        reason: "snapshot-unreadable" | "snapshot-unavailable";
+        reason: "snapshot-unreadable" | "snapshot-unavailable" | "interrupted";
         detail: string;
       };
       /** Null when there is no diff or no module registry. */
@@ -185,6 +191,12 @@ export type RouteReport =
        * `inconclusive` and the run went back for more evidence.
        */
       resolvedWithCycles?: number;
+      /**
+       * Set on a route saved while further passes were still to run: the
+       * process was stopped before they finished, so this is the best
+       * result in hand, not the route's final one.
+       */
+      incomplete?: true;
     };
 
 export type MeasuredRoute = Extract<RouteReport, { status: "measured" }>;
@@ -325,5 +337,7 @@ export type MeasurementContext = {
   progress: ProgressFn;
   /** What is left of the confirmation budget, spent as the run goes. */
   confirmBudget: { remainingMs: number };
+  /** Saves the route's best result so far, before a further pass starts. */
+  checkpoint?: (inProgress: RouteReport) => Promise<void>;
 };
 

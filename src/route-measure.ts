@@ -167,6 +167,18 @@ async function diffFor(
   if ((verdict === "stable" || verdict === "pressure") && options.diffAll !== true) {
     return { diff: null };
   }
+  // A diff of hundreds of MB is minutes of CPU nothing can interrupt. After a
+  // Ctrl+C, or a supervisor's SIGTERM that turns into SIGKILL seconds later,
+  // the run's job is to write what it has: the snapshots stay on disk.
+  if (options.signal?.aborted === true) {
+    return {
+      diff: null,
+      attributionGap: {
+        reason: "interrupted",
+        detail: `baseline ${result.baselineSnapshot}, after ${result.afterSnapshot}`,
+      },
+    };
+  }
   progress(`diffing snapshots for ${route.path}`);
   try {
     return { diff: await deps.diff(result.baselineSnapshot, result.afterSnapshot) };

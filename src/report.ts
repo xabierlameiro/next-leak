@@ -1,4 +1,5 @@
 import type { FindingAttribution } from "./attribution.js";
+import { gapCauseOfMany } from "./attribution-gap.js";
 import type { HeapSample } from "./control-server.js";
 import { classifyTrend, type TrendResult, type TrendVerdict } from "./trend.js";
 import { enclosingNote, shownFindings } from "./finding-selection.js";
@@ -129,6 +130,16 @@ function revalidationLines(route: MeasuredRouteView): string[] {
  * verdict across runs whose retained-per-render differed by 2.5×. Publishing
  * the midpoint of that as a measurement is the error this exists to prevent.
  */
+/** "the first two disagreed (stable, leak); a 16-cycle pass decided: leak" */
+function settledText(
+  repetitions: NonNullable<MeasuredRouteView["repetitions"]>,
+  cycles: number
+): string {
+  const short = repetitions.slice(0, -1).map((entry) => entry.verdict);
+  const decided = repetitions.at(-1)?.verdict ?? "inconclusive";
+  return `the first ${short.length} disagreed (${short.join(", ")}); a ${cycles}-cycle pass decided: ${decided}`;
+}
+
 function repetitionLines(route: MeasuredRouteView): string[] {
   const repetitions = route.repetitions;
   if (repetitions === undefined || repetitions.length < 2) {
@@ -139,9 +150,11 @@ function repetitionLines(route: MeasuredRouteView): string[] {
   const high = Math.max(...rates);
   const verdicts = [...new Set(repetitions.map((entry) => entry.verdict))];
   const agreement =
-    verdicts.length === 1
-      ? `all ${repetitions.length} agreed on ${verdicts[0]}`
-      : `they disagreed (${verdicts.join(", ")}), so no single verdict is reported`;
+    route.settledBy === undefined
+      ? verdicts.length === 1
+        ? `all ${repetitions.length} agreed on ${verdicts[0]}`
+        : `they disagreed (${verdicts.join(", ")}), so no single verdict is reported`
+      : settledText(repetitions, route.settledBy.cycles);
   const range = `${low >= 0 ? "+" : ""}${(low / MB).toFixed(2)} to ${formatGrowth(high)}`;
   return [`      across ${repetitions.length} repetitions: ${range} — ${agreement}`];
 }
@@ -500,18 +513,17 @@ function attributionGapLine(report: RunReport): string[] {
     return [];
   }
   const names = gaps.map((route) => route.route).join(", ");
-  // Two different failures, and the difference tells the reader what to try
+  // Different failures, and the difference tells the reader what to try
   // next: an unreadable snapshot is on disk and too big to parse, a missing
-  // one was never written because the process would not hand it over.
-  const unwritten = gaps.filter(
-    (route) => route.status === "measured" && route.attributionGap?.reason === "snapshot-unavailable"
-  ).length;
-  const cause =
-    unwritten === gaps.length
-      ? "their final snapshot could not be taken"
-      : unwritten === 0
-        ? "their snapshot could not be read"
-        : "their final snapshot could not be taken or read";
+  // one was never written because the process would not hand it over, and an
+  // interrupted run left both on disk for a later diff.
+  const cause = gapCauseOfMany(
+    gaps.flatMap((route) =>
+      route.status === "measured" && route.attributionGap !== undefined
+        ? [route.attributionGap.reason]
+        : []
+    )
+  );
   return [
     `${gaps.length} route(s) finished without attribution because ${cause} ` +
       `(${names}) — the verdicts stand, what retains the memory is unnamed`,

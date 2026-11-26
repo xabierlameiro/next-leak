@@ -70,7 +70,7 @@ function installInterruptHandlers(): AbortController {
         discardPendingSnapshotsSync();
         process.exit(130);
       }
-      console.error("\n· interrupted — stopping the measured process and writing a partial run.json");
+      console.error("\n· interrupted — stopping the measured process and saving what was measured to run.json");
       aborter.abort();
       killActiveChildren();
     });
