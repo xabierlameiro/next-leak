@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -2162,6 +2162,25 @@ describe("measuring on next dev", () => {
     return appDir;
   }
 
+  it("leaves the cache alone: next dev persists nothing beside a build", async () => {
+    const appDir = await devApp();
+    // Where the standalone cleanup would look, relative to the server path.
+    const wouldClean = path.join(appDir, "node_modules", "next", "dist", "bin", ".next", "server", "app");
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", dev: true },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          await mkdir(wouldClean, { recursive: true });
+          await writeFile(path.join(wouldClean, `${options.route.replaceAll("/", "_")}.html`), "x");
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    expect((await readdir(wouldClean)).sort()).toEqual(["_.html", "_dynamic.html"]);
+  });
+
   it("runs next dev for each route found in source, with no build", async () => {
     const appDir = await devApp();
     const seen: Array<{ route: string; serverPath: string; dev: unknown }> = [];
@@ -2303,5 +2322,125 @@ describe("pacing notes during a run", () => {
       "1 route left · ≈ 3m at the pace so far — /a served 100.0 req/s, not the 250 the estimate assumed"
     );
     expect(progress.filter((line) => line.includes("left ·"))).toHaveLength(1);
+  });
+});
+
+// vercel/next.js#97938 slug route: about 1.3 MB of ISR render per unique key,
+// 33 GB left in .next/standalone after five runs.
+describe("cache entries the measured server writes", () => {
+  it("removes each pass's renders before the next pass starts, and says so", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const cacheDir = path.join(appDir, ".next", "standalone", ".next", "server", "app");
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(path.join(cacheDir, "index.html"), "built");
+    const seenAtStart: string[][] = [];
+    const progress: string[] = [];
+    let call = 0;
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (line) => progress.push(line) },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          call += 1;
+          seenAtStart.push((await readdir(cacheDir)).sort());
+          await writeFile(path.join(cacheDir, `seed-${call}.html`), "x".repeat(2048));
+          const base = ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          // Undecided first, so a second pass follows.
+          return call === 1
+            ? { ...base, trend: { verdict: "inconclusive" as const, growthPerCycle: 0, deltas: [] } }
+            : base;
+        },
+      }
+    );
+
+    expect(seenAtStart).toEqual([["index.html"], ["index.html"]]);
+    expect(await readdir(cacheDir)).toEqual(["index.html"]);
+    expect(progress.filter((line) => line.startsWith("removed 1 cache entry (0.0 MB)"))).toHaveLength(2);
+  });
+
+  it("cleans up after a process that failed", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const cacheDir = path.join(appDir, ".next", "standalone", ".next", "server", "app");
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async () => {
+          await mkdir(cacheDir, { recursive: true });
+          await writeFile(path.join(cacheDir, "seed-1.html"), "x");
+          throw new Error("server crashed");
+        },
+      }
+    );
+
+    expect(await readdir(cacheDir).catch(() => "gone")).toBe("gone");
+  });
+
+  it("counts several entries in the plural", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const cacheDir = path.join(appDir, ".next", "standalone", ".next", "server", "app");
+    const progress: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (line) => progress.push(line) },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          await mkdir(cacheDir, { recursive: true });
+          await writeFile(path.join(cacheDir, "seed-1.html"), "x".repeat(1024 * 1024));
+          await writeFile(path.join(cacheDir, "seed-1.meta"), "x".repeat(1024 * 1024));
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+    expect(progress).toContain("removed 2 cache entries (2.0 MB) the server wrote next to the build");
+  });
+
+  it("keeps the measurement when the cleanup cannot run", async () => {
+    // A cache directory the run cannot read: the listing fails up front.
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const nextDir = path.join(appDir, ".next", "standalone", ".next");
+    await mkdir(nextDir, { recursive: true });
+    // `server/app` is a link loop, which readdir reports as ELOOP.
+    await mkdir(path.join(nextDir, "server"), { recursive: true });
+    await symlink("app", path.join(nextDir, "server", "app"));
+    const progress: string[] = [];
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (line) => progress.push(line) },
+      makeDeps([])
+    );
+
+    expect(report.routes[0]?.status).toBe("measured");
+    expect(progress.some((line) => line.startsWith("cannot list the build's cache, so it will not be cleaned: ELOOP"))).toBe(true);
+  });
+
+  it("keeps the measurement when the cleanup fails afterwards", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const serverDir = path.join(appDir, ".next", "standalone", ".next", "server");
+    const progress: string[] = [];
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (line) => progress.push(line) },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          // Readable at the start; a link loop by the end.
+          await mkdir(serverDir, { recursive: true });
+          await symlink("app", path.join(serverDir, "app"));
+          return ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+        },
+      }
+    );
+
+    expect(report.routes[0]?.status).toBe("measured");
+    expect(progress.some((line) => line.startsWith("could not remove the cache entries the server wrote: ELOOP"))).toBe(true);
+  });
+
+  it("stays quiet when the server wrote nothing", async () => {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progress: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (line) => progress.push(line) },
+      makeDeps([])
+    );
+    expect(progress.some((line) => line.startsWith("removed"))).toBe(false);
   });
 });

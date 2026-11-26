@@ -61,7 +61,8 @@
     "src/judge.ts",
     "src/corpus.ts",
     "src/eta.ts",
-    "src/format-duration.ts"
+    "src/format-duration.ts",
+    "src/isr-cleanup.ts"
   ],
   "thresholds": {
     "high": 90,

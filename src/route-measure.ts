@@ -4,6 +4,7 @@ import path from "node:path";
 import { attributeDiff } from "./attribution.js";
 import type { HeapSample } from "./control-server.js";
 import { SnapshotError, type HeapDiff } from "./heap-diff.js";
+import { cacheRoots, listCache, removeNewEntries, type CacheListing } from "./isr-cleanup.js";
 import { auditMeasurement } from "./judge.js";
 import { DEFAULT_MAX_OLD_SPACE_MB } from "./launcher.js";
 import type { DiscoveredRoute } from "./manifests.js";
@@ -183,6 +184,52 @@ async function diffFor(
   }
 }
 
+/**
+ * Runs one measured process and removes the cache entries it wrote.
+ *
+ * Under `next dev` nothing is persisted next to the build, so there is nothing
+ * to remove. The cleanup runs however the process ended: a run that died of
+ * heap wrote its renders too.
+ */
+async function withCacheCleanup<T>(context: MeasurementContext, run: () => Promise<T>): Promise<T> {
+  if (context.options.dev === true) {
+    return run();
+  }
+  const roots = cacheRoots(context.target.standaloneServer);
+  let before: CacheListing;
+  try {
+    before = await listCache(roots);
+  } catch (cause) {
+    // The measurement does not depend on it; a full disk later is the cost.
+    context.progress(`cannot list the build's cache, so it will not be cleaned: ${messageOf(cause)}`);
+    return run();
+  }
+  try {
+    return await run();
+  } finally {
+    await reportCleanup(context, before);
+  }
+}
+
+/** Never throws: a cleanup that fails must not replace the measurement's own outcome. */
+async function reportCleanup(context: MeasurementContext, before: CacheListing): Promise<void> {
+  try {
+    const removed = await removeNewEntries(before);
+    if (removed.files > 0) {
+      context.progress(
+        `removed ${removed.files} cache entr${removed.files === 1 ? "y" : "ies"} ` +
+          `(${(removed.bytes / (1024 * 1024)).toFixed(1)} MB) the server wrote next to the build`
+      );
+    }
+  } catch (cause) {
+    context.progress(`could not remove the cache entries the server wrote: ${messageOf(cause)}`);
+  }
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 /** Ritual, audit, diff and attribution for one route in a fresh process. */
 export async function measureRoute(
   context: MeasurementContext,
@@ -193,9 +240,8 @@ export async function measureRoute(
 ): Promise<RouteReport> {
   const { deps, options, routeConfig, registry, nextVersion, progress } = context;
   const cache = cachePlan(context, route, requestPath);
-  const result = await deps.ritual(
-    await ritualOptionsFor(context, route, requestPath, index, pass, cache)
-  );
+  const ritualOptions = await ritualOptionsFor(context, route, requestPath, index, pass, cache);
+  const result = await withCacheCleanup(context, () => deps.ritual(ritualOptions));
 
   // Audited before anything is derived from the verdict: a measurement that
   // did not observe what it claims must not drive a diff, an attribution, or

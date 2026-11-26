@@ -512,6 +512,13 @@ Node and OS limits come from one startup check shared by all three commands.
 
 ### Other limits
 
+- **Disk.** A standalone server writes every ISR render next to the build, and
+  with `{n}` every request is a new page: on the [#97938](https://github.com/vercel/next.js/issues/97938)
+  slug route about 1.3 MB each, 33 GB after five runs. After each measured
+  process, next-leak removes the cache entries it wrote under
+  `.next/standalone/.next/server/app` and `.next/cache`. What the build
+  prerendered and anything already there are kept. `next dev` persists nothing
+  there, so nothing is removed.
 - **Containers.** The heap cap is a ceiling only if the container lets the
   server reach it. Before measuring, next-leak reads the memory limit Node
   sees and warns when it cannot hold `--max-old-space` plus 256 MB outside the
