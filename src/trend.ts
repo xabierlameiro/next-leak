@@ -484,6 +484,64 @@ function isSustainedCreep(samples: readonly number[], requestsPerCycle: number |
   );
 }
 
+/**
+ * Post-warm-up deltas from which a series is judged by its slope rather than
+ * by its give-backs. Below 12 a sign test cannot clear p < 0.05 once a cycle
+ * or two goes flat; the settling pass of a 4-cycle run has 15.
+ */
+const LONG_SERIES_MIN_DELTAS = 12;
+
+/** Significance the share of growing cycles has to reach. */
+const LONG_SERIES_MAX_P = 0.05;
+
+/** P(at least `k` heads in `n` fair tosses): the one-sided sign test. */
+export function signTestP(n: number, k: number): number {
+  let tail = 0;
+  let term = 0.5 ** n;
+  for (let i = 0; i <= n; i += 1) {
+    if (i >= k) {
+      tail += term;
+    }
+    term = (term * (n - i)) / (i + 1);
+  }
+  return tail;
+}
+
+/**
+ * A leak seen over a long window through noise that makes some cycles give
+ * memory back.
+ *
+ * Over four cycles a flat or negative delta means a plateau, and the shape
+ * rules acquit on one. Over sixteen, noise of ±1 MB a cycle makes one nearly
+ * certain: the settling pass on the vercel/next.js#97938 slug route (16.3.6,
+ * Node 22) grew 0.39 MB a cycle by Theil–Sen against a 0.25 MB gate, 12 of
+ * 15 deltas positive, and was called stable. Three conditions together:
+ * the robust slope clears the gate; the growing cycles are more than chance;
+ * the last third of the series keeps half the slope. The sign test alone
+ * would accuse a flat route (12 of 15 positive at 36 KB a cycle on the same
+ * route over 50 repeating keys); the slope is what separates.
+ */
+export function isLongSeriesLeak(
+  samples: readonly number[],
+  deltas: readonly number[],
+  minGrowth: number
+): boolean {
+  if (deltas.length < LONG_SERIES_MIN_DELTAS) {
+    return false;
+  }
+  const series = samples.slice(1);
+  const slope = theilSenSlope(series);
+  if (slope < minGrowth) {
+    return false;
+  }
+  const growing = deltas.filter((delta) => delta > 0).length;
+  if (signTestP(deltas.length, growing) >= LONG_SERIES_MAX_P) {
+    return false;
+  }
+  const lastThird = series.slice(-(Math.floor(series.length / 3) + 1));
+  return theilSenSlope(lastThird) >= slope * CREEP_MIN_SLOPE_RATIO;
+}
+
 /** The verdict itself, decided from the shape of the series and nothing else. */
 function classifyShape(samples: readonly number[], options: TrendOptions): TrendResult {
   const minGrowth = options.minGrowthPerCycle ?? MIN_GROWTH_NOISE_FLOOR;
@@ -537,6 +595,9 @@ function classifyShape(samples: readonly number[], options: TrendOptions): Trend
     return { verdict: "leak", growthPerCycle: mean, deltas, source: "heap" };
   }
   if (isStepwiseGrowth(samples, deltas, growingCycles, mean, minGrowth)) {
+    return { verdict: "leak", growthPerCycle: mean, deltas, source: "heap" };
+  }
+  if (isLongSeriesLeak(samples, deltas, minGrowth)) {
     return { verdict: "leak", growthPerCycle: mean, deltas, source: "heap" };
   }
   if (anyFlatOrDown || mean < minGrowth) {

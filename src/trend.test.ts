@@ -4,8 +4,7 @@ import {
   classifyTrend,
   minGrowthFor,
   MIN_GROWTH_NOISE_FLOOR,
-  theilSenSlope,
-} from "./trend.js";
+  theilSenSlope, isLongSeriesLeak, signTestP } from "./trend.js";
 
 const MB = 1024 * 1024;
 const KIB = 1024;
@@ -838,5 +837,96 @@ describe("theilSenSlope", () => {
   it("is zero for fewer than two points", () => {
     expect(theilSenSlope([5])).toBe(0);
     expect(theilSenSlope([])).toBe(0);
+  });
+});
+
+// vercel/next.js#97938 slug route, 16.3.6 on Node 22: the 16-cycle pass that
+// settled a disagreement. 6.3 MB over 15 cycles, three of them giving memory
+// back, and the shape rules called it stable.
+describe("long series judged by their slope", () => {
+  const SETTLING_PASS = [
+    60181232, 371072720, 372688424, 372852616, 373484408, 373784352, 374306536, 375544144,
+    375253568, 375719456, 376232328, 376819192, 375603000, 376511560, 377517824, 376790392,
+    377380920,
+  ];
+  // Same route on 16.4.6 over 50 repeating keys: 12 of 15 deltas positive, flat.
+  const BOUNDED_16 = [
+    41904352, 47672032, 48536176, 48590216, 48714632, 48770344, 48831440, 48886976, 48903368,
+    48894168, 48960096, 48982352, 48961528, 49049680, 49080696, 49056392, 49107992,
+  ];
+  const gate = { minGrowthPerCycle: minGrowthFor(300) };
+
+  it("calls the noisy 16-cycle leak a leak", () => {
+    expect(classifyTrend(SETTLING_PASS, gate).verdict).toBe("leak");
+  });
+
+  it("leaves the flat route alone although most of its deltas are positive", () => {
+    expect(classifyTrend(BOUNDED_16, gate).verdict).not.toBe("leak");
+  });
+
+
+  it("needs twelve deltas, so shorter windows keep the shape rules", () => {
+    // The settling pass cut to 11 deltas: the rule does not apply.
+    const short = SETTLING_PASS.slice(0, 13);
+    expect(isLongSeriesLeak(short, deltasOf(short), minGrowthFor(300))).toBe(false);
+  });
+});
+
+const deltasOf = (samples: readonly number[]) =>
+  samples.slice(2).map((value, index) => value - (samples[index + 1] ?? 0));
+
+describe("isLongSeriesLeak", () => {
+  // Fifteen deltas of `step` after a warm-up step, with `down` of them negative.
+  const series = (step: number, down: number[] = [], lastFive = step) => {
+    const out = [0, 50 * MB];
+    for (let i = 0; i < 15; i += 1) {
+      out.push((out.at(-1) ?? 0) + (down.includes(i) ? -step / 2 : i >= 10 ? lastFive : step));
+    }
+    return out;
+  };
+  const judge = (samples: number[], gate = 256 * KIB) =>
+    isLongSeriesLeak(samples, deltasOf(samples), gate);
+
+  it("calls a steady climb with a few give-backs a leak", () => {
+    expect(judge(series(500 * KIB, [3, 7, 11]))).toBe(true);
+  });
+
+  it("needs the slope to reach the gate", () => {
+    expect(judge(series(500 * KIB, [3, 7, 11]), 1 * MB)).toBe(false);
+  });
+
+  it("needs growing cycles beyond chance: 12 of 15 passes, 11 does not", () => {
+    expect(judge(series(500 * KIB, [3, 7, 11]))).toBe(true);
+    expect(judge(series(500 * KIB, [1, 3, 7, 11]))).toBe(false);
+  });
+
+  it("does not count a flat cycle as a growing one", () => {
+    // Four flat cycles among fifteen: 11 growing, under the sign test.
+    const out = [0, 50 * MB];
+    for (let i = 0; i < 15; i += 1) out.push((out.at(-1) ?? 0) + ([2, 5, 8, 12].includes(i) ? 0 : 500 * KIB));
+    expect(judge(out)).toBe(false);
+  });
+
+  it("needs the last third to keep half the slope", () => {
+    expect(judge(series(400 * KIB, [], 400 * KIB))).toBe(true);
+    expect(judge(series(400 * KIB, [], 40 * KIB))).toBe(false);
+  });
+
+  it("needs twelve deltas", () => {
+    const eleven = series(400 * KIB).slice(0, 13);
+    const twelve = series(400 * KIB).slice(0, 14);
+    expect(judge(twelve)).toBe(true);
+    expect(judge(eleven)).toBe(false);
+  });
+});
+
+describe("signTestP", () => {
+  it("is the one-sided binomial tail", () => {
+    expect(signTestP(15, 12)).toBeCloseTo(0.0176, 4);
+    expect(signTestP(15, 11)).toBeCloseTo(0.0592, 4);
+    expect(signTestP(12, 10)).toBeCloseTo(0.0193, 4);
+    expect(signTestP(4, 0)).toBe(1);
+    expect(signTestP(4, 4)).toBe(1 / 16);
+    expect(signTestP(4, 5)).toBe(0);
   });
 });
