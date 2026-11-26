@@ -28,15 +28,21 @@ import type {
  * reporting. More cycles would only spend more traffic reaching the same
  * ceiling again.
  */
-function reasonToResolve(verdict: TrendVerdict): string | null {
+function reasonToResolve(verdict: TrendVerdict, promotedFrom?: TrendVerdict): string | null {
   switch (verdict) {
     case "inconclusive":
       return "the first pass could not call it";
     case "saturating":
       return "growth was still decelerating when the window ran out";
+    case "pressure":
+      // The finding is about peaks, but a curve still bending under it is the
+      // shape a slow leak and a filling store share. On the vercel/next.js#97938
+      // slug route, four cycles read as a bend; sixteen showed a leak.
+      return promotedFrom === "saturating"
+        ? "growth was still decelerating when the window ran out"
+        : null;
     case "leak":
     case "stable":
-    case "pressure":
       return null;
   }
 }
@@ -307,7 +313,10 @@ async function measureWithResolution(
       index,
       firstPass(repetitionSuffix, nodePath)
     );
-    const reason = first.status === "measured" ? reasonToResolve(effectiveVerdict(first)) : null;
+    const reason =
+      first.status === "measured"
+        ? reasonToResolve(effectiveVerdict(first), first.trend.promotedFrom)
+        : null;
     if (first.status !== "measured" || context.options.resolveInconclusive === false || reason === null) {
       return first;
     }

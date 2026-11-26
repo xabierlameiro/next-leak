@@ -1988,3 +1988,36 @@ describe("measuring on next dev", () => {
     expect(report.server).toBeUndefined();
   });
 });
+
+// vercel/next.js#97938 slug route: four cycles read as a bend under pressure,
+// sixteen showed a leak. A bending curve gets the longer look either way.
+describe("re-measuring pressure promoted from a bending curve", () => {
+  async function run(trend: { verdict: "pressure"; promotedFrom?: "stable" | "saturating" }) {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const cycles: Array<number | undefined> = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js" },
+      {
+        ...makeDeps([]),
+        ritual: async (options) => {
+          cycles.push(options.cycles);
+          const base = ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return { ...base, trend: { ...trend, growthPerCycle: 0.1 * MB, deltas: [] } };
+        },
+      }
+    );
+    return cycles;
+  }
+
+  it("measures it again with more cycles when the curve was saturating", async () => {
+    const cycles = await run({ verdict: "pressure", promotedFrom: "saturating" });
+
+    expect(cycles).toHaveLength(2);
+    expect(cycles[1]).toBe(8);
+  });
+
+  it("leaves pressure over a flat curve at one pass", async () => {
+    expect(await run({ verdict: "pressure", promotedFrom: "stable" })).toHaveLength(1);
+    expect(await run({ verdict: "pressure" })).toHaveLength(1);
+  });
+});

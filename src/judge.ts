@@ -42,7 +42,11 @@ export function judgeTrend(input: TrendInput): TrendResult {
     trend: classifyMemoryTrend(
       input.memorySamples.map((sample) => sample.heapUsed),
       input.memorySamples.map((sample) => sample.external),
-      { minGrowthPerCycle, ...(input.cacheDriven === true && { cacheDriven: true }) }
+      {
+        minGrowthPerCycle,
+        requestsPerCycle: input.requestsPerCycle,
+        ...(input.cacheDriven === true && { cacheDriven: true }),
+      }
     ),
     peaks: input.peaks,
     retainedHeapBytes: retainedAfterLoad(input.memorySamples) ?? 0,

@@ -4,6 +4,7 @@ import {
   classifyTrend,
   minGrowthFor,
   MIN_GROWTH_NOISE_FLOOR,
+  theilSenSlope,
 } from "./trend.js";
 
 const MB = 1024 * 1024;
@@ -669,5 +670,133 @@ describe("cache-driven context", () => {
 
     expect(result.verdict).toBe("leak");
     expect(result.cacheDriven).toBe(true);
+  });
+});
+
+// vercel/next.js#97938 reproduction, 16.4.6 on Node 24, 2026-11-26: 16 cycles
+// of 300 requests. A unique slug per request grew in all 15 deltas; 50
+// repeating slugs stayed flat. The first was called `saturating`.
+describe("sustained creep below the gate", () => {
+  const UNIQUE_16 = [
+    43457680, 48233904, 49295248, 49504128, 49848608, 50048032, 50269048, 50612040, 50782984,
+    50926520, 51148408, 51300976, 51444064, 51684192, 52095200, 52217568, 52443976,
+  ];
+  const BOUNDED_16 = [
+    41904352, 47672032, 48536176, 48590216, 48714632, 48770344, 48831440, 48886976, 48903368,
+    48894168, 48960096, 48982352, 48961528, 49049680, 49080696, 49056392, 49107992,
+  ];
+  const at300 = { minGrowthPerCycle: minGrowthFor(300), requestsPerCycle: 300 };
+
+  it("calls the slow per-key leak a leak", () => {
+    expect(classifyTrend(UNIQUE_16, at300).verdict).toBe("leak");
+  });
+
+  it("leaves the same build over repeating keys alone", () => {
+    expect(classifyTrend(BOUNDED_16, at300).verdict).not.toBe("leak");
+  });
+
+  it("needs the traffic per cycle, so callers that do not pass it are unchanged", () => {
+    expect(classifyTrend(UNIQUE_16, { minGrowthPerCycle: minGrowthFor(300) }).verdict).toBe(
+      "saturating"
+    );
+  });
+
+  it("needs seven deltas: a four-cycle run cannot carry the sign test", () => {
+    expect(classifyTrend(UNIQUE_16.slice(0, 8), at300).verdict).not.toBe("leak");
+    expect(classifyTrend(UNIQUE_16.slice(0, 9), at300).verdict).toBe("leak");
+  });
+
+  it("needs every tail delta to grow", () => {
+    const dipped = [...UNIQUE_16];
+    dipped[14] = (dipped[13] ?? 0) - 1;
+    dipped[15] = (dipped[14] ?? 0) + 1;
+    dipped[16] = (dipped[15] ?? 0) + 1;
+    expect(classifyTrend(dipped, at300).verdict).not.toBe("leak");
+  });
+
+  it("needs at least 400 bytes per request in the tail", () => {
+    // ~0.78 KB per request at 300 requests is a leak; the same bytes over
+    // 3000 requests per cycle are 0.078 KB per request, under the floor.
+    expect(
+      classifyTrend(UNIQUE_16, { minGrowthPerCycle: minGrowthFor(3000), requestsPerCycle: 3000 })
+        .verdict
+    ).not.toBe("leak");
+  });
+
+  describe("at the rule's edges", () => {
+    // Warm-up sample, then nine post-warm-up samples: eight deltas, split 4/4.
+    const steps = (head: number, tail: number, bump = 0) => {
+      const out = [0, 50 * MB];
+      for (let i = 0; i < 4; i += 1) out.push((out.at(-1) ?? 0) + head);
+      for (let i = 0; i < 4; i += 1) out.push((out.at(-1) ?? 0) + tail + (i === 3 ? bump : 0));
+      return out;
+    };
+    const floor = 400 * 300;
+
+    it("calls a tail exactly at the per-request floor a leak, one byte under not", () => {
+      expect(classifyTrend(steps(floor, floor), at300).verdict).toBe("leak");
+      expect(classifyTrend(steps(floor - 1, floor - 1), at300).verdict).not.toBe("leak");
+    });
+
+    it("calls a tail at exactly half the head's slope a leak, under half not", () => {
+      expect(classifyTrend(steps(2 * floor, floor), at300).verdict).toBe("leak");
+      expect(classifyTrend(steps(2 * floor + 4, floor), at300).verdict).not.toBe("leak");
+    });
+
+    it("does not count a flat tail cycle as growth", () => {
+      expect(classifyTrend(steps(floor, floor, -floor), at300).verdict).not.toBe("leak");
+    });
+
+    it("ignores a zero or negative request count", () => {
+      for (const requestsPerCycle of [0, -300]) {
+        expect(
+          classifyTrend(steps(floor, floor), { minGrowthPerCycle: minGrowthFor(300), requestsPerCycle })
+            .verdict
+        ).not.toBe("leak");
+      }
+    });
+  });
+
+  it("leaves a store that is still filling but slowing to saturation", () => {
+    // Every cycle grows; the tail clears the per-request floor (0.2 MB at 300
+    // requests) but runs at a fortieth of the head's rate.
+    const slowing = [0, 1, 9, 17, 25, 33, 33.2, 33.4, 33.6, 33.8].map((mb) => mb * MB);
+    expect(classifyTrend(slowing, { minGrowthPerCycle: 256 * KIB, requestsPerCycle: 300 }).verdict).toBe(
+      "saturating"
+    );
+  });
+
+  it("keeps the /cached field series saturating when its traffic is known", () => {
+    // 0.17 KB per request at 3000 requests per cycle, judged not a leak.
+    const FIELD_SAMPLES = [
+      30907912, 32686936, 33284984, 33962520, 34428264, 34864256, 35756872, 36204336, 36456840,
+    ];
+    expect(
+      classifyTrend(FIELD_SAMPLES, { minGrowthPerCycle: minGrowthFor(3000), requestsPerCycle: 3000 })
+        .verdict
+    ).toBe("saturating");
+  });
+});
+
+describe("theilSenSlope", () => {
+  it("is the median of pairwise slopes, so one outlier does not move it", () => {
+    expect(theilSenSlope([0, 1, 2, 3, 4])).toBe(1);
+    expect(theilSenSlope([0, 1, 2, 100, 4])).toBe(1);
+  });
+
+  it("averages the two middle slopes when there is an even number of pairs", () => {
+    // Pairwise slopes 1, 1.5, 2, 10/3, 4.5, 7: the median is (2 + 10/3) / 2.
+    expect(theilSenSlope([0, 1, 3, 10])).toBeCloseTo(8 / 3);
+  });
+
+  it("averages the two middle slopes of an even count", () => {
+    // Pairwise slopes of [0, 1, 3]: 1, 1.5, 2 → median 1.5; of [0, 2]: 2.
+    expect(theilSenSlope([0, 1, 3])).toBe(1.5);
+    expect(theilSenSlope([0, 1, 3, 3])).toBe(1);
+  });
+
+  it("is zero for fewer than two points", () => {
+    expect(theilSenSlope([5])).toBe(0);
+    expect(theilSenSlope([])).toBe(0);
   });
 });

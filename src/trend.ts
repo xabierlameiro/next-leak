@@ -48,6 +48,11 @@ export type TrendOptions = {
    * hide the real leaks that live in them.
    */
   cacheDriven?: boolean;
+  /**
+   * Requests each cycle served. Enables the sustained-creep rule, whose floor
+   * is per request; without it that rule never fires.
+   */
+  requestsPerCycle?: number;
 };
 
 /**
@@ -376,6 +381,92 @@ function isTooLargeToAcquit(
   return mean >= minGrowth * ACQUITTAL_MAX_GROWTH_MULTIPLE && netGrowth > 0;
 }
 
+/**
+ * Post-warm-up deltas the sustained-creep rule needs. A four-cycle run has
+ * three; its re-measurement has seven. Below that a sign test over half the
+ * series says nothing.
+ */
+const CREEP_MIN_DELTAS = 7;
+
+/**
+ * Smallest per-request retention the sustained-creep rule will call a leak.
+ *
+ * The gate is a per-cycle noise floor, so at 300 requests per cycle it equals
+ * about 0.85 KB per request, and a slow per-key leak hides under it. This sits
+ * between the two shapes measured: the fixture's `/cached` field series, 0.17
+ * KB per request and judged saturating, and the vercel/next.js#97938 slug route,
+ * 0.78 KB per new key on 16.4.6 over 16 cycles with no ceiling (flat over 50
+ * repeating keys). Young: calibrated on two points.
+ */
+const CREEP_MIN_BYTES_PER_REQUEST = 400;
+
+/**
+ * Share of the first half's slope the second half has to keep. A store still
+ * filling slows down; a leak does not.
+ */
+const CREEP_MIN_SLOPE_RATIO = 0.5;
+
+/** Median of pairwise slopes: one large cycle cannot move it. */
+export function theilSenSlope(values: readonly number[]): number {
+  const slopes: number[] = [];
+  for (let i = 0; i < values.length; i += 1) {
+    for (let j = i + 1; j < values.length; j += 1) {
+      const a = values[i];
+      const b = values[j];
+      if (a !== undefined && b !== undefined) {
+        slopes.push((b - a) / (j - i));
+      }
+    }
+  }
+  if (slopes.length === 0) {
+    return 0;
+  }
+  slopes.sort((x, y) => x - y);
+  const middle = Math.floor(slopes.length / 2);
+  return slopes.length % 2 === 1
+    ? (slopes[middle] ?? 0)
+    : ((slopes[middle - 1] ?? 0) + (slopes[middle] ?? 0)) / 2;
+}
+
+/**
+ * Growth that never stops, however far under the gate it runs.
+ *
+ * Measured on the vercel/next.js#97938 reproduction, 16.4.6 on Node 24,
+ * 2026-11-26: 16 cycles of 300 requests, a unique slug each, grew in all 15
+ * deltas at about 0.2 MB per cycle and were called `saturating`, then
+ * `pressure`. The first post-warm-up delta still carried the first cycle's
+ * step, so the curve read as bending, and the steady tail sat under the gate.
+ * Over 50 repeating slugs the same build was flat.
+ *
+ * Judged on the second half of the post-warm-up series, where what the first
+ * cycle filled has stopped weighing: every delta there grew, its Theil–Sen
+ * slope keeps at least half the first half's, and that slope is at least
+ * `CREEP_MIN_BYTES_PER_REQUEST`.
+ */
+function isSustainedCreep(samples: readonly number[], requestsPerCycle: number | undefined): boolean {
+  if (requestsPerCycle === undefined || requestsPerCycle <= 0) {
+    return false;
+  }
+  const series = samples.slice(1);
+  const deltaCount = series.length - 1;
+  if (deltaCount < CREEP_MIN_DELTAS) {
+    return false;
+  }
+  const split = Math.floor(series.length / 2);
+  const head = series.slice(0, split + 1);
+  const tail = series.slice(split);
+  for (let i = 1; i < tail.length; i += 1) {
+    if ((tail[i] ?? 0) - (tail[i - 1] ?? 0) <= 0) {
+      return false;
+    }
+  }
+  const tailSlope = theilSenSlope(tail);
+  return (
+    tailSlope >= CREEP_MIN_BYTES_PER_REQUEST * requestsPerCycle &&
+    tailSlope >= theilSenSlope(head) * CREEP_MIN_SLOPE_RATIO
+  );
+}
+
 /** The verdict itself, decided from the shape of the series and nothing else. */
 function classifyShape(samples: readonly number[], options: TrendOptions): TrendResult {
   const minGrowth = options.minGrowthPerCycle ?? MIN_GROWTH_NOISE_FLOOR;
@@ -419,6 +510,9 @@ function classifyShape(samples: readonly number[], options: TrendOptions): Trend
   // point where the shape is clearest, and the series then fell to stepwise
   // detection, which claims it: a curve that flattens hands nothing back, so
   // its drawdown is zero. Measured on Next 16.3.4, 2026-09-03.
+  if (isSustainedCreep(samples, options.requestsPerCycle)) {
+    return { verdict: "leak", growthPerCycle: mean, deltas, source: "heap" };
+  }
   if (isSaturating(deltas, minGrowth)) {
     return { verdict: "saturating", growthPerCycle: mean, deltas, source: "heap" };
   }
