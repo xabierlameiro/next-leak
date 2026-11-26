@@ -16,6 +16,7 @@ import {
   type RunnerDeps,
 } from "./runner.js";
 import { warrantsIssueDraft } from "./confidence.js";
+import { minGrowthFor } from "./trend.js";
 import { makeRunReport } from "./run-report.fixture.js";
 import type { TrendVerdict } from "./trend.js";
 
@@ -2032,6 +2033,58 @@ describe("confirming a borderline leak from a fresh server", () => {
         cyclesRequested: 16,
       });
       expect(progress).toContain("leak / (1/1): ran out of heap at cycle 11");
+    });
+
+    // Run 2 of the #97938 slug route: two stables at 8 cycles, both growing
+    // over the gate, agreed, and the leak was never looked at longer.
+    it("settles two agreeing stables that both grew over the threshold", async () => {
+      const grew = { verdict: "stable" as const, growth: 2 * minGrowthFor(5000) };
+      const { calls, route, progress } = await run([grew, grew, CLEAR]);
+
+      expect(calls).toBe(3);
+      expect(route.trend.verdict).toBe("leak");
+      expect(route.settledBy).toEqual({ cycles: 16 });
+      expect(progress.find((line) => line.startsWith("settling"))).toMatch(
+        /over 16 cycles from a fresh server: both passes were stable while growing over the threshold/
+      );
+    });
+
+    it("reports a confirmation that ran out of heap, without settling", async () => {
+      const appDir = await makeAppDir({ "/page": "app/page.js" });
+      let call = 0;
+      const report = await runMeasurement(
+        { appDir, bootstrapPath: "/fake/bootstrap.js" },
+        {
+          ...makeDeps([]),
+          ritual: async (options) => {
+            call += 1;
+            const base = ritualResult(options.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+            if (call === 2) {
+              throw new HeapExhaustedError("ran out of heap at cycle 3", {
+                memorySamples: base.memorySamples,
+                peaks: base.peaks,
+                unreclaimedSamples: [],
+                cyclesCompleted: 2,
+                cyclesRequested: 4,
+                requestsPerCycle: 5000,
+                baselineSnapshot: base.baselineSnapshot,
+              });
+            }
+            return {
+              ...base,
+              trend: { verdict: "stable" as const, growthPerCycle: 2 * minGrowthFor(5000), deltas: [] },
+            };
+          },
+        }
+      );
+
+      expect(call).toBe(2);
+      expect(report.routes[0]?.status).toBe("died-of-heap");
+    });
+
+    it("does not settle when only one stable grew over the threshold", async () => {
+      const grew = { verdict: "stable" as const, growth: 2 * minGrowthFor(5000) };
+      expect((await run([grew, FLAT])).calls).toBe(2);
     });
 
     it("does not escalate when the passes agree, or under --no-resolve", async () => {

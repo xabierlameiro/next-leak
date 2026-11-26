@@ -143,7 +143,12 @@ function settledText(
 ): string {
   const short = repetitions.slice(0, -1).map((entry) => entry.verdict);
   const decided = repetitions.at(-1)?.verdict ?? "inconclusive";
-  return `the first ${short.length} disagreed (${short.join(", ")}); a ${cycles}-cycle pass decided: ${decided}`;
+  const distinct = [...new Set(short)];
+  const firstPasses =
+    distinct.length === 1
+      ? `the first ${short.length} were ${distinct[0]} while growing over the threshold`
+      : `the first ${short.length} disagreed (${short.join(", ")})`;
+  return `${firstPasses}; a ${cycles}-cycle pass decided: ${decided}`;
 }
 
 function repetitionLines(route: MeasuredRouteView): string[] {

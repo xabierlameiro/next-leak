@@ -875,6 +875,21 @@ describe("formatReport repetitions", () => {
     );
     expect(output).not.toContain("no single verdict is reported");
   });
+
+  it("says why two agreeing passes were settled", () => {
+    const report = makeRunReport();
+    const leaky = report.routes[1];
+    if (leaky?.status !== "measured") throw new Error("fixture broken");
+    leaky.repetitions = [
+      { verdict: "stable", growthPer1000Requests: 1.43 * MB },
+      { verdict: "stable", growthPer1000Requests: 1.68 * MB },
+      { verdict: "leak", growthPer1000Requests: 1.5 * MB },
+    ];
+    leaky.settledBy = { cycles: 16 };
+    expect(formatReport(report)).toContain(
+      "the first 2 were stable while growing over the threshold; a 16-cycle pass decided: leak"
+    );
+  });
 });
 
 const withWrappedStore = () => {

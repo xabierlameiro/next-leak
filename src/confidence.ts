@@ -60,7 +60,15 @@ export type WarningCode =
    * 826 and 875 MB on three runs of one build and 39 MB on a fourth. A verdict
    * a second run contradicts is not a verdict.
    */
-  | "repetitions-disagree";
+  | "repetitions-disagree"
+  /**
+   * Stable, while the mean growth cleared the gate: a cycle that gave memory
+   * back is what acquitted it. Every such case in the calibration corpus is a
+   * true leak (the vercel/next.js#97938 slug route, 5 of 5), but healthy
+   * routes have acquitted at 1.2x–1.8x the gate too, so it is a reason to look
+   * longer, not a verdict.
+   */
+  | "growth-acquitted";
 
 export type MeasurementWarning = {
   code: WarningCode;
@@ -488,6 +496,19 @@ const retainedOf = (sample: HeapSample): number => sample.heapUsed + sample.exte
  * warm-up into evidence. The user gets the step and a run that can show its
  * shape — fewer requests per cycle spread the fill across cycles.
  */
+function growthAcquittedWarnings(trend: TrendResult, minGrowth: number): MeasurementWarning[] {
+  if (trend.verdict !== "stable" || trend.growthPerCycle < minGrowth) {
+    return [];
+  }
+  return [{
+    code: "growth-acquitted",
+    detail:
+      `called stable although it grew ${mb(trend.growthPerCycle)}/cycle on average, over the ` +
+      `${mb(minGrowth)} threshold — a cycle that gave memory back is what acquitted it; ` +
+      `measure more cycles before trusting it`,
+  }];
+}
+
 function firstCycleStepWarnings(input: ConfidenceInput): MeasurementWarning[] {
   const samples = input.memorySamples;
   const baselineSample = samples?.[0];
@@ -649,6 +670,7 @@ export function assessConfidence(input: ConfidenceInput): ConfidenceReport {
     ...heapCeilingWarnings(input),
     ...warmUpBaselineWarnings(input),
     ...firstCycleStepWarnings(input),
+    ...growthAcquittedWarnings(input.trend, minGrowth),
   ];
 
   return {

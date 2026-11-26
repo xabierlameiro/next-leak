@@ -198,6 +198,7 @@ const PROCESS_VARIANCE_WARNINGS: ReadonlySet<WarningCode> = new Set<WarningCode>
   "thin-evidence",
   "warm-up-baseline",
   "first-cycle-step",
+  "growth-acquitted",
 ]);
 
 /** Verdicts a second process can contradict. */
@@ -303,14 +304,35 @@ async function confirmBorderline(
   }
   const judged = aggregateRepetitions([first, second]);
   // Read again: a Ctrl+C during the confirmation must not start a third pass.
-  if (!disagreed(judged) || isAborted(context)) {
+  if (isAborted(context) || judged.status !== "measured") {
     return judged;
   }
-  return settleDisagreement(context, route, requestPath, index, label, judged, pass);
+  if (!disagreed(judged) && !(acquittedGrowth(first) && acquittedGrowth(second))) {
+    return judged;
+  }
+  return settleDisagreement(context, route, requestPath, index, label, judged, {
+    ...pass,
+    why: disagreed(judged)
+      ? "the two passes disagreed"
+      : "both passes were stable while growing over the threshold",
+  });
 }
 
 function isAborted(context: MeasurementContext): boolean {
   return context.options.signal?.aborted === true;
+}
+
+/**
+ * A stable pass that grew above the gate. Two of them agreeing is no more
+ * settled than two passes disagreeing: run 2 of the #97938 slug route measured
+ * stable twice at 8 cycles, ~0.43 MB a cycle against a 0.25 MB gate.
+ */
+function acquittedGrowth(report: RouteReport): boolean {
+  return (
+    report.status === "measured" &&
+    effectiveVerdict(report) === "stable" &&
+    report.confidence.warnings.some((warning) => warning.code === "growth-acquitted")
+  );
 }
 
 function disagreed(report: RouteReport): report is MeasuredRoute {
@@ -339,7 +361,7 @@ async function settleDisagreement(
   index: number,
   label: string,
   judged: MeasuredRoute,
-  pass: { suffix: string; nodePath?: string; firstPassMs: number }
+  pass: { suffix: string; nodePath?: string; firstPassMs: number; why: string }
 ): Promise<RouteReport> {
   // `judged` is the first pass with the disagreement attached: its timings are
   // the first pass's.
@@ -361,7 +383,7 @@ async function settleDisagreement(
   }
   await context.checkpoint?.(judged);
   context.progress(
-    `settling ${label} over ${cycles} cycles from a fresh server: the two passes disagreed` +
+    `settling ${label} over ${cycles} cycles from a fresh server: ${pass.why}` +
       paceNote(projectedMs / 1000, "at the pace of the first pass")
   );
   const started = clock(context)();

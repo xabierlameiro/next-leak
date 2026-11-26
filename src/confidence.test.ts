@@ -1001,3 +1001,35 @@ describe("near-threshold wording", () => {
     );
   });
 });
+
+// Run 2 of the vercel/next.js#97938 slug route: stable twice at 8 cycles,
+// ~0.43 MB a cycle against a 0.25 MB gate.
+describe("growth-acquitted", () => {
+  const warningFor = (verdict: "stable" | "leak", growthPerCycle: number) =>
+    assessConfidence(
+      input({
+        trend: trend({ verdict, growthPerCycle, deltas: [growthPerCycle, -0.1 * MB, growthPerCycle] }),
+        minGrowthPerCycle: 256 * 1024,
+      })
+    ).warnings.find((warning) => warning.code === "growth-acquitted");
+
+  it("warns on a stable whose mean growth reaches the gate, and keeps the verdict", () => {
+    expect(warningFor("stable", 0.43 * MB)?.detail).toBe(
+      "called stable although it grew 0.43 MB/cycle on average, over the 0.25 MB threshold — a cycle that gave memory back is what acquitted it; measure more cycles before trusting it"
+    );
+    expect(warningFor("stable", 256 * 1024)).toBeDefined();
+    expect(
+      assessConfidence(
+        input({
+          trend: trend({ verdict: "stable", growthPerCycle: 0.43 * MB, deltas: [0.43 * MB, -0.1 * MB] }),
+          minGrowthPerCycle: 256 * 1024,
+        })
+      ).supersededVerdict
+    ).toBeUndefined();
+  });
+
+  it("stays quiet under the gate, and for anything but stable", () => {
+    expect(warningFor("stable", 256 * 1024 - 1)).toBeUndefined();
+    expect(warningFor("leak", 0.43 * MB)).toBeUndefined();
+  });
+});
