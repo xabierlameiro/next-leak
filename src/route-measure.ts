@@ -64,33 +64,47 @@ function nodePathOption(
   return nodePath === undefined ? {} : { nodePath };
 }
 
-/** Ritual, audit, diff and attribution for one route in a fresh process. */
-export async function measureRoute(
+type Pass = { cycles?: number; dirSuffix: string; nodePath?: string } | undefined;
+
+/**
+ * How the load reaches a route's cache. An ISR route whose keys repeat serves
+ * its cache unless the request carries the build's own revalidation header;
+ * without it the load measures the static cache and nothing else. A route asked
+ * for a new key every time has no cache to bypass, and the header would only
+ * move the measurement onto Next's revalidation path — see planRevalidation.
+ */
+function cachePlan(context: MeasurementContext, route: DiscoveredRoute, requestPath: string) {
+  const { target, routeConfig } = context;
+  const plan = planRevalidation(target.prerender, route.path, routeConfig.headers, requestPath);
+  const bounded = boundedMarkerOf(requestPath);
+  const driven = plan.kind === "drive" ? plan.headers : undefined;
+  const merged = { ...driven, ...routeConfig.headers };
+  return {
+    plan,
+    bounded,
+    revalidateSeconds: revalidateSecondsFor(target.prerender, route.path),
+    servedFromIsrCache: revalidates(target.prerender, route.path),
+    // Serving a cached route keys it has never held fills its store as a side
+    // effect of measuring. With `{n%N}` the key set is bounded and the store
+    // settles; with `{n}` it never repeats, so growth is expected and the
+    // verdict has to say so. True whether or not the load drives revalidation.
+    cacheDriven: plan.kind === "no-cache-to-drive" || (plan.kind === "drive" && bounded === null),
+    headers: Object.keys(merged).length === 0 ? undefined : merged,
+  };
+}
+
+/** The ritual's options for one pass: the run's settings, the pass's overrides, the route's load shape. */
+async function ritualOptionsFor(
   context: MeasurementContext,
   route: DiscoveredRoute,
   requestPath: string,
   index: number,
-  pass: { cycles?: number; dirSuffix: string; nodePath?: string } | undefined = undefined
-): Promise<RouteReport> {
-  const { deps, options, target, workDir, routeConfig, registry, nextVersion, progress } = context;
-  // An ISR route whose keys repeat serves its cache unless the request carries
-  // the build's own revalidation header; without it the load measures the
-  // static cache and nothing else. A route asked for a new key every time has
-  // no cache to bypass, and the header would only move the measurement onto
-  // Next's revalidation path — see planRevalidation.
-  const plan = planRevalidation(target.prerender, route.path, routeConfig.headers, requestPath);
-  const revalidateSeconds = revalidateSecondsFor(target.prerender, route.path);
-  const servedFromIsrCache = revalidates(target.prerender, route.path);
-  const bounded = boundedMarkerOf(requestPath);
-  const driven = plan.kind === "drive" ? plan.headers : {};
-  // Serving a cached route keys it has never held fills its store as a side
-  // effect of measuring. With `{n%N}` the key set is bounded and the store
-  // settles; with `{n}` it never repeats, so growth is expected and the verdict
-  // has to say so. True whether or not the load drives revalidation.
-  const cacheDriven = plan.kind === "no-cache-to-drive" || (plan.kind === "drive" && bounded === null);
-  const merged = { ...driven, ...(routeConfig.headers ?? {}) };
-  const headers = Object.keys(merged).length === 0 ? undefined : merged;
-  const result = await deps.ritual({
+  pass: Pass,
+  cache: ReturnType<typeof cachePlan>
+) {
+  const { deps, options, target, workDir, routeConfig } = context;
+  const cycles = pass?.cycles ?? options.cycles;
+  return {
     serverPath: target.standaloneServer,
     ...(options.dev === true && { dev: { appDir: target.appDir } }),
     route: requestPath,
@@ -101,24 +115,87 @@ export async function measureRoute(
     bootstrapPath: options.bootstrapPath,
     appPort: await deps.freePort(),
     ...nodePathOption(options, pass?.nodePath),
-    ...(cacheDriven && { cacheDriven: true }),
+    ...(cache.cacheDriven && { cacheDriven: true }),
     ...(options.warmupRequests !== undefined && { warmupRequests: options.warmupRequests }),
     ...(options.loadRequests !== undefined && { loadRequests: options.loadRequests }),
     ...(options.connections !== undefined && { connections: options.connections }),
-    ...(pass?.cycles !== undefined
-      ? { cycles: pass.cycles }
-      : options.cycles !== undefined && { cycles: options.cycles }),
+    ...(cycles !== undefined && { cycles }),
     ...(options.idleMs !== undefined && { idleMs: options.idleMs }),
     ...(options.maxOldSpaceMb !== undefined && { maxOldSpaceMb: options.maxOldSpaceMb }),
     ...(options.readyTimeoutMs !== undefined && { readyTimeoutMs: options.readyTimeoutMs }),
-    ...(headers !== undefined && { headers }),
-    ...(routeConfig.abandonAfterMs !== undefined && {
-      abandonAfterMs: routeConfig.abandonAfterMs,
-    }),
-    ...(routeConfig.abandonFrom !== undefined && {
-      abandonFrom: routeConfig.abandonFrom,
-    }),
-  });
+    ...(cache.headers !== undefined && { headers: cache.headers }),
+    ...abandonOptions(routeConfig),
+  };
+}
+
+function abandonOptions(routeConfig: MeasurementContext["routeConfig"]) {
+  return {
+    ...(routeConfig.abandonAfterMs !== undefined && { abandonAfterMs: routeConfig.abandonAfterMs }),
+    ...(routeConfig.abandonFrom !== undefined && { abandonFrom: routeConfig.abandonFrom }),
+  };
+}
+
+type RitualOutput = Awaited<ReturnType<MeasurementContext["deps"]["ritual"]>>;
+
+/**
+ * The snapshot diff behind a verdict, or why there is none. The diff names the
+ * retaining object; the verdict does not depend on it, so losing it never
+ * costs the measurement.
+ */
+async function diffFor(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  result: RitualOutput,
+  verdict: string
+): Promise<{ diff: HeapDiff | null; attributionGap?: MeasuredRoute["attributionGap"] }> {
+  const { deps, options, progress } = context;
+  if (result.snapshotFailure !== undefined) {
+    // The measurement finished; only its last snapshot did not. Say so and
+    // keep the verdict, rather than reporting the route as a failure and
+    // throwing away every cycle that did complete.
+    progress(`no snapshot to attribute for ${route.path}: ${result.snapshotFailure}`);
+    return {
+      diff: null,
+      attributionGap: { reason: "snapshot-unavailable", detail: result.snapshotFailure },
+    };
+  }
+  // `pressure` is excluded alongside `stable`: both describe a process that
+  // retained nothing between cycles, so a baseline-to-after diff has nothing
+  // to name, and the step is not cheap — a 1.7 GB snapshot took a whole run
+  // down on the #97424 reproduction. `--diff-all` still forces it.
+  if ((verdict === "stable" || verdict === "pressure") && options.diffAll !== true) {
+    return { diff: null };
+  }
+  progress(`diffing snapshots for ${route.path}`);
+  try {
+    return { diff: await deps.diff(result.baselineSnapshot, result.afterSnapshot) };
+  } catch (cause) {
+    // Losing a finished measurement because the extra step failed is the worse
+    // outcome by far — measured on the #97424 reproduction, where a 1.7 GB
+    // snapshot took the whole run down with it.
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const advice = smallerRunAdvice(cause, result.requestsPerCycle);
+    progress(`snapshot diff unavailable for ${route.path}: ${message}${advice}`);
+    return {
+      diff: null,
+      attributionGap: { reason: "snapshot-unreadable", detail: `${message}${advice}` },
+    };
+  }
+}
+
+/** Ritual, audit, diff and attribution for one route in a fresh process. */
+export async function measureRoute(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  requestPath: string,
+  index: number,
+  pass: Pass = undefined
+): Promise<RouteReport> {
+  const { deps, options, routeConfig, registry, nextVersion, progress } = context;
+  const cache = cachePlan(context, route, requestPath);
+  const result = await deps.ritual(
+    await ritualOptionsFor(context, route, requestPath, index, pass, cache)
+  );
 
   // Audited before anything is derived from the verdict: a measurement that
   // did not observe what it claims must not drive a diff, an attribution, or
@@ -133,52 +210,14 @@ export async function measureRoute(
     warmupRequests: options.warmupRequests ?? RITUAL_DEFAULTS.warmupRequests,
     // Decides whether the cache-residency remedy exists on this route: bounding
     // the keys of an ISR route hands the requests back to the cache.
-    revalidatesFromCache: servedFromIsrCache,
-    ...(routeConfig.abandonAfterMs !== undefined && {
-      abandonAfterMs: routeConfig.abandonAfterMs,
-    }),
-    ...(routeConfig.abandonFrom !== undefined && {
-      abandonFrom: routeConfig.abandonFrom,
-    }),
+    revalidatesFromCache: cache.servedFromIsrCache,
+    ...abandonOptions(routeConfig),
   });
   const verdict = confidence.supersededVerdict ?? result.trend.verdict;
   if (confidence.supersededVerdict !== undefined) {
     progress(`withdrawing ${route.path} verdict: evidence does not support it`);
   }
-
-  let diff: HeapDiff | null = null;
-  let attributionGap: MeasuredRoute["attributionGap"];
-  if (result.snapshotFailure !== undefined) {
-    // The measurement finished; only its last snapshot did not. Say so and
-    // keep the verdict, rather than reporting the route as a failure and
-    // throwing away every cycle that did complete.
-    attributionGap = {
-      reason: "snapshot-unavailable",
-      detail: result.snapshotFailure,
-    };
-    progress(`no snapshot to attribute for ${route.path}: ${result.snapshotFailure}`);
-  } else if ((verdict !== "stable" && verdict !== "pressure") || options.diffAll === true) {
-    // `pressure` is excluded alongside `stable`: both describe a process that
-    // retained nothing between cycles, so a baseline-to-after diff has nothing
-    // to name, and the step is not cheap — a 1.7 GB snapshot took a whole run
-    // down on the #97424 reproduction. `--diff-all` still forces it.
-    progress(`diffing snapshots for ${route.path}`);
-    try {
-      diff = await deps.diff(result.baselineSnapshot, result.afterSnapshot);
-    } catch (cause) {
-      // The diff names the retaining object; the verdict does not depend on
-      // it. Losing a finished measurement because the extra step failed is
-      // the worse outcome by far — measured on the #97424 reproduction, where
-      // a 1.7 GB snapshot took the whole run down with it.
-      const message = cause instanceof Error ? cause.message : String(cause);
-      const advice = smallerRunAdvice(cause, result.requestsPerCycle);
-      attributionGap = {
-        reason: "snapshot-unreadable",
-        detail: `${message}${advice}`,
-      };
-      progress(`snapshot diff unavailable for ${route.path}: ${message}${advice}`);
-    }
-  }
+  const { diff, attributionGap } = await diffFor(context, route, result, verdict);
 
   return {
     route: route.path,
@@ -188,10 +227,10 @@ export async function measureRoute(
     samples: result.samples,
     memorySamples: result.memorySamples,
     peaks: result.peaks,
-    ...(revalidateSeconds !== null && { revalidatedEverySeconds: revalidateSeconds }),
-    ...(servedFromIsrCache && { servedFromIsrCache: true as const }),
-    ...(plan.kind === "drive" && { revalidationDriven: true as const }),
-    ...(bounded !== null && { keyCardinality: bounded.bound }),
+    ...(cache.revalidateSeconds !== null && { revalidatedEverySeconds: cache.revalidateSeconds }),
+    ...(cache.servedFromIsrCache && { servedFromIsrCache: true as const }),
+    ...(cache.plan.kind === "drive" && { revalidationDriven: true as const }),
+    ...(cache.bounded !== null && { keyCardinality: cache.bounded.bound }),
     unreclaimedSamples: result.unreclaimedSamples,
     unreclaimedTrend: result.unreclaimedTrend,
     requestsPerCycle: result.requestsPerCycle,
