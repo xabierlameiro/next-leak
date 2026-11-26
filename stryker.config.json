@@ -54,7 +54,9 @@
     "src/node-binaries.ts",
     "src/node-comparison.ts",
     "src/dev-target.ts",
-    "src/security-stop.ts"
+    "src/security-stop.ts",
+    "src/judge.ts",
+    "src/corpus.ts"
   ],
   "thresholds": {
     "high": 90,
