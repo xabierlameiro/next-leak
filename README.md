@@ -511,6 +511,11 @@ Node and OS limits come from one startup check shared by all three commands.
 
 ### Other limits
 
+- **Containers.** The heap cap is a ceiling only if the container lets the
+  server reach it. Before measuring, next-leak reads the memory limit Node
+  sees and warns when it cannot hold `--max-old-space` plus 256 MB outside the
+  heap (512 MB under `next dev`, for the CLI parent), suggesting a cap that
+  fits. The limit is recorded in `run.json` and in the issue draft.
 - **Monorepos work unchanged.** A workspace build does not put `server.js` at
   the root of `.next/standalone`: Next keeps the app's path relative to the
   workspace root, so an app in `client/` ships its server at

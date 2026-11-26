@@ -212,7 +212,11 @@ Node.js: ${environment.nodeVersion}${
       : ` (compared with ${environment.comparedNodeVersions.filter((version) => version !== environment.nodeVersion).join(", ")})`
   }
 OS: ${environment.platform} ${environment.arch}${environment.cpuModel ? ` (${environment.cpuModel})` : ""}
-Memory: ${(environment.totalMemoryBytes / (1024 * MB)).toFixed(0)} GB
+Memory: ${(environment.totalMemoryBytes / (1024 * MB)).toFixed(0)} GB${
+    environment.memoryLimitBytes === undefined
+      ? ""
+      : `\nMemory limit: ${Math.floor(environment.memoryLimitBytes / MB)} MB (container)`
+  }
 Next.js: ${environment.nextVersion ?? "unknown"}
 next-leak: ${environment.nextLeakVersion}
 Deployment: ${

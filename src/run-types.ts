@@ -299,6 +299,8 @@ export type RunnerDeps = {
   freePort: () => Promise<number>;
   registry: typeof extractModuleRegistry;
   nextVersion: typeof readNextVersion;
+  /** The container's memory limit in bytes, null when none. Default: what Node reads. */
+  memoryLimit?: () => number | null;
 };
 
 export type ProgressFn = (message: string) => void;

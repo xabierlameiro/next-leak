@@ -2021,3 +2021,28 @@ describe("re-measuring pressure promoted from a bending curve", () => {
     expect(await run({ verdict: "pressure" })).toHaveLength(1);
   });
 });
+
+describe("container memory limit", () => {
+  async function messages(limit: number | null) {
+    const appDir = await makeAppDir({ "/page": "app/page.js" });
+    const progress: string[] = [];
+    const report = await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (m) => progress.push(m) },
+      { ...makeDeps([]), memoryLimit: () => limit }
+    );
+    return { progress, report };
+  }
+
+  it("warns before the first route when the limit cannot hold the cap", async () => {
+    const { progress, report } = await messages(512 * MB);
+    const warning = progress.findIndex((m) => m.startsWith("warning: memory limit 512 MB"));
+    expect(warning).toBeGreaterThanOrEqual(0);
+    expect(report.environment.memoryLimitBytes).toBe(512 * MB);
+  });
+
+  it("stays quiet and records nothing without a limit", async () => {
+    const { progress, report } = await messages(null);
+    expect(progress.some((m) => m.includes("memory limit"))).toBe(false);
+    expect(report.environment).not.toHaveProperty("memoryLimitBytes");
+  });
+});

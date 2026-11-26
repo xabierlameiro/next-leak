@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { warrantsIssueDraft } from "./confidence.js";
-import { captureEnvironment } from "./environment.js";
+import { captureEnvironment, memoryLimitBytes, memoryLimitWarning } from "./environment.js";
 import { diffSnapshotFiles } from "./heap-diff.js";
 import { DEFAULT_MAX_OLD_SPACE_MB } from "./launcher.js";
 import {
@@ -324,6 +324,16 @@ export async function runMeasurement(
     progress
   );
 
+  const memoryLimit = (deps.memoryLimit ?? (() => memoryLimitBytes()))();
+  const limitWarning = memoryLimitWarning({
+    limitBytes: memoryLimit,
+    maxOldSpaceMb: parameters.maxOldSpaceMb,
+    dev: options.dev === true,
+  });
+  if (limitWarning !== null) {
+    progress(`warning: ${limitWarning}`);
+  }
+
   const startedAt = new Date();
   const workDir = path.join(
     options.outputDir ?? path.join(target.appDir, ".next-leak"),
@@ -353,7 +363,8 @@ export async function runMeasurement(
         : { verified: true, growthPer1000Requests: options.harnessVerifiedAt },
     environment: captureEnvironment(
       nextVersion,
-      (options.nodeBinaries ?? []).map((binary) => binary.version)
+      (options.nodeBinaries ?? []).map((binary) => binary.version),
+      memoryLimit
     ),
     parameters,
     routes: reports,
