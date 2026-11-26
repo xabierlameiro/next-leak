@@ -1601,21 +1601,32 @@ describe("confirming a borderline leak from a fresh server", () => {
     verdict: "leak" | "stable" | "saturating" | "pressure";
     growth: number;
     deltas?: number[];
+    /** The heap was still moving when sampled: a warning about this process. */
+    unsettled?: boolean;
   };
   const BORDERLINE: Pass = { verdict: "leak", growth: 0.3 * MB };
   const CLEAR: Pass = { verdict: "leak", growth: 2.5 * MB };
   const FLAT: Pass = { verdict: "stable", growth: 0.1 * MB };
+  const BORDERLINE_CONFIRMED: Pass = { verdict: "leak", growth: 2.5 * MB };
 
   async function run(
     passes: readonly Pass[],
-    options: { repeat?: number; resolveInconclusive?: boolean; abortAfterFirst?: boolean } = {}
+    options: {
+      repeat?: number;
+      resolveInconclusive?: boolean;
+      abortAfterFirst?: boolean;
+      confirmBudgetMs?: number;
+      /** Wall time each ritual takes on the fake clock. */
+      passMs?: number;
+    } = {}
   ) {
     const appDir = await makeAppDir({ "/page": "app/page.js" });
     const progress: string[] = [];
     const workDirs: string[] = [];
     const controller = new AbortController();
     let call = 0;
-    const { abortAfterFirst, ...runOptions } = options;
+    const { abortAfterFirst, passMs, ...runOptions } = options;
+    let clockMs = 0;
     const report = await runMeasurement(
       {
         appDir,
@@ -1626,14 +1637,19 @@ describe("confirming a borderline leak from a fresh server", () => {
       },
       {
         ...makeDeps([]),
+        now: () => clockMs,
         ritual: async (ritualOptions) => {
           const pass = passes[call] ?? FLAT;
           call += 1;
+          clockMs += passMs ?? 60_000;
           workDirs.push(ritualOptions.workDir);
           if (abortAfterFirst === true) controller.abort();
           const base = ritualResult(ritualOptions.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
           return {
             ...base,
+            ...(pass.unsettled === true && {
+              settleOutcomes: [{ phase: "cycle 1", status: "moving" as const, polls: 40 }],
+            }),
             trend: { verdict: pass.verdict, growthPerCycle: pass.growth, deltas: pass.deltas ?? [] },
           };
         },
@@ -1665,13 +1681,159 @@ describe("confirming a borderline leak from a fresh server", () => {
     expect(workDirs[0]).not.toBe(workDirs[1]);
   });
 
-  it("does not confirm a clear leak that carries some other warning", async () => {
+  it("confirms a clear but spiky leak within the budget, and not without one", async () => {
     // Spiky growth: one cycle many times the smallest, and far above the gate.
-    const { calls } = await run([
-      { verdict: "leak", growth: 2.8 * MB, deltas: [10 * MB, 1 * MB, 1 * MB, 1 * MB, 1 * MB] },
-    ]);
+    const spiky: Pass = {
+      verdict: "leak",
+      growth: 2.8 * MB,
+      deltas: [10 * MB, 1 * MB, 1 * MB, 1 * MB, 1 * MB],
+    };
+
+    const within = await run([spiky, spiky]);
+    expect(within.calls).toBe(2);
+    expect(within.progress.find((line) => line.startsWith("confirming"))).toMatch(
+      /from a fresh server: low confidence \(spiky-growth\)$/
+    );
+
+    const off = await run([spiky, spiky], { confirmBudgetMs: 0 });
+    expect(off.calls).toBe(1);
+  });
+
+  // vercel/next.js#97938 on 16.3.6 / Node 22: stable, leak, saturating, leak
+  // across four runs. The stable half of that flip was never looked at again.
+  it("confirms a low-confidence stable and reports a disagreement as inconclusive", async () => {
+    const { route, calls } = await run([{ ...FLAT, unsettled: true }, BORDERLINE_CONFIRMED]);
+
+    expect(calls).toBe(2);
+    expect(route.repetitions?.map((entry) => entry.verdict)).toEqual(["stable", "leak"]);
+    expect(route.confidence.supersededVerdict).toBe("inconclusive");
+  });
+
+  it("keeps a low-confidence stable both passes agree on", async () => {
+    const { route, calls } = await run([{ ...FLAT, unsettled: true }, FLAT]);
+
+    expect(calls).toBe(2);
+    expect(route.repetitions?.map((entry) => entry.verdict)).toEqual(["stable", "stable"]);
+    expect(route.confidence.supersededVerdict).toBeUndefined();
+  });
+
+  it("does not confirm a high-confidence stable", async () => {
+    expect((await run([FLAT])).calls).toBe(1);
+  });
+
+  it("does not confirm a verdict whose only warning a second run cannot change", async () => {
+    // Pressure is a peak that was observed; a second pass reaches it again.
+    expect((await run([{ verdict: "pressure", growth: 0.1 * MB, unsettled: true }])).calls).toBe(1);
+  });
+
+  it("skips a confirmation the first pass says would overrun the budget", async () => {
+    // First pass 5 minutes, 2 left.
+    const { calls, progress } = await run([{ ...FLAT, unsettled: true }], {
+      confirmBudgetMs: 2 * 60_000,
+      passMs: 5 * 60_000,
+    });
 
     expect(calls).toBe(1);
+    expect(progress.find((line) => line.startsWith("not confirming"))).toMatch(
+      /\(low confidence \(unsettled\)\): the confirmation budget is spent — raise --confirm-budget to confirm it$/
+    );
+  });
+
+  it("confirms when the first pass fits the budget exactly", async () => {
+    const { calls } = await run([{ ...FLAT, unsettled: true }, FLAT], {
+      confirmBudgetMs: 5 * 60_000,
+      passMs: 5 * 60_000,
+    });
+
+    expect(calls).toBe(2);
+  });
+
+  it("spends the budget across routes", async () => {
+    // Two routes, each pass 4 minutes, 6 minutes of budget: the first route's
+    // confirmation leaves 2, which the second route's 4-minute pass overruns.
+    const appDir = await makeAppDir({ "/a/page": "app/a/page.js", "/b/page": "app/b/page.js" });
+    let clockMs = 0;
+    const measured: string[] = [];
+    const progress: string[] = [];
+    await runMeasurement(
+      {
+        appDir,
+        bootstrapPath: "/fake/bootstrap.js",
+        confirmBudgetMs: 6 * 60_000,
+        onProgress: (line) => progress.push(line),
+      },
+      {
+        ...makeDeps([]),
+        now: () => clockMs,
+        ritual: async (ritualOptions) => {
+          clockMs += 4 * 60_000;
+          measured.push(ritualOptions.route);
+          const base = ritualResult(ritualOptions.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return {
+            ...base,
+            settleOutcomes: [{ phase: "cycle 1", status: "moving" as const, polls: 40 }],
+          };
+        },
+      }
+    );
+
+    expect(measured).toEqual(["/a", "/a", "/b"]);
+    expect(progress.some((line) => line.startsWith("not confirming /b"))).toBe(true);
+  });
+
+  it("spends what the confirmation took, not the clock reading", async () => {
+    // 9 minutes, 4-minute passes: the confirmation of /a leaves 5, enough for
+    // /b's. Spending the clock reading (12 at that point) would leave none.
+    const appDir = await makeAppDir({ "/a/page": "app/a/page.js", "/b/page": "app/b/page.js" });
+    let clockMs = 0;
+    const measured: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", confirmBudgetMs: 9 * 60_000 },
+      {
+        ...makeDeps([]),
+        now: () => clockMs,
+        ritual: async (ritualOptions) => {
+          clockMs += 4 * 60_000;
+          measured.push(ritualOptions.route);
+          const base = ritualResult(ritualOptions.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return {
+            ...base,
+            settleOutcomes: [{ phase: "cycle 1", status: "moving" as const, polls: 40 }],
+          };
+        },
+      }
+    );
+
+    expect(measured).toEqual(["/a", "/a", "/b", "/b"]);
+  });
+
+  it("confirms a borderline leak even with no budget", async () => {
+    expect((await run([BORDERLINE, BORDERLINE], { confirmBudgetMs: 0 })).calls).toBe(2);
+  });
+
+  it("does not spend the budget on a borderline leak", async () => {
+    // The borderline leak's confirmation is free; the stable route after it
+    // still fits a budget of one pass.
+    const appDir = await makeAppDir({ "/a/page": "app/a/page.js", "/b/page": "app/b/page.js" });
+    let clockMs = 0;
+    const measured: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", confirmBudgetMs: 60_000 },
+      {
+        ...makeDeps([]),
+        now: () => clockMs,
+        ritual: async (ritualOptions) => {
+          clockMs += 60_000;
+          measured.push(ritualOptions.route);
+          const base = ritualResult(ritualOptions.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return ritualOptions.route === "/a"
+            ? { ...base, trend: { verdict: "leak" as const, growthPerCycle: 0.3 * MB, deltas: [] } }
+            : { ...base, settleOutcomes: [{ phase: "cycle 1", status: "moving" as const, polls: 40 }] };
+        },
+      }
+    );
+
+    expect(measured).toEqual(["/a", "/a", "/b", "/b"]);
   });
 
   it("leaves a borderline leak the audit already withdrew to re-measurement", async () => {

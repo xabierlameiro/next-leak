@@ -1,4 +1,4 @@
-import { effectiveVerdict, resolveCycles } from "./confidence.js";
+import { effectiveVerdict, resolveCycles, type WarningCode } from "./confidence.js";
 import type { DiscoveredRoute } from "./manifests.js";
 import type { NodeBinary } from "./node-binaries.js";
 import { HeapExhaustedError, RITUAL_DEFAULTS } from "./ritual.js";
@@ -47,7 +47,6 @@ function reasonToResolve(verdict: TrendVerdict, promotedFrom?: TrendVerdict): st
   }
 }
 
-/** Measures a route, and goes back for a longer look when the verdict earns one. */
 /**
  * Measures a route `repeat` times, each from its own server, and judges it on
  * all of them.
@@ -77,8 +76,12 @@ export async function measureRepeatedly(
   }
   const repeat = context.options.repeat ?? 1;
   if (repeat <= 1) {
+    const started = clock(context)();
     const first = await measureWithResolution(context, route, requestPath, index, label);
-    return confirmBorderline(context, route, requestPath, index, label, first);
+    return confirmBorderline(context, route, requestPath, index, label, first, {
+      suffix: "",
+      firstPassMs: clock(context)() - started,
+    });
   }
 
   const passes: RouteReport[] = [];
@@ -118,6 +121,7 @@ async function compareNodeVersions(
   for (const [position, binary] of binaries.entries()) {
     context.progress(`measuring ${label} on Node ${binary.version}`);
     const suffix = `-node${position + 1}`;
+    const started = clock(context)();
     const first = await measureWithResolution(
       context,
       route,
@@ -130,6 +134,7 @@ async function compareNodeVersions(
     const report = await confirmBorderline(context, route, requestPath, index, label, first, {
       suffix,
       nodePath: binary.path,
+      firstPassMs: clock(context)() - started,
     });
     reports.push({ binary, report });
     if (context.options.signal?.aborted === true) {
@@ -163,29 +168,76 @@ function nodeVersionResult(binary: NodeBinary, report: RouteReport): NodeVersion
   };
 }
 
+/** Default for `confirmBudgetMs`: half an hour of second passes per run. */
+export const DEFAULT_CONFIRM_BUDGET_MS = 30 * 60_000;
+
+/**
+ * Warnings about this process's sample, which a second process can read
+ * differently. Left out on purpose: the `abandon-*` pair describes the load
+ * shape, `near-heap-ceiling` meets the same cap next time, `cache-residency`
+ * needs a different experiment rather than the same one again, and
+ * `repetitions-disagree` was already repeated.
+ */
+const PROCESS_VARIANCE_WARNINGS: ReadonlySet<WarningCode> = new Set<WarningCode>([
+  "unsettled",
+  "settle-unverified",
+  "load-incomplete",
+  "spiky-growth",
+  "near-threshold",
+  "thin-evidence",
+  "warm-up-baseline",
+  "first-cycle-step",
+]);
+
+/** Verdicts a second process can contradict. */
+const CONFIRMABLE_VERDICTS: ReadonlySet<TrendVerdict> = new Set<TrendVerdict>([
+  "leak",
+  "stable",
+  "saturating",
+]);
+
+type Confirmation = { reason: string; budgeted: boolean };
+
 /**
  * Why a single measurement needs a second one from a fresh server, or null.
  *
- * Only a leak whose growth sits in the noise band: that is the verdict that did
- * not hold between processes. On the vercel/next.js#97938 reproduction (16.3.6,
- * Node 22.23, 300 requests per cycle) one run came out `stable` with high
- * confidence and the next `leak` at +0.50 MB per cycle against a 0.25 MB gate.
- * A leak well clear of the gate has reproduced on every run measured, and
- * confirming those would double the cost of every real finding. A stable
- * verdict is not confirmed: missing a leak costs less than accusing a route.
+ * A leak whose growth sits in the noise band is confirmed unconditionally: it
+ * is an accusation, and it is the verdict that did not hold between processes.
+ * On the vercel/next.js#97938 reproduction (16.3.6, Node 22.23, 300 requests
+ * per cycle) one run came out `stable` with high confidence and the next
+ * `leak` at +0.50 MB per cycle against a 0.25 MB gate.
+ *
+ * Any other `leak`, `stable` or `saturating` with a warning about its own
+ * sample is confirmed within the run's budget. The same arm gave `stable`,
+ * `leak`, `saturating`, `leak` across four runs; checking only the leak side
+ * left half of that flip unseen.
  */
-function confirmationReason(report: RouteReport): string | null {
-  if (report.status !== "measured" || effectiveVerdict(report) !== "leak") {
+export function confirmationFor(report: RouteReport): Confirmation | null {
+  if (report.status !== "measured") {
     return null;
   }
-  return report.confidence.warnings.some((warning) => warning.code === "near-threshold")
-    ? "its growth barely clears the threshold"
-    : null;
+  const verdict = effectiveVerdict(report);
+  const codes = report.confidence.warnings.map((warning) => warning.code);
+  if (verdict === "leak" && codes.includes("near-threshold")) {
+    return { reason: "its growth barely clears the threshold", budgeted: false };
+  }
+  const variance = codes.filter((code) => PROCESS_VARIANCE_WARNINGS.has(code));
+  if (!CONFIRMABLE_VERDICTS.has(verdict) || variance.length === 0) {
+    return null;
+  }
+  return { reason: `low confidence (${variance.join(", ")})`, budgeted: true };
+}
+
+function clock(context: MeasurementContext): () => number {
+  return context.deps.now ?? Date.now;
 }
 
 /**
- * Measures a borderline leak once more from a fresh server and judges it on
- * both passes, by the same unanimity rule `--repeat` uses.
+ * Measures a low-confidence verdict once more from a fresh server and judges it
+ * on both passes, by the same unanimity rule `--repeat` uses.
+ *
+ * A budgeted confirmation runs only when the first pass's wall time fits in
+ * what is left of the budget, and what it really took is spent from it.
  *
  * A confirmation that fails to measure is a lost bonus, not a finding: the
  * first pass is kept. One that runs out of heap is the stronger evidence and is
@@ -198,26 +250,38 @@ async function confirmBorderline(
   index: number,
   label: string,
   first: RouteReport,
-  pass?: { suffix: string; nodePath?: string }
+  pass: { suffix: string; nodePath?: string; firstPassMs: number }
 ): Promise<RouteReport> {
-  const reason = confirmationReason(first);
+  const confirmation = confirmationFor(first);
   if (
-    reason === null ||
+    confirmation === null ||
     context.options.resolveInconclusive === false ||
     context.options.signal?.aborted === true
   ) {
     return first;
   }
-  context.progress(`confirming ${label} from a fresh server: ${reason}`);
+  const budget = context.confirmBudget;
+  if (confirmation.budgeted && pass.firstPassMs > budget.remainingMs) {
+    context.progress(
+      `not confirming ${label} (${confirmation.reason}): the confirmation budget is spent — ` +
+        `raise --confirm-budget to confirm it`
+    );
+    return first;
+  }
+  context.progress(`confirming ${label} from a fresh server: ${confirmation.reason}`);
+  const started = clock(context)();
   const second = await measureWithResolution(
     context,
     route,
     requestPath,
     index,
     label,
-    `${pass?.suffix ?? ""}-confirm`,
-    pass?.nodePath
+    `${pass.suffix}-confirm`,
+    pass.nodePath
   );
+  if (confirmation.budgeted) {
+    budget.remainingMs -= clock(context)() - started;
+  }
   if (second.status === "failed") {
     context.progress(`confirmation of ${label} did not measure — keeping the first pass`);
     return first;

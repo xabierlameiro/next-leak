@@ -272,6 +272,12 @@ export type RunOptions = {
    */
   repeat?: number;
   /**
+   * Wall time the low-confidence confirmations may take in all, in ms.
+   * Default `DEFAULT_CONFIRM_BUDGET_MS`; 0 turns them off. A borderline leak is
+   * confirmed regardless: that confirmation guards an accusation.
+   */
+  confirmBudgetMs?: number;
+  /**
    * Node binaries the measured server runs on, checked up front. Several
    * measure each route once per binary; the first is the headline.
    */
@@ -299,6 +305,8 @@ export type RunnerDeps = {
   freePort: () => Promise<number>;
   registry: typeof extractModuleRegistry;
   nextVersion: typeof readNextVersion;
+  /** Wall clock in ms, for the confirmation budget. Default `Date.now`. */
+  now?: () => number;
   /** The container's memory limit in bytes, null when none. Default: what Node reads. */
   memoryLimit?: () => number | null;
 };
@@ -315,5 +323,7 @@ export type MeasurementContext = {
   registry: Awaited<ReturnType<typeof extractModuleRegistry>>;
   nextVersion: string | null;
   progress: ProgressFn;
+  /** What is left of the confirmation budget, spent as the run goes. */
+  confirmBudget: { remainingMs: number };
 };
 

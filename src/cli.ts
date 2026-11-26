@@ -263,6 +263,9 @@ async function main(): Promise<void> {
     ...(options.routes !== null && { routeFilter: options.routes }),
     ...(options.cycles !== null && { cycles: options.cycles }),
     ...(options.repeat !== null && { repeat: options.repeat }),
+    ...(options.confirmBudgetMinutes !== null && {
+      confirmBudgetMs: options.confirmBudgetMinutes * 60_000,
+    }),
     ...(nodeBinaries !== undefined && { nodeBinaries }),
     ...(options.dev && { dev: true }),
     ...(options.requests !== null && { loadRequests: options.requests }),

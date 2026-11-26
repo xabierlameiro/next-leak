@@ -19,7 +19,7 @@ import { validateDevTarget } from "./dev-target.js";
 import { planRevalidation } from "./isr.js";
 import { minGrowthFor } from "./trend.js";
 import { routeSlug } from "./route-measure.js";
-import { measureRepeatedly } from "./route-passes.js";
+import { DEFAULT_CONFIRM_BUDGET_MS, measureRepeatedly } from "./route-passes.js";
 import type {
   MeasurementContext,
   ProgressFn,
@@ -343,6 +343,7 @@ export async function runMeasurement(
 
   const context: MeasurementContext = {
     deps, options, target, workDir, routeConfig, registry, nextVersion, progress,
+    confirmBudget: { remainingMs: options.confirmBudgetMs ?? DEFAULT_CONFIRM_BUDGET_MS },
   };
   const reports: RouteReport[] = [];
 
