@@ -7,13 +7,11 @@
   "mode": "server",
   "route": "/[slug]",
   "measuredOn": "2026-11-23",
-  "truth": "healthy",
+  "truth": "leak",
   "accept": [
-    "stable",
-    "saturating",
-    "pressure"
+    "leak"
   ],
-  "note": "flat after warm-up; peaks under load reach far above what is retained",
+  "note": "unique slug per request: a step on the first cycle, then ~0.8 KB retained per new key with no ceiling (16 cycles on 16.4.6, Node 24: 15 of 15 deltas positive, flat with {n%50}), the per-path growth of vercel/next.js#99335",
   "reported": "pressure",
   "input": {
     "memorySamples": [
