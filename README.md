@@ -241,7 +241,7 @@ same fragment.
 `run.json` records what every load phase actually did — requests sent,
 2xx, abandoned — so a run can be audited instead of trusted.
 
-Before measuring, the CLI prints a duration estimate — a 60-route app under defaults is **hours**; narrow with `--routes` for iteration.
+Before measuring, the CLI prints a duration estimate — a 60-route app under defaults is **hours**; narrow with `--routes` for iteration. It covers one pass per route at 250 req/s, and says so: a route measured again or confirmed can take 6× as long, and a heavy route serves far less (the [#97938](https://github.com/vercel/next.js/issues/97938) slug route rendered 6.5 req/s, and a run announced at under a minute took 30). Once a pass has run, the run prices what follows from its own timings: each re-measurement and confirmation, and the routes left, with the throughput when it was under half the assumed one.
 
 ## What it tells apart
 

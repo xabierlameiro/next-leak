@@ -7,6 +7,8 @@ import {
   aggregateRepetitions,
   estimateRun,
   formatDuration,
+  remainingNote,
+  worstCasePasses,
   formatEstimate,
   routeSlug,
   runMeasurement,
@@ -486,7 +488,9 @@ describe("mutation-hardening: runner, second pass", () => {
     );
     expect(
       withNote.some((line) =>
-        line.includes("undecided and still-decelerating routes are measured again")
+        line.includes(
+          "(one pass per route at 250 req/s; a route measured again or confirmed can take 6× as long)"
+        )
       )
     ).toBe(true);
 
@@ -501,6 +505,7 @@ describe("mutation-hardening: runner, second pass", () => {
       makeDeps([])
     );
     expect(without.some((line) => line.includes("measured again"))).toBe(false);
+    expect(without.some((line) => line.includes("(one pass per route at 250 req/s)"))).toBe(true);
   });
 
   it("warns about long default runs, and stays quiet once load is hand-tuned", async () => {
@@ -668,6 +673,58 @@ describe("formatDuration boundaries", () => {
   it("switches to hours exactly at 90 minutes", () => {
     expect(formatDuration(5399)).toBe("90m");
     expect(formatDuration(5400)).toBe("1.5h");
+  });
+});
+
+describe("worstCasePasses", () => {
+  // vercel/next.js#97938 slug route: 4 + 8 + 4 + 8 cycles for a 4-cycle run.
+  it("counts the pass, its re-measurement and a confirmation that re-measures", () => {
+    expect(worstCasePasses(4)).toBe(6);
+    expect(worstCasePasses(10)).toBe(6);
+    // Re-measurement never drops below 6 cycles.
+    expect(worstCasePasses(3)).toBe(6);
+    expect(worstCasePasses(2)).toBe(8);
+  });
+});
+
+describe("remainingNote", () => {
+  const measured = (loadSeconds: number) => {
+    const route = makeRunReport().routes.find((entry) => entry.status === "measured");
+    if (route?.status !== "measured") throw new Error("fixture has no measured route");
+    return {
+      ...route,
+      requestsPerCycle: 300,
+      timings: [
+        { phase: "warm-up", seconds: 2 },
+        { phase: "cycle 1 load", seconds: loadSeconds },
+        { phase: "cycle 2 load", seconds: loadSeconds },
+      ],
+    };
+  };
+
+  it("prices the routes left at the mean so far", () => {
+    expect(remainingNote(3, 120, undefined)).toBe("3 routes left · ≈ 6m at the pace so far");
+    expect(remainingNote(1, 45, undefined)).toBe("1 route left · ≈ 45s at the pace so far");
+  });
+
+  it("says when the app served well under the throughput the estimate assumed", () => {
+    // The #97938 slug route: 300 requests in 46 s, 6.5 req/s.
+    const last = measured(46);
+    expect(remainingNote(2, 600, last)).toBe(
+      `2 routes left · ≈ 20m at the pace so far — ${last.route} served 6.5 req/s, not the 250 the estimate assumed`
+    );
+  });
+
+  it("stays quiet about throughput at or above half the assumption", () => {
+    // 300 requests in 2.4 s is 125 req/s, exactly half.
+    expect(remainingNote(1, 30, measured(2.4))).toBe("1 route left · ≈ 30s at the pace so far");
+    expect(remainingNote(1, 30, measured(2.5))).toContain("served 120.0 req/s");
+  });
+
+  it("does not guess a throughput for a route that did not measure", () => {
+    expect(remainingNote(1, 30, { route: "/x", status: "failed", reason: "boom" })).toBe(
+      "1 route left · ≈ 30s at the pace so far"
+    );
   });
 });
 
@@ -1692,7 +1749,7 @@ describe("confirming a borderline leak from a fresh server", () => {
     const within = await run([spiky, spiky]);
     expect(within.calls).toBe(2);
     expect(within.progress.find((line) => line.startsWith("confirming"))).toMatch(
-      /from a fresh server: low confidence \(spiky-growth\)$/
+      /from a fresh server: low confidence \(spiky-growth\) \(≈ \d+s — what the first pass took\)$/
     );
 
     const off = await run([spiky, spiky], { confirmBudgetMs: 0 });
@@ -2206,5 +2263,45 @@ describe("container memory limit", () => {
     const { progress, report } = await messages(null);
     expect(progress.some((m) => m.includes("memory limit"))).toBe(false);
     expect(report.environment).not.toHaveProperty("memoryLimitBytes");
+  });
+});
+
+describe("pacing notes during a run", () => {
+  it("prices the re-measurement at the first pass's pace and the routes left", async () => {
+    const appDir = await makeAppDir({ "/a/page": "app/a/page.js", "/b/page": "app/b/page.js" });
+    let clockMs = 0;
+    const progress: string[] = [];
+    await runMeasurement(
+      { appDir, bootstrapPath: "/fake/bootstrap.js", onProgress: (line) => progress.push(line) },
+      {
+        ...makeDeps([]),
+        now: () => clockMs,
+        ritual: async (ritualOptions) => {
+          clockMs += 100_000;
+          const base = ritualResult(ritualOptions.route, [29 * MB, 31 * MB, 33 * MB, 35 * MB]);
+          return {
+            ...base,
+            // warm-up 2 s, 4 cycles of 50 s, after snapshot 18 s.
+            timings: [
+              { phase: "warm-up", seconds: 2 },
+              ...[1, 2, 3, 4].map((cycle) => ({ phase: `cycle ${cycle} load`, seconds: 50 })),
+              { phase: "after snapshot", seconds: 18 },
+            ],
+            trend: { verdict: "inconclusive" as const, growthPerCycle: 0, deltas: [] },
+          };
+        },
+      }
+    );
+
+    // 20 s outside the cycles plus 8 cycles at 50 s.
+    expect(progress).toContain(
+      "re-measuring /a with 8 cycles: the first pass could not call it (≈ 7m at the pace of the first pass)"
+    );
+    // /a took two passes on the fake clock; one route left. 5000 requests in
+    // 50 s is 100 req/s, under half of what the estimate assumed.
+    expect(progress).toContain(
+      "1 route left · ≈ 3m at the pace so far — /a served 100.0 req/s, not the 250 the estimate assumed"
+    );
+    expect(progress.filter((line) => line.includes("left ·"))).toHaveLength(1);
   });
 });

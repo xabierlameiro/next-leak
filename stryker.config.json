@@ -59,7 +59,9 @@
     "src/dev-target.ts",
     "src/security-stop.ts",
     "src/judge.ts",
-    "src/corpus.ts"
+    "src/corpus.ts",
+    "src/eta.ts",
+    "src/format-duration.ts"
   ],
   "thresholds": {
     "high": 90,

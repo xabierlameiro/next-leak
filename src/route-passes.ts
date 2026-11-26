@@ -1,4 +1,5 @@
 import { effectiveVerdict, resolveCycles, type WarningCode } from "./confidence.js";
+import { paceNote, passSecondsAt } from "./eta.js";
 import type { DiscoveredRoute } from "./manifests.js";
 import type { NodeBinary } from "./node-binaries.js";
 import { HeapExhaustedError, RITUAL_DEFAULTS } from "./ritual.js";
@@ -268,7 +269,10 @@ async function confirmBorderline(
     );
     return first;
   }
-  context.progress(`confirming ${label} from a fresh server: ${confirmation.reason}`);
+  context.progress(
+    `confirming ${label} from a fresh server: ${confirmation.reason}` +
+      paceNote(pass.firstPassMs / 1000, "— what the first pass took")
+  );
   const started = clock(context)();
   const second = await measureWithResolution(
     context,
@@ -391,7 +395,10 @@ async function measureWithResolution(
       return first;
     }
     const cycles = resolveCycles(context.options.cycles ?? RITUAL_DEFAULTS.cycles);
-    progress(`re-measuring ${route.path} with ${cycles} cycles: ${reason}`);
+    progress(
+      `re-measuring ${route.path} with ${cycles} cycles: ${reason}` +
+        paceNote(passSecondsAt(first.timings, cycles), "at the pace of the first pass")
+    );
     try {
       return await measureRoute(context, route, requestPath, index, {
         cycles,

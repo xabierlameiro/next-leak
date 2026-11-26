@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { warrantsIssueDraft } from "./confidence.js";
+import { resolveCycles, warrantsIssueDraft } from "./confidence.js";
 import { captureEnvironment, memoryLimitBytes, memoryLimitWarning } from "./environment.js";
 import { diffSnapshotFiles } from "./heap-diff.js";
 import { DEFAULT_MAX_OLD_SPACE_MB } from "./launcher.js";
@@ -19,6 +19,8 @@ import { validateDevTarget } from "./dev-target.js";
 import { planRevalidation } from "./isr.js";
 import { minGrowthFor } from "./trend.js";
 import { routeSlug } from "./route-measure.js";
+import { observedThroughput } from "./eta.js";
+import { formatDuration } from "./format-duration.js";
 import { DEFAULT_CONFIRM_BUDGET_MS, measureRepeatedly } from "./route-passes.js";
 import type {
   MeasurementContext,
@@ -40,6 +42,7 @@ export type {
   RunParameters,
   RunReport,
 } from "./run-types.js";
+export { formatDuration } from "./format-duration.js";
 export { routeSlug } from "./route-measure.js";
 export { aggregateRepetitions } from "./route-passes.js";
 
@@ -65,6 +68,16 @@ export type RunEstimate = {
   slowSeconds: number;
 };
 
+/**
+ * How many first passes' worth of cycles one route can cost: the pass, the
+ * longer re-measurement of an undecided result, and a confirmation from a fresh
+ * server that may need its own re-measurement. On the vercel/next.js#97938 slug
+ * route that was 4 + 8 + 4 + 8 cycles.
+ */
+export function worstCasePasses(cycles: number): number {
+  return Math.round(((cycles + resolveCycles(cycles)) / cycles) * 2);
+}
+
 export function estimateRun(routeCount: number, parameters: RunParameters): RunEstimate {
   const settleSeconds = Math.min(MIN_SETTLE_SECONDS, parameters.idleMs / 1000);
   const slowPerRoute =
@@ -89,15 +102,6 @@ export function formatEstimate(estimate: RunEstimate): string {
   return fast === slow ? `≈ ${slow}` : `≈ ${fast}–${slow}`;
 }
 
-export function formatDuration(seconds: number): string {
-  if (seconds < 90) {
-    return `${seconds}s`;
-  }
-  if (seconds < 5400) {
-    return `${Math.round(seconds / 60)}m`;
-  }
-  return `${(seconds / 3600).toFixed(1)}h`;
-}
 
 export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -275,9 +279,10 @@ async function planRun(
     `${routes.length} routes discovered` +
       (measurable === routes.length ? "" : ` · ${measurable} measurable`) +
       ` · estimated ${formatEstimate(estimate)}` +
+      ` (one pass per route at ${ESTIMATED_RPS} req/s` +
       (options.resolveInconclusive === false
-        ? ""
-        : " (undecided and still-decelerating routes are measured again)") +
+        ? ")"
+        : `; a route measured again or confirmed can take ${worstCasePasses(parameters.cycles)}× as long)`) +
       // Long default runs are where first-time users give up; point at the two
       // ways out. Suppressed once load parameters were tuned by hand (or by
       // --quick, which arrives here as explicit loadRequests/idleMs).
@@ -288,6 +293,35 @@ async function planRun(
         : "")
   );
   return { routes, routeConfig, registry, nextVersion, parameters };
+}
+
+/**
+ * What the routes still to measure should take, at the pace of the ones done.
+ *
+ * The up-front estimate assumes a throughput; a measured route has its own.
+ * When the app served well under that, the note says so, because that is the
+ * reason the run is slower than announced.
+ */
+export function remainingNote(
+  routesLeft: number,
+  meanRouteSeconds: number,
+  last: RouteReport | undefined
+): string {
+  return (
+    `${routesLeft} route${routesLeft === 1 ? "" : "s"} left · ≈ ` +
+    `${formatDuration(Math.round(routesLeft * meanRouteSeconds))} at the pace so far` +
+    slowServingNote(last)
+  );
+}
+
+function slowServingNote(last: RouteReport | undefined): string {
+  if (last?.status !== "measured") {
+    return "";
+  }
+  const rate = observedThroughput(last.timings, last.requestsPerCycle);
+  return rate !== null && rate < ESTIMATED_RPS / 2
+    ? ` — ${last.route} served ${rate.toFixed(1)} req/s, not the ${ESTIMATED_RPS} the estimate assumed`
+    : "";
 }
 
 /**
@@ -375,12 +409,20 @@ export async function runMeasurement(
     await writeFile(path.join(workDir, "run.json"), `${JSON.stringify(report, null, 2)}\n`);
   };
 
+  const clock = deps.now ?? Date.now;
+  let spentSeconds = 0;
   for (const [index, route] of routes.entries()) {
     if (options.signal?.aborted === true) {
       reports.push({ route: route.path, status: "skipped", reason: "interrupted" });
       continue;
     }
+    const started = clock();
     reports.push(await routeReportFor(context, route, index, routes.length));
+    spentSeconds += (clock() - started) / 1000;
+    const left = routes.length - index - 1;
+    if (left > 0) {
+      progress(remainingNote(left, spentSeconds / (index + 1), reports.at(-1)));
+    }
     await persist(buildReport());
   }
 
