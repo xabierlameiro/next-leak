@@ -15,6 +15,7 @@
   "97938-16.3.6-node22-f": "stable",
   "97938-16.3.6-node22-g": "leak",
   "97938-16.3.6-node22-h": "stable",
+  "97938-16.3.6-node22-i": "leak",
   "97938-16.3.6-node24": "pressure",
   "97938-16.3.8-node22": "stable",
   "97938-16.3.8-node24": "pressure",
