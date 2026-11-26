@@ -1,7 +1,7 @@
 {
   "name": "next-leak",
   "version": "0.14.0",
-  "description": "Find out whether your Next.js app actually leaks memory — how much, on which route, and whose fault it is.",
+  "description": "Find out whether your Next.js app actually leaks memory \u2014 how much, on which route, and whose fault it is.",
   "keywords": [
     "nextjs",
     "next.js",
@@ -43,7 +43,9 @@
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",
     "pack:smoke": "node scripts/pack-smoke.mjs",
     "test:mutation": "stryker run",
-    "prepare": "husky >/dev/null 2>&1 || true"
+    "prepare": "husky >/dev/null 2>&1 || true",
+    "corpus": "CORPUS_REPORT=1 vitest run src/corpus.test.ts",
+    "corpus:pin": "CORPUS_PIN=1 vitest run src/corpus.test.ts"
   },
   "pnpm": {
     "overrides": {

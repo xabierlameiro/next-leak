@@ -37,6 +37,9 @@
     "src/abandon-load.ts",
     "src/ritual.ts",
     "src/runner.ts",
+    "src/run-types.ts",
+    "src/route-passes.ts",
+    "src/route-measure.ts",
     "src/load.ts",
     "src/control-server.ts",
     "src/launcher.ts",
@@ -54,7 +57,12 @@
     "src/node-binaries.ts",
     "src/node-comparison.ts",
     "src/dev-target.ts",
-    "src/security-stop.ts"
+    "src/security-stop.ts",
+    "src/judge.ts",
+    "src/corpus.ts",
+    "src/eta.ts",
+    "src/format-duration.ts",
+    "src/isr-cleanup.ts"
   ],
   "thresholds": {
     "high": 90,

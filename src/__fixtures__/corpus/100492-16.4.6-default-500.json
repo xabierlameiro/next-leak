@@ -1,0 +1,121 @@
+{
+  "id": "100492-16.4.6-default-500",
+  "arm": "100492-16.4.6-default-500",
+  "issue": "vercel/next.js#100492",
+  "next": "16.4.6",
+  "node": "v24.22.3",
+  "mode": "server",
+  "route": "/[id]",
+  "measuredOn": "2026-11-25",
+  "truth": "bounded",
+  "accept": [
+    "leak",
+    "saturating"
+  ],
+  "note": "LRU budget of 50 MB counted by value size, real cost ~6x; the ceiling (~340 MB) lies beyond the requests measured, so growth inside the window is expected",
+  "reported": "leak",
+  "input": {
+    "memorySamples": [
+      {
+        "gcExposed": true,
+        "heapUsed": 33427288,
+        "rss": 126959616,
+        "external": 4797449,
+        "arrayBuffers": 615754
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 32822968,
+        "rss": 373018624,
+        "external": 14031212,
+        "arrayBuffers": 9856330
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 33468872,
+        "rss": 388485120,
+        "external": 24516972,
+        "arrayBuffers": 20342090
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 33984344,
+        "rss": 397791232,
+        "external": 31070572,
+        "arrayBuffers": 26895690
+      }
+    ],
+    "peaks": [
+      {
+        "phase": "cycle 1",
+        "heapUsed": 69715616,
+        "external": 16777560,
+        "arrayBuffers": 12602678,
+        "rss": 373018624,
+        "polls": 11
+      },
+      {
+        "phase": "cycle 2",
+        "heapUsed": 74071136,
+        "external": 26679347,
+        "arrayBuffers": 22504465,
+        "rss": 388485120,
+        "polls": 11
+      },
+      {
+        "phase": "cycle 3",
+        "heapUsed": 63700976,
+        "external": 37395911,
+        "arrayBuffers": 33221029,
+        "rss": 397791232,
+        "polls": 11
+      }
+    ],
+    "requestsPerCycle": 500,
+    "maxOldSpaceMb": 512,
+    "warmupRequests": 20,
+    "loadOutcomes": [
+      {
+        "phase": "cycle 1",
+        "sent": 500,
+        "ok2xx": 500,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 2",
+        "sent": 500,
+        "ok2xx": 500,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 3",
+        "sent": 500,
+        "ok2xx": 500,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      }
+    ],
+    "settleOutcomes": [
+      {
+        "phase": "cycle 1",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 2",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 3",
+        "status": "settled",
+        "polls": 2
+      }
+    ]
+  }
+}

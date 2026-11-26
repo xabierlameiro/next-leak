@@ -4,7 +4,7 @@ import {
   classifyTrend,
   minGrowthFor,
   MIN_GROWTH_NOISE_FLOOR,
-} from "./trend.js";
+  theilSenSlope, isLongSeriesLeak, signTestP } from "./trend.js";
 
 const MB = 1024 * 1024;
 const KIB = 1024;
@@ -669,5 +669,264 @@ describe("cache-driven context", () => {
 
     expect(result.verdict).toBe("leak");
     expect(result.cacheDriven).toBe(true);
+  });
+});
+
+// vercel/next.js#97938 reproduction, 16.4.6 on Node 24, 2026-11-26: 16 cycles
+// of 300 requests. A unique slug per request grew in all 15 deltas; 50
+// repeating slugs stayed flat. The first was called `saturating`.
+describe("sustained creep below the gate", () => {
+  const UNIQUE_16 = [
+    43457680, 48233904, 49295248, 49504128, 49848608, 50048032, 50269048, 50612040, 50782984,
+    50926520, 51148408, 51300976, 51444064, 51684192, 52095200, 52217568, 52443976,
+  ];
+  const BOUNDED_16 = [
+    41904352, 47672032, 48536176, 48590216, 48714632, 48770344, 48831440, 48886976, 48903368,
+    48894168, 48960096, 48982352, 48961528, 49049680, 49080696, 49056392, 49107992,
+  ];
+  const at300 = { minGrowthPerCycle: minGrowthFor(300), requestsPerCycle: 300 };
+
+  it("calls the slow per-key leak a leak", () => {
+    expect(classifyTrend(UNIQUE_16, at300).verdict).toBe("leak");
+  });
+
+  it("leaves the same build over repeating keys alone", () => {
+    expect(classifyTrend(BOUNDED_16, at300).verdict).not.toBe("leak");
+  });
+
+  it("needs the traffic per cycle, so callers that do not pass it are unchanged", () => {
+    expect(classifyTrend(UNIQUE_16, { minGrowthPerCycle: minGrowthFor(300) }).verdict).toBe(
+      "saturating"
+    );
+  });
+
+  it("needs seven deltas: a four-cycle run cannot carry the sign test", () => {
+    expect(classifyTrend(UNIQUE_16.slice(0, 8), at300).verdict).not.toBe("leak");
+    expect(classifyTrend(UNIQUE_16.slice(0, 9), at300).verdict).toBe("leak");
+  });
+
+  it("needs every tail delta to grow", () => {
+    const dipped = [...UNIQUE_16];
+    dipped[14] = (dipped[13] ?? 0) - 1;
+    dipped[15] = (dipped[14] ?? 0) + 1;
+    dipped[16] = (dipped[15] ?? 0) + 1;
+    expect(classifyTrend(dipped, at300).verdict).not.toBe("leak");
+  });
+
+  it("needs at least 400 bytes per request in the tail", () => {
+    // ~0.78 KB per request at 300 requests is a leak; the same bytes over
+    // 3000 requests per cycle are 0.078 KB per request, under the floor.
+    expect(
+      classifyTrend(UNIQUE_16, { minGrowthPerCycle: minGrowthFor(3000), requestsPerCycle: 3000 })
+        .verdict
+    ).not.toBe("leak");
+  });
+
+  describe("at the rule's edges", () => {
+    // Warm-up sample, then nine post-warm-up samples: eight deltas, split 4/4.
+    const steps = (head: number, tail: number, bump = 0) => {
+      const out = [0, 50 * MB];
+      for (let i = 0; i < 4; i += 1) out.push((out.at(-1) ?? 0) + head);
+      for (let i = 0; i < 4; i += 1) out.push((out.at(-1) ?? 0) + tail + (i === 3 ? bump : 0));
+      return out;
+    };
+    const floor = 400 * 300;
+
+    it("calls a tail exactly at the per-request floor a leak, one byte under not", () => {
+      expect(classifyTrend(steps(floor, floor), at300).verdict).toBe("leak");
+      expect(classifyTrend(steps(floor - 1, floor - 1), at300).verdict).not.toBe("leak");
+    });
+
+    it("calls a tail at exactly half the head's slope a leak, under half not", () => {
+      expect(classifyTrend(steps(2 * floor, floor), at300).verdict).toBe("leak");
+      expect(classifyTrend(steps(2 * floor + 4, floor), at300).verdict).not.toBe("leak");
+    });
+
+    it("does not count a flat tail cycle as growth", () => {
+      expect(classifyTrend(steps(floor, floor, -floor), at300).verdict).not.toBe("leak");
+    });
+
+    it("ignores a zero or negative request count", () => {
+      for (const requestsPerCycle of [0, -300]) {
+        expect(
+          classifyTrend(steps(floor, floor), { minGrowthPerCycle: minGrowthFor(300), requestsPerCycle })
+            .verdict
+        ).not.toBe("leak");
+      }
+    });
+  });
+
+  it("leaves a store that is still filling but slowing to saturation", () => {
+    // Every cycle grows; the tail clears the per-request floor (0.2 MB at 300
+    // requests) but runs at a fortieth of the head's rate.
+    const slowing = [0, 1, 9, 17, 25, 33, 33.2, 33.4, 33.6, 33.8].map((mb) => mb * MB);
+    expect(classifyTrend(slowing, { minGrowthPerCycle: 256 * KIB, requestsPerCycle: 300 }).verdict).toBe(
+      "saturating"
+    );
+  });
+
+  // Planted servers, ~0.8 KB per new key at 300 requests per cycle. The capped
+  // one fills right up to cycle 14 of 16 and only then stops.
+  const LRU_4200 = [
+    7379736, 8153912, 8392248, 8625720, 8861000, 9109416, 9313824, 9574048, 9777688, 9985368,
+    10256152, 10464200, 10666112, 10893704, 11188528, 11227256, 11233680,
+  ];
+  const UNBOUNDED = [
+    7376608, 8157224, 8395096, 8628640, 8863920, 9112464, 9316872, 9576488, 9780904, 9988584,
+    10271456, 10479304, 10681768, 10905632, 11222760, 11453760, 11658512,
+  ];
+
+  it("leaves a capped store that stops growing in the last cycles", () => {
+    expect(classifyTrend(LRU_4200, at300).verdict).not.toBe("leak");
+  });
+
+  it("still calls the same store without a cap a leak", () => {
+    expect(classifyTrend(UNBOUNDED, at300).verdict).toBe("leak");
+  });
+
+  it("needs the last two deltas to keep half the tail's slope, on average", () => {
+    // Six 200 KB deltas, then two of `each`.
+    const ending = (each: number) => {
+      const out = [0, 50 * MB];
+      for (let i = 0; i < 6; i += 1) out.push((out.at(-1) ?? 0) + 200 * KIB);
+      for (let i = 0; i < 2; i += 1) out.push((out.at(-1) ?? 0) + each);
+      return out;
+    };
+    expect(classifyTrend(ending(200 * KIB), at300).verdict).toBe("leak");
+    expect(classifyTrend(ending(120 * KIB), at300).verdict).toBe("leak");
+    expect(classifyTrend(ending(40 * KIB), at300).verdict).not.toBe("leak");
+  });
+
+  it("judges the end on two deltas, so one quiet cycle is not a stop", () => {
+    const out = [0, 50 * MB];
+    for (let i = 0; i < 7; i += 1) out.push((out.at(-1) ?? 0) + 200 * KIB);
+    // A quiet last cycle after a normal one: mean 105 KB, over half of 200.
+    out.push((out.at(-1) ?? 0) + 10 * KIB);
+    expect(classifyTrend(out, at300).verdict).toBe("leak");
+  });
+
+  it("keeps the /cached field series saturating when its traffic is known", () => {
+    // 0.17 KB per request at 3000 requests per cycle, judged not a leak.
+    const FIELD_SAMPLES = [
+      30907912, 32686936, 33284984, 33962520, 34428264, 34864256, 35756872, 36204336, 36456840,
+    ];
+    expect(
+      classifyTrend(FIELD_SAMPLES, { minGrowthPerCycle: minGrowthFor(3000), requestsPerCycle: 3000 })
+        .verdict
+    ).toBe("saturating");
+  });
+});
+
+describe("theilSenSlope", () => {
+  it("is the median of pairwise slopes, so one outlier does not move it", () => {
+    expect(theilSenSlope([0, 1, 2, 3, 4])).toBe(1);
+    expect(theilSenSlope([0, 1, 2, 100, 4])).toBe(1);
+  });
+
+  it("averages the two middle slopes when there is an even number of pairs", () => {
+    // Pairwise slopes 1, 1.5, 2, 10/3, 4.5, 7: the median is (2 + 10/3) / 2.
+    expect(theilSenSlope([0, 1, 3, 10])).toBeCloseTo(8 / 3);
+  });
+
+  it("averages the two middle slopes of an even count", () => {
+    // Pairwise slopes of [0, 1, 3]: 1, 1.5, 2 → median 1.5; of [0, 2]: 2.
+    expect(theilSenSlope([0, 1, 3])).toBe(1.5);
+    expect(theilSenSlope([0, 1, 3, 3])).toBe(1);
+  });
+
+  it("is zero for fewer than two points", () => {
+    expect(theilSenSlope([5])).toBe(0);
+    expect(theilSenSlope([])).toBe(0);
+  });
+});
+
+// vercel/next.js#97938 slug route, 16.3.6 on Node 22: the 16-cycle pass that
+// settled a disagreement. 6.3 MB over 15 cycles, three of them giving memory
+// back, and the shape rules called it stable.
+describe("long series judged by their slope", () => {
+  const SETTLING_PASS = [
+    60181232, 371072720, 372688424, 372852616, 373484408, 373784352, 374306536, 375544144,
+    375253568, 375719456, 376232328, 376819192, 375603000, 376511560, 377517824, 376790392,
+    377380920,
+  ];
+  // Same route on 16.4.6 over 50 repeating keys: 12 of 15 deltas positive, flat.
+  const BOUNDED_16 = [
+    41904352, 47672032, 48536176, 48590216, 48714632, 48770344, 48831440, 48886976, 48903368,
+    48894168, 48960096, 48982352, 48961528, 49049680, 49080696, 49056392, 49107992,
+  ];
+  const gate = { minGrowthPerCycle: minGrowthFor(300) };
+
+  it("calls the noisy 16-cycle leak a leak", () => {
+    expect(classifyTrend(SETTLING_PASS, gate).verdict).toBe("leak");
+  });
+
+  it("leaves the flat route alone although most of its deltas are positive", () => {
+    expect(classifyTrend(BOUNDED_16, gate).verdict).not.toBe("leak");
+  });
+
+
+  it("needs twelve deltas, so shorter windows keep the shape rules", () => {
+    // The settling pass cut to 11 deltas: the rule does not apply.
+    const short = SETTLING_PASS.slice(0, 13);
+    expect(isLongSeriesLeak(short, deltasOf(short), minGrowthFor(300))).toBe(false);
+  });
+});
+
+const deltasOf = (samples: readonly number[]) =>
+  samples.slice(2).map((value, index) => value - (samples[index + 1] ?? 0));
+
+describe("isLongSeriesLeak", () => {
+  // Fifteen deltas of `step` after a warm-up step, with `down` of them negative.
+  const series = (step: number, down: number[] = [], lastFive = step) => {
+    const out = [0, 50 * MB];
+    for (let i = 0; i < 15; i += 1) {
+      out.push((out.at(-1) ?? 0) + (down.includes(i) ? -step / 2 : i >= 10 ? lastFive : step));
+    }
+    return out;
+  };
+  const judge = (samples: number[], gate = 256 * KIB) =>
+    isLongSeriesLeak(samples, deltasOf(samples), gate);
+
+  it("calls a steady climb with a few give-backs a leak", () => {
+    expect(judge(series(500 * KIB, [3, 7, 11]))).toBe(true);
+  });
+
+  it("needs the slope to reach the gate", () => {
+    expect(judge(series(500 * KIB, [3, 7, 11]), 1 * MB)).toBe(false);
+  });
+
+  it("needs growing cycles beyond chance: 12 of 15 passes, 11 does not", () => {
+    expect(judge(series(500 * KIB, [3, 7, 11]))).toBe(true);
+    expect(judge(series(500 * KIB, [1, 3, 7, 11]))).toBe(false);
+  });
+
+  it("does not count a flat cycle as a growing one", () => {
+    // Four flat cycles among fifteen: 11 growing, under the sign test.
+    const out = [0, 50 * MB];
+    for (let i = 0; i < 15; i += 1) out.push((out.at(-1) ?? 0) + ([2, 5, 8, 12].includes(i) ? 0 : 500 * KIB));
+    expect(judge(out)).toBe(false);
+  });
+
+  it("needs the last third to keep half the slope", () => {
+    expect(judge(series(400 * KIB, [], 400 * KIB))).toBe(true);
+    expect(judge(series(400 * KIB, [], 40 * KIB))).toBe(false);
+  });
+
+  it("needs twelve deltas", () => {
+    const eleven = series(400 * KIB).slice(0, 13);
+    const twelve = series(400 * KIB).slice(0, 14);
+    expect(judge(twelve)).toBe(true);
+    expect(judge(eleven)).toBe(false);
+  });
+});
+
+describe("signTestP", () => {
+  it("is the one-sided binomial tail", () => {
+    expect(signTestP(15, 12)).toBeCloseTo(0.0176, 4);
+    expect(signTestP(15, 11)).toBeCloseTo(0.0592, 4);
+    expect(signTestP(12, 10)).toBeCloseTo(0.0193, 4);
+    expect(signTestP(4, 0)).toBe(1);
+    expect(signTestP(4, 4)).toBe(1 / 16);
+    expect(signTestP(4, 5)).toBe(0);
   });
 });

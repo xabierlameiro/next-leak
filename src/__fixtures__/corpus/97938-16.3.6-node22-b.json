@@ -1,0 +1,262 @@
+{
+  "id": "97938-16.3.6-node22-b",
+  "arm": "97938-16.3.6-node22",
+  "issue": "vercel/next.js#97938",
+  "next": "16.3.6",
+  "node": "v22.23.5",
+  "mode": "server",
+  "route": "/[slug]",
+  "measuredOn": "2026-11-24",
+  "truth": "leak",
+  "accept": [
+    "leak"
+  ],
+  "note": "unique slug per request: a step on the first cycle, then ~0.8 KB retained per new key with no ceiling (16 cycles on 16.4.6, Node 24: 15 of 15 deltas positive, flat with {n%50}), the per-path growth of vercel/next.js#99335",
+  "reported": "leak",
+  "input": {
+    "memorySamples": [
+      {
+        "gcExposed": true,
+        "heapUsed": 60127496,
+        "rss": 316055552,
+        "external": 36314840,
+        "arrayBuffers": 32427808
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 371324832,
+        "rss": 1157095424,
+        "external": 408388270,
+        "arrayBuffers": 404508303
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 372648496,
+        "rss": 1180086272,
+        "external": 408470190,
+        "arrayBuffers": 404590223
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 373194000,
+        "rss": 1188044800,
+        "external": 408494766,
+        "arrayBuffers": 404614799
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 374054224,
+        "rss": 1189838848,
+        "external": 408486574,
+        "arrayBuffers": 404606607
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 374996992,
+        "rss": 1192493056,
+        "external": 408486574,
+        "arrayBuffers": 404606607
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 374969816,
+        "rss": 1192812544,
+        "external": 408494766,
+        "arrayBuffers": 404614799
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 375121864,
+        "rss": 1218002944,
+        "external": 408486574,
+        "arrayBuffers": 404606607
+      },
+      {
+        "gcExposed": true,
+        "heapUsed": 374960688,
+        "rss": 1217720320,
+        "external": 408445614,
+        "arrayBuffers": 404565647
+      }
+    ],
+    "peaks": [
+      {
+        "phase": "cycle 1",
+        "heapUsed": 541861792,
+        "external": 477136675,
+        "arrayBuffers": 471838510,
+        "rss": 1174208512,
+        "polls": 135
+      },
+      {
+        "phase": "cycle 2",
+        "heapUsed": 547831736,
+        "external": 482680216,
+        "arrayBuffers": 477054486,
+        "rss": 1210986496,
+        "polls": 133
+      },
+      {
+        "phase": "cycle 3",
+        "heapUsed": 544399424,
+        "external": 485228391,
+        "arrayBuffers": 476560714,
+        "rss": 1217740800,
+        "polls": 130
+      },
+      {
+        "phase": "cycle 4",
+        "heapUsed": 552787872,
+        "external": 481140872,
+        "arrayBuffers": 476922474,
+        "rss": 1221763072,
+        "polls": 127
+      },
+      {
+        "phase": "cycle 5",
+        "heapUsed": 549640808,
+        "external": 483332140,
+        "arrayBuffers": 477662446,
+        "rss": 1227321344,
+        "polls": 131
+      },
+      {
+        "phase": "cycle 6",
+        "heapUsed": 549500096,
+        "external": 482640460,
+        "arrayBuffers": 475756950,
+        "rss": 1223544832,
+        "polls": 134
+      },
+      {
+        "phase": "cycle 7",
+        "heapUsed": 560191056,
+        "external": 507759563,
+        "arrayBuffers": 503879476,
+        "rss": 1246920704,
+        "polls": 134
+      },
+      {
+        "phase": "cycle 8",
+        "heapUsed": 548098472,
+        "external": 480179075,
+        "arrayBuffers": 476298988,
+        "rss": 1250873344,
+        "polls": 137
+      }
+    ],
+    "requestsPerCycle": 300,
+    "maxOldSpaceMb": 3072,
+    "warmupRequests": 20,
+    "loadOutcomes": [
+      {
+        "phase": "cycle 1",
+        "sent": 300,
+        "ok2xx": 300,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 2",
+        "sent": 300,
+        "ok2xx": 300,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 3",
+        "sent": 300,
+        "ok2xx": 300,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 4",
+        "sent": 300,
+        "ok2xx": 300,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 5",
+        "sent": 300,
+        "ok2xx": 300,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 6",
+        "sent": 300,
+        "ok2xx": 300,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 7",
+        "sent": 300,
+        "ok2xx": 300,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      },
+      {
+        "phase": "cycle 8",
+        "sent": 300,
+        "ok2xx": 300,
+        "non2xx": 0,
+        "errors": 0,
+        "timeouts": 0
+      }
+    ],
+    "settleOutcomes": [
+      {
+        "phase": "cycle 1",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 2",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 3",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 4",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 5",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 6",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 7",
+        "status": "settled",
+        "polls": 2
+      },
+      {
+        "phase": "cycle 8",
+        "status": "settled",
+        "polls": 2
+      }
+    ],
+    "cacheDriven": true,
+    "revalidatesFromCache": true
+  }
+}

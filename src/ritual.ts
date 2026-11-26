@@ -6,6 +6,7 @@ import {
   type ControlChannel,
 } from "./control-client.js";
 import type { HeapSample } from "./control-server.js";
+import { judgeTrend } from "./judge.js";
 import { launchInstrumented } from "./launcher.js";
 import {
   runAbandonPhase,
@@ -13,7 +14,6 @@ import {
   type AbandonPhaseResult,
 } from "./abandon-load.js";
 import { runLoadPhase } from "./load.js";
-import { assessPressureVerdict, retainedAfterLoad } from "./peak-pressure.js";
 import { probeRequestPath } from "./route-config.js";
 import { classifyMemoryTrend, minGrowthFor, type TrendResult } from "./trend.js";
 
@@ -537,8 +537,6 @@ export async function runRitual(
     }
 
     const samples = memorySamples.map((sample) => sample.heapUsed);
-    // External memory counts too: a flat heap with growing buffers still OOMs.
-    const externalSamples = memorySamples.map((sample) => sample.external);
     // The gate scales with the traffic each cycle served, so the verdict does
     // not change meaning when --requests does.
     const minGrowthPerCycle = minGrowthFor(loadRequests);
@@ -571,11 +569,13 @@ export async function runRitual(
       // The peaks are the only readings in this result taken under load, so
       // this is the one place that can tell a route which retains nothing from
       // a route which retains nothing and dies anyway.
-      trend: assessPressureVerdict({
-        trend: classifyMemoryTrend(samples, externalSamples, trendOptions),
+      // External memory counts too: a flat heap with growing buffers still OOMs.
+      trend: judgeTrend({
+        memorySamples,
         peaks,
-        retainedHeapBytes: retainedAfterLoad(memorySamples) ?? 0,
+        requestsPerCycle: loadRequests,
         maxOldSpaceMb: options.maxOldSpaceMb ?? RITUAL_DEFAULTS.maxOldSpaceMb,
+        ...(options.cacheDriven === true && { cacheDriven: true }),
       }),
       requestsPerCycle: loadRequests,
       minGrowthPerCycle,

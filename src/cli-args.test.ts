@@ -28,6 +28,7 @@ describe("parseCliArgs", () => {
         routes: null,
         cycles: null,
         repeat: null,
+        confirmBudgetMinutes: null,
         node: null,
         requests: null,
         connections: null,
@@ -48,7 +49,7 @@ describe("parseCliArgs", () => {
 
   it("parses every flag", () => {
     const parsed = parseCliArgs([
-      "app", "--routes", "/api,/dashboard", "--cycles", "6", "--repeat", "3", "--node", "/opt/node22/bin/node", "--requests", "1000",
+      "app", "--routes", "/api,/dashboard", "--cycles", "6", "--repeat", "3", "--confirm-budget", "45", "--node", "/opt/node22/bin/node", "--requests", "1000",
       "--connections", "20", "--idle", "8", "--warmup", "50", "--max-old-space", "2048",
       "--ready-timeout", "120", "--quick",
       "--diff-all", "--no-resolve", "--self-check", "--write-config", "--output", "/tmp/out",
@@ -62,6 +63,7 @@ describe("parseCliArgs", () => {
       routes: ["/api", "/dashboard"],
       cycles: 6,
       repeat: 3,
+      confirmBudgetMinutes: 45,
       node: ["/opt/node22/bin/node"],
       requests: 1000,
       connections: 20,
@@ -77,6 +79,28 @@ describe("parseCliArgs", () => {
       writeConfig: true,
       output: "/tmp/out",
     });
+  });
+
+  it("takes 0 for --confirm-budget, which turns the confirmations off", () => {
+    const parsed = parseCliArgs(["app", "--confirm-budget", "0"]);
+    expect(parsed.kind === "run" && parsed.options.confirmBudgetMinutes).toBe(0);
+  });
+
+  it("rejects a negative, fractional or oversized --confirm-budget", () => {
+    expect(parseCliArgs(["app", "--confirm-budget", "-1"])).toEqual({
+      kind: "error",
+      message: 'option "--confirm-budget" needs a whole number of minutes, got "-1"',
+    });
+    expect(parseCliArgs(["app", "--confirm-budget", "1.5"]).kind).toBe("error");
+    expect(parseCliArgs(["app", "--confirm-budget", "1440"]).kind).toBe("run");
+    expect(parseCliArgs(["app", "--confirm-budget", "1441"])).toEqual({
+      kind: "error",
+      message: 'option "--confirm-budget" is capped at 1440 minutes (got 1441)',
+    });
+  });
+
+  it("rejects --confirm-budget on a build", () => {
+    expect(parseCliArgs(["build", "app", "--confirm-budget", "5"]).kind).toBe("error");
   });
 
   it("rejects unknown flags naming them (typos never fall back to defaults)", () => {

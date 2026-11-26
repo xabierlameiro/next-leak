@@ -854,6 +854,27 @@ describe("formatReport repetitions", () => {
     expect(output).toContain("they disagreed (leak, stable)");
     expect(output).toContain("no single verdict is reported");
   });
+
+  // vercel/next.js#97938 slug route: stable and leak at 4 cycles, then a
+  // 16-cycle pass. The verdict printed is that pass's; saying none was
+  // reported contradicted the line above it.
+  it("names the pass that decided when a longer one settled a disagreement", () => {
+    const report = makeRunReport();
+    const leaky = report.routes[1];
+    if (leaky?.status !== "measured") throw new Error("fixture broken");
+    leaky.repetitions = [
+      { verdict: "leak", growthPer1000Requests: 1.77 * MB },
+      { verdict: "stable", growthPer1000Requests: 1.4 * MB },
+      { verdict: "stable", growthPer1000Requests: 1.34 * MB },
+    ];
+    leaky.settledBy = { cycles: 16 };
+    const output = formatReport(report);
+
+    expect(output).toContain(
+      "across 3 repetitions: +1.34 to +1.77 MB/1000 req — the first 2 disagreed (leak, stable); a 16-cycle pass decided: stable"
+    );
+    expect(output).not.toContain("no single verdict is reported");
+  });
 });
 
 const withWrappedStore = () => {
@@ -938,5 +959,18 @@ describe("a route whose server Next stopped for a security upgrade", () => {
 
   it("adds nothing to any other failure", () => {
     expect(formatReport(makeRunReport())).not.toContain("security upgrade");
+  });
+});
+
+describe("attribution skipped on an interrupt", () => {
+  it("says the snapshots were left on disk, in the summary and next to the route", () => {
+    const report = makeRunReport();
+    const leaky = report.routes[1];
+    if (leaky?.status !== "measured") throw new Error("fixture broken");
+    leaky.attributionGap = { reason: "interrupted", detail: "baseline /b, after /a" };
+    const output = formatReport(report);
+    expect(output).toContain(
+      "finished without attribution because the run was interrupted before their snapshots were compared"
+    );
   });
 });

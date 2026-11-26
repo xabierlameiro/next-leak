@@ -15,6 +15,8 @@ export type CliRunOptions = {
    * one build and 39 MB on a fourth.
    */
   repeat: number | null;
+  /** Minutes the low-confidence confirmations may take in all; 0 turns them off. */
+  confirmBudgetMinutes: number | null;
   /**
    * Node binaries the measured server runs on, in order. Several compare the
    * versions within one run: vercel/next.js#97938 held about 650 MB after 300
@@ -66,6 +68,7 @@ const RUN_ONLY_FLAGS: ReadonlyArray<[keyof CliRunOptions, string]> = [
   ["routes", "--routes"],
   ["cycles", "--cycles"],
   ["repeat", "--repeat"],
+  ["confirmBudgetMinutes", "--confirm-budget"],
   ["node", "--node"],
   ["requests", "--requests"],
   ["connections", "--connections"],
@@ -114,6 +117,15 @@ const FLAGS: FlagSpec[] = [
     help:
       "Measure each route n times from a fresh server (default 1) — the run takes n times as long, " +
       "and routes whose repetitions disagree are reported inconclusive",
+  },
+  {
+    flag: "--confirm-budget",
+    value: "int",
+    argName: "<minutes>",
+    help:
+      "Cap, for the whole run, on the time low-confidence verdicts may spend on second passes from a fresh server " +
+      "(default: no cap, one confirmation and one settling pass per route; 0 turns them off) — " +
+      "borderline leaks are confirmed regardless",
   },
   {
     flag: "--node",
@@ -219,6 +231,7 @@ interrupted, 1 on errors.
 const LIMITS: Record<string, number | undefined> = {
   "--cycles": 100,
   "--repeat": 10,
+  "--confirm-budget": 1_440,
   "--requests": 1_000_000,
   "--connections": 10_000,
   "--idle": 3_600,
@@ -264,6 +277,20 @@ function applyNodeFlag(value: string, options: CliRunOptions): FlagOutcome {
   return FLAG_OK;
 }
 
+/** Zero is a value here: it turns the confirmations off. */
+function applyConfirmBudgetFlag(value: string, options: CliRunOptions): FlagOutcome {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return flagError(`option "--confirm-budget" needs a whole number of minutes, got "${value}"`);
+  }
+  const maximum = LIMITS["--confirm-budget"] ?? Number.POSITIVE_INFINITY;
+  if (parsed > maximum) {
+    return flagError(`option "--confirm-budget" is capped at ${maximum} minutes (got ${parsed})`);
+  }
+  options.confirmBudgetMinutes = parsed;
+  return FLAG_OK;
+}
+
 function applyNumericFlag(flag: string, value: string, options: CliRunOptions): FlagOutcome {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -301,6 +328,8 @@ function applyFlag(spec: FlagSpec, value: string, options: CliRunOptions): FlagO
       return applyRoutesFlag(value, options);
     case "--node":
       return applyNodeFlag(value, options);
+    case "--confirm-budget":
+      return applyConfirmBudgetFlag(value, options);
     case "--cycles":
     case "--repeat":
     case "--requests":
@@ -407,6 +436,7 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     routes: null,
     cycles: null,
     repeat: null,
+    confirmBudgetMinutes: null,
     node: null,
     requests: null,
     connections: null,

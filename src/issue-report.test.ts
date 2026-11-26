@@ -98,6 +98,15 @@ describe("renderIssueMarkdown fidelity", () => {
     expect(markdown).toContain("next-leak: 0.0.0");
   });
 
+  it("prints the container memory limit when there is one", () => {
+    const run = makeRunReport();
+    expect(renderIssueMarkdown(leakyRoute(), run)).not.toContain("Memory limit");
+    run.environment.memoryLimitBytes = 2048 * 1024 * 1024;
+    expect(renderIssueMarkdown(leakyRoute(), run)).toContain(
+      "Memory: 32 GB\nMemory limit: 2048 MB (container)\n"
+    );
+  });
+
   it("lists findings with size, owner and retainer chain", () => {
     const markdown = renderIssueMarkdown(leakyRoute(), makeRunReport());
     expect(markdown).toContain("**grown** `[object] Array` 1.65 MB retained (app — `src/app/leaky/page.tsx`)");

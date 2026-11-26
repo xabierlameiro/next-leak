@@ -28,8 +28,10 @@ sandbox's `TimeoutsManager` never released timeout ids from middleware.
 next-leak found the growth, the retaining object and the chain that holds it —
 without being told what to look for. Next.js 16.3.0 has since fixed it.
 
-**Verified against real Next.js issues**, not synthetic fixtures. Issue states
-checked 2026-09-19; #97938 and #100492 re-measured 2026-11-23:
+**Verified against real Next.js issues**, not synthetic fixtures. Each row carries
+the date of its own last check or re-measurement where it has one (most recently
+#97938 and #100492 on 2026-11-23); rows without a date were last checked on
+2026-09-19:
 
 | Issue | What it is | Measured | State today |
 |---|---|---|---|
@@ -145,6 +147,7 @@ Every report prints the gate it used.
 | `--routes <list>` | all | Only measure these routes (comma-separated templates or prefixes) |
 | `--cycles <n>` | 4 | Load cycles per route (min 3). The first is dropped as warm-up, so the verdict sees `n − 1` deltas — at 3 it sees two |
 | `--repeat <n>` | 1 | Measure each route `n` times, each from a fresh server, and judge it on all of them (max 10). The run takes `n` times as long. Routes whose repetitions disagree are reported `inconclusive`, and the spread of growth rates is printed either way. More cycles watch one process for longer; repetitions watch different ones, which is where the variance lives — three runs of one Next build measured 602, 826 and 875 MB retained, and a fourth measured 39 MB |
+| `--confirm-budget <minutes>` | no cap | A cap, for the whole run, on the time spent confirming low-confidence verdicts from a fresh server. Without it each route gets at most one confirmation and one settling pass, however long they take: a fixed half hour could not hold one slow route ([#97938](https://github.com/vercel/next.js/issues/97938): 18 minutes for the first pass, 18 for the confirmation, 15 for the 16-cycle pass). A `leak`, `stable` or `saturating` with a warning about its own sample (unsettled heap, incomplete load, spiky growth, thin evidence, a warm-up or first-cycle step) is measured once more and reported only if both passes agree, with the range between them. A confirmation that would overrun what is left is skipped and the run says so. `0` turns these off; a borderline leak is confirmed regardless |
 | `--node <paths>` | next-leak's Node | Node binaries the measured server runs on, comma-separated. One binary: every route runs on it and the report names its version. Several: each route is measured once per binary, the first gives the verdict, and the report lists every version's verdict and what it held after the last cycle, flagging a difference. On the [#97938](https://github.com/vercel/next.js/issues/97938) reproduction 16.3.6 held about 650 MB after 300 requests on Node 22 and nothing on Node 24. Not with `--repeat` above 1 |
 | `--requests <n>` | 5000 | Requests per cycle. Raises sensitivity as well as duration: the growth gate scales with it, down to a noise floor around 5000 |
 | `--connections <n>` | 100 | Concurrent connections |
@@ -153,7 +156,7 @@ Every report prints the gate it used.
 | `--max-old-space <mb>` | 512 | Heap cap of each measured process. Raise it for apps whose legitimate working set is larger, or they die under measurement |
 | `--ready-timeout <seconds>` | 60 | How long each measured process gets to start listening. Raise it for apps that boot slowly. A process that never listens reports whatever it wrote to stderr while trying |
 | `--quick` | off | Fast preset (2000 requests × 4 cycles, 8s idle) — the exact profile the real-app validation ran with. Same cycle count as the default; what it trades away is traffic per cycle, so it sits on the noise floor and is less sensitive to slow leaks. Explicit flags override it |
-| `--no-resolve` | off | Skip the second pass on inconclusive routes and the confirmation of borderline leaks |
+| `--no-resolve` | off | Skip the second pass on inconclusive routes and every confirmation from a fresh server |
 | `--self-check` | off | Measure a planted leak first to prove the harness works here. Costs one route's worth of time; a run that cannot detect 8 KB per request produces verdicts worth nothing |
 | `--diff-all` | off | Diff snapshots for stable routes too |
 | `--attribute` | off | **`build` only.** Also name *what* the worker retains, not only that it retains |
@@ -238,7 +241,7 @@ same fragment.
 `run.json` records what every load phase actually did — requests sent,
 2xx, abandoned — so a run can be audited instead of trusted.
 
-Before measuring, the CLI prints a duration estimate — a 60-route app under defaults is **hours**; narrow with `--routes` for iteration.
+Before measuring, the CLI prints a duration estimate — a 60-route app under defaults is **hours**; narrow with `--routes` for iteration. It covers one pass per route at 250 req/s, and says so: a route measured again, confirmed and settled can take 10× as long, and a heavy route serves far less (the [#97938](https://github.com/vercel/next.js/issues/97938) slug route rendered 6.5 req/s, and a run announced at under a minute took 30). Once a pass has run, the run prices what follows from its own timings: each re-measurement and confirmation, and the routes left, with the throughput when it was under half the assumed one.
 
 ## What it tells apart
 
@@ -274,7 +277,7 @@ separates them, because each one has a different fix:
   with the traffic, so the longer run decides the same thing. If the heap is
   flat but RSS keeps climbing, the report says so explicitly: that is an
   allocator, external-buffer or fragmentation problem, not a JS-heap leak.
-- **`leak`** — the report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. The culprit is whoever holds the most of the growth, each byte counted once even when a container and what it holds are both reported; when more of it is unattributed than any owner holds, no culprit is named rather than a smaller one. An `ISSUE-<route>.md` draft is generated **when the evidence plainly supports the verdict** — a `leak` carrying low-confidence warnings (growth barely over the threshold, one cycle dominating the mean, too few cycles for its size) gets the verdict but no draft, because a draft is written to be pasted into someone else's tracker. If the leak is app-owned, the draft tells you **not** to file it upstream.
+- **`leak`** — memory kept growing across the cycles. Every cycle clearing the growth gate is the plain case; two slower shapes count too. Over at least 7 cycles after warm-up, growth below the gate that never stops: every second-half cycle grows, at 400 B per request or more, keeping half the first half's rate and still growing in the last two cycles (the [#97938](https://github.com/vercel/next.js/issues/97938) slug route keeps ~0.8 KB per new path). Over at least 12, a climb with some cycles giving memory back: the robust (Theil–Sen) slope clears the gate, growing cycles outnumber the rest beyond chance, and the last third keeps half the slope. Both were checked against bounded stores that fill slowly, real and planted, which they do not call leaks. The report names the culprit when attribution resolves: your file (`culprit: src/app/x/page.tsx (your code)`), a dependency (package name), or framework internals. The culprit is whoever holds the most of the growth, each byte counted once even when a container and what it holds are both reported; when more of it is unattributed than any owner holds, no culprit is named rather than a smaller one. An `ISSUE-<route>.md` draft is generated **when the evidence plainly supports the verdict** — a `leak` carrying low-confidence warnings (growth barely over the threshold, one cycle dominating the mean, too few cycles for its size) gets the verdict but no draft, because a draft is written to be pasted into someone else's tracker. If the leak is app-owned, the draft tells you **not** to file it upstream.
 - **`saturating`** — every cycle grew, but by less than the one before, and the
   last by less than half the first. That is the shape of a bounded store
   running out of new keys, not of memory going missing. It matters because the
@@ -317,7 +320,7 @@ separates them, because each one has a different fix:
   retention, so there is nothing for a snapshot diff to name. The fix is
   usually allocation rate, response size or concurrency, not a missing
   `delete`.
-- **`inconclusive`** — the evidence does not decide. The run does not stop there: any inconclusive route is **measured again automatically**, with twice the cycles, and the second pass is what you see (`resolved at 8 cycles` next to the verdict). On the reproduction for [#95094](https://github.com/vercel/next.js/issues/95094), `--quick` alone reports `inconclusive` on three deltas and then comes back with the leak. `--no-resolve` turns the second pass off; when even that is undecided, the re-run command is still printed. A `leak` whose growth is under twice the gate is confirmed the same way, from a fresh server: on the [#97938](https://github.com/vercel/next.js/issues/97938) reproduction the same build came out `stable` on one run and `leak` at +0.50 MB/cycle on the next. Both passes are shown, and if they disagree the route is reported `inconclusive`.
+- **`inconclusive`** — the evidence does not decide. The run does not stop there: any inconclusive route is **measured again automatically**, with twice the cycles, and the second pass is what you see (`resolved at 8 cycles` next to the verdict). On the reproduction for [#95094](https://github.com/vercel/next.js/issues/95094), `--quick` alone reports `inconclusive` on three deltas and then comes back with the leak. `--no-resolve` turns the second pass off; when even that is undecided, the re-run command is still printed. A `leak` whose growth is under twice the gate is confirmed the same way, from a fresh server: on the [#97938](https://github.com/vercel/next.js/issues/97938) reproduction the same build came out `stable` on one run and `leak` at +0.50 MB/cycle on the next. Both passes are shown, and if they disagree the route is reported `inconclusive`. Any other `leak`, `stable` or `saturating` carrying a warning about its own sample gets the same second pass, within `--confirm-budget`: the same #97938 arm gave `stable`, `leak`, `saturating`, `leak` across four runs. When the two passes disagree, a third from a fresh server runs over four times the cycles (16 for the default 4) and its verdict is reported, with all three passes listed; that is where a slow leak inside the per-process spread separates from noise. It is charged to the same budget, and without room for it the route stays `inconclusive`.
 - **`failed`** — the route errored under load (auth redirects, POST-only endpoints). >1% non-2xx aborts measurement instead of measuring garbage. That's by design. A process that died of **heap exhaustion** is not one of these: it reports `leak`, because a route that could not survive its own load did not fail to be measured — it was measured right up to the point where it stopped fitting. The verdict comes from that outcome, not from the shape of the truncated curve, which is the same rule `next-leak build` applies to a static-generation worker that dies. The run prints the cycles it survived and the growth up to the death, and exits 0 with a finding rather than 1 with an error.
 
   When a route is configured with a varying sample value (`{n}`) and *every* request comes back non-2xx, the run checks whether the value is the problem before blaming the route: it requests one value the marker would produce and one the build prerendered, and only when those disagree does it say so. An app with `generateStaticParams` and `dynamicParams = false` answers 404 for anything outside its param set, which is indistinguishable from a broken route in the counters alone. Bound the marker to the params that exist (`{n%N}`) or drop it.
@@ -491,7 +494,36 @@ through the build's source maps.
 ## Scope and limits (read before filing issues)
 
 
-- **Supported (default command):** App Router · `output: "standalone"` · Node ≥ 22 · Linux/macOS. Pages Router, non-standalone, and Windows are rejected with a clear message.
+- **Supported (default command):** `output: "standalone"` · Node ≥ 22 · Linux/macOS. A build with an App Router manifest, a Pages Router manifest or both is measured; a non-standalone build and Windows are rejected with a clear message (see the matrix below).
+
+### Support matrix
+
+What each command measures and where it is known to work. "untested" means
+the code does not reject it and no measurement here covers it; "no" means the
+tool refuses or cannot do it.
+
+| Measures | App Router | Pages Router | Route handlers | ISR / `use cache` | Turbopack | webpack | Owner attribution | Node | OS | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Server (`next-leak`) | yes | accepted (untested here) | yes | ISR routes are driven with the build's revalidate header; `use cache` measured (#97938, #100492) | yes | measured, no attribution | file or package, Turbopack builds only | >= 22 | Linux, macOS; Windows rejected | needs `output: "standalone"` |
+| `next-leak dev` | yes | accepted (untested here) | yes | not driven: no build manifest, so no revalidate header | yes (#99983) | untested | none: no production chunks | >= 22 | Linux, macOS; Windows rejected | no build needed; samples the process `next dev` forks; no HMR or compile-growth measurement |
+| `next-leak build` | n/a (samples static-generation workers) | n/a | n/a | n/a | yes (#100064, #97802) | untested | `--attribute` only, Turbopack builds only | >= 22 | Linux, macOS; Windows rejected | no standalone output needed; `experimental.workerThreads: true` rejected |
+
+Node and OS limits come from one startup check shared by all three commands.
+
+### Other limits
+
+- **Disk.** A standalone server writes every ISR render next to the build, and
+  with `{n}` every request is a new page: on the [#97938](https://github.com/vercel/next.js/issues/97938)
+  slug route about 1.3 MB each, 33 GB after five runs. After each measured
+  process, next-leak removes the cache entries it wrote under
+  `.next/standalone/.next/server/app` and `.next/cache`. What the build
+  prerendered and anything already there are kept. `next dev` persists nothing
+  there, so nothing is removed.
+- **Containers.** The heap cap is a ceiling only if the container lets the
+  server reach it. Before measuring, next-leak reads the memory limit Node
+  sees and warns when it cannot hold `--max-old-space` plus 256 MB outside the
+  heap (512 MB under `next dev`, for the CLI parent), suggesting a cap that
+  fits. The limit is recorded in `run.json` and in the issue draft.
 - **Monorepos work unchanged.** A workspace build does not put `server.js` at
   the root of `.next/standalone`: Next keeps the app's path relative to the
   workspace root, so an app in `client/` ships its server at
@@ -519,7 +551,14 @@ through the build's source maps.
   ([#97464](https://github.com/vercel/next.js/issues/97464)). The verdict reads
   the workers; the whole process tree is reported next to it, with how many
   Turbopack Node.js pools it held, because compilation runs outside the workers
-  ([#100064](https://github.com/vercel/next.js/issues/100064)). It does not apply
+  ([#100064](https://github.com/vercel/next.js/issues/100064)). The report warns
+  when `.next/cache/turbopack` or `.next/cache/webpack` survives from an earlier
+  build, because compilation may then be served from the cache instead of
+  measured (on #100064, 7,798 MB cold against 705 MB warm). Delete that
+  directory alone, not the rest of `.next/cache`. If Next stops a `next build`
+  or `next dev` run once to recommend a security upgrade (seen on 16.4 when the
+  installed version has an advisory), next-leak reports the stop instead of a
+  measurement. It does not apply
   to projects using `experimental.workerThreads: true`: a worker thread has no
   resident memory of its own to sample, and the run says so instead of
   reporting a number that would be measuring the parent.
@@ -565,7 +604,7 @@ through the build's source maps.
   4.2 GB capture outlasted every fixed deadline worth setting.
 - **Architectures:** verified on **arm64 and x64** (linux/amd64 in Docker) — same app, same parameters, same verdicts.
 - **Attribution** (naming the file) needs a Turbopack build with server sourcemaps — the Next 15+ default. On webpack builds the registry is empty by design and findings degrade to `unattributed` with raw retainer chains; measurement itself does not depend on it. Note that `output: "standalone"` + `--webpack` produced a bundle that could not start at all on `16.3.0-canary.90` (missing `@swc/helpers`), independently of this tool.
-- Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.0/16.3.1 and 16.3-canary** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). Most recent measurements, 2026-08-17/18: the runtime path on 16.2.12 and 16.3.1-canary.18, the build path on 16.2.12 and 16.3.1. The contracts it relies on are stable since Next 13–14, but older versions are untested.
+- Empirically validated on Next **15.5.4, 16.0.x, 16.1.5, 16.2.x, 16.3.x, 16.4.0 to 16.4.6 and 16.5.0-canary.61** (incl. Sentry, OpenTelemetry, PPR and i18n apps), against the public reproductions attached to real issues (open and since-fixed). The 16.4 and 16.5 measurements are the rows of the table above (#100492, #100064, #99983, #97938, most recently 2026-11-23); the 15.5 to 16.3 range was validated earlier, most recently on 2026-08-17/18 (runtime path on 16.2.12 and 16.3.1-canary.18, build path on 16.2.12 and 16.3.1). The contracts it relies on are stable since Next 13–14, but older versions are untested.
 - **Each measured process runs under a 512 MB heap cap** by default, so a leak
   reaches a ceiling in minutes instead of the hours a production container
   takes. An app whose legitimate working set is larger needs

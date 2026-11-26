@@ -70,7 +70,7 @@ function installInterruptHandlers(): AbortController {
         discardPendingSnapshotsSync();
         process.exit(130);
       }
-      console.error("\n· interrupted — stopping the measured process and writing a partial run.json");
+      console.error("\n· interrupted — stopping the measured process and saving what was measured to run.json");
       aborter.abort();
       killActiveChildren();
     });
@@ -263,6 +263,9 @@ async function main(): Promise<void> {
     ...(options.routes !== null && { routeFilter: options.routes }),
     ...(options.cycles !== null && { cycles: options.cycles }),
     ...(options.repeat !== null && { repeat: options.repeat }),
+    ...(options.confirmBudgetMinutes !== null && {
+      confirmBudgetMs: options.confirmBudgetMinutes * 60_000,
+    }),
     ...(nodeBinaries !== undefined && { nodeBinaries }),
     ...(options.dev && { dev: true }),
     ...(options.requests !== null && { loadRequests: options.requests }),

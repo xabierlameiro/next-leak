@@ -1,4 +1,5 @@
 import path from "node:path";
+import { gapCause } from "./attribution-gap.js";
 import type { FindingAttribution } from "./attribution.js";
 import { enclosingNote, shownFindings } from "./finding-selection.js";
 import { nodeComparisonText } from "./node-comparison.js";
@@ -83,10 +84,7 @@ function missingEvidence(route: MeasuredRoute, run: RunReport): string {
   if (route.attributionGap === undefined) {
     return "- (no findings above thresholds)";
   }
-  const cause =
-    route.attributionGap.reason === "snapshot-unavailable"
-      ? "the final heap snapshot was never taken"
-      : "the heap snapshots could not be read";
+  const cause = gapCause(route.attributionGap.reason);
   return (
     `- **Attribution unavailable** — ${cause}, so this run cannot name what ` +
     `retains the memory. This is not a finding that nothing grew: the diff was ` +
@@ -212,7 +210,11 @@ Node.js: ${environment.nodeVersion}${
       : ` (compared with ${environment.comparedNodeVersions.filter((version) => version !== environment.nodeVersion).join(", ")})`
   }
 OS: ${environment.platform} ${environment.arch}${environment.cpuModel ? ` (${environment.cpuModel})` : ""}
-Memory: ${(environment.totalMemoryBytes / (1024 * MB)).toFixed(0)} GB
+Memory: ${(environment.totalMemoryBytes / (1024 * MB)).toFixed(0)} GB${
+    environment.memoryLimitBytes === undefined
+      ? ""
+      : `\nMemory limit: ${Math.floor(environment.memoryLimitBytes / MB)} MB (container)`
+  }
 Next.js: ${environment.nextVersion ?? "unknown"}
 next-leak: ${environment.nextLeakVersion}
 Deployment: ${
