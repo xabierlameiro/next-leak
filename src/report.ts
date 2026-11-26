@@ -130,6 +130,12 @@ function revalidationLines(route: MeasuredRouteView): string[] {
  * verdict across runs whose retained-per-render differed by 2.5×. Publishing
  * the midpoint of that as a measurement is the error this exists to prevent.
  */
+function agreementText(count: number, verdicts: readonly string[]): string {
+  return verdicts.length === 1
+    ? `all ${count} agreed on ${verdicts[0]}`
+    : `they disagreed (${verdicts.join(", ")}), so no single verdict is reported`;
+}
+
 /** "the first two disagreed (stable, leak); a 16-cycle pass decided: leak" */
 function settledText(
   repetitions: NonNullable<MeasuredRouteView["repetitions"]>,
@@ -151,9 +157,7 @@ function repetitionLines(route: MeasuredRouteView): string[] {
   const verdicts = [...new Set(repetitions.map((entry) => entry.verdict))];
   const agreement =
     route.settledBy === undefined
-      ? verdicts.length === 1
-        ? `all ${repetitions.length} agreed on ${verdicts[0]}`
-        : `they disagreed (${verdicts.join(", ")}), so no single verdict is reported`
+      ? agreementText(repetitions.length, verdicts)
       : settledText(repetitions, route.settledBy.cycles);
   const range = `${low >= 0 ? "+" : ""}${(low / MB).toFixed(2)} to ${formatGrowth(high)}`;
   return [`      across ${repetitions.length} repetitions: ${range} — ${agreement}`];
