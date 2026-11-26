@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/xabierlameiro/next-leak/compare/v0.14.0...v0.15.0) (2026-11-26)
+
+
+### Features
+
+* calibration corpus, confirmation passes, run pacing, ISR cache cleanup ([#129](https://github.com/xabierlameiro/next-leak/issues/129)) ([2605a2c](https://github.com/xabierlameiro/next-leak/commit/2605a2c68748bad1cc6a449f87a0fda72815dc07))
+
 ## [0.14.0](https://github.com/xabierlameiro/next-leak/compare/v0.13.5...v0.14.0) (2026-11-25)
 
 
