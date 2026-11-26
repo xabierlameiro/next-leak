@@ -75,7 +75,8 @@ export type RunEstimate = {
  * slug route that is 4 + 8 + 4 + 8 + 16 cycles.
  */
 export function worstCasePasses(cycles: number): number {
-  return Math.round(((cycles + resolveCycles(cycles)) * 2 + settleCycles(cycles)) / cycles);
+  const settle = settleCycles(cycles) > resolveCycles(cycles) ? settleCycles(cycles) : 0;
+  return Math.round(((cycles + resolveCycles(cycles)) * 2 + settle) / cycles);
 }
 
 export function estimateRun(routeCount: number, parameters: RunParameters): RunEstimate {

@@ -343,7 +343,13 @@ async function settleDisagreement(
 ): Promise<RouteReport> {
   // `judged` is the first pass with the disagreement attached: its timings are
   // the first pass's.
-  const cycles = settleCycles(context.options.cycles ?? RITUAL_DEFAULTS.cycles);
+  const base = context.options.cycles ?? RITUAL_DEFAULTS.cycles;
+  const cycles = settleCycles(base);
+  // At the cycle cap the settling pass would be no longer than a
+  // re-measurement already was, and could not outrank it.
+  if (cycles <= resolveCycles(base)) {
+    return judged;
+  }
   const projectedMs = (passSecondsAt(judged.timings, cycles) ?? pass.firstPassMs / 1000) * 1000;
   const budget = context.confirmBudget;
   if (projectedMs > budget.remainingMs) {
@@ -389,7 +395,7 @@ async function settleDisagreement(
     repetitions: [
       ...(judged.repetitions ?? []),
       {
-        verdict: settled.trend.verdict,
+        verdict: effectiveVerdict(settled),
         growthPer1000Requests: (settled.trend.growthPerCycle / settled.requestsPerCycle) * 1000,
       },
     ],
@@ -419,8 +425,10 @@ export function aggregateRepetitions(passes: readonly RouteReport[]): RouteRepor
     return passes.find((pass) => pass.status !== "measured") ?? first;
   }
 
+  // The verdict each pass supports, not the one its curve drew: a pass whose
+  // audit withdrew a leak did not agree with one that stands.
   const repetitions: RepetitionSummary[] = measured.map((pass) => ({
-    verdict: pass.trend.verdict,
+    verdict: effectiveVerdict(pass),
     growthPer1000Requests: (pass.trend.growthPerCycle / pass.requestsPerCycle) * 1000,
   }));
   const verdicts = [...new Set(repetitions.map((entry) => entry.verdict))];

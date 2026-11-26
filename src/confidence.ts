@@ -339,11 +339,16 @@ function noiseFloorWarnings(trend: TrendResult, minGrowth: number): MeasurementW
   if (trend.verdict !== "leak" || trend.growthPerCycle >= minGrowth * NOISE_FLOOR_MULTIPLE) {
     return [];
   }
+  // The slow-leak and long-series shapes call a leak below the gate: saying
+  // it "barely clears" a threshold it is under contradicts the number beside it.
+  const position =
+    trend.growthPerCycle < minGrowth
+      ? `is under the ${mb(minGrowth)} threshold; the shape of the series, not its size, calls it a leak`
+      : `barely clears the ${mb(minGrowth)} threshold`;
   return [{
     code: "near-threshold",
     detail:
-      `growth of ${mb(trend.growthPerCycle)}/cycle barely clears the ` +
-      `${mb(minGrowth)} threshold — raise --requests so the signal ` +
+      `growth of ${mb(trend.growthPerCycle)}/cycle ${position} — raise --requests so the signal ` +
       `outgrows the noise`,
   }];
 }

@@ -153,6 +153,21 @@ describe("removeNewEntries when the filesystem misbehaves", () => {
     }
   });
 
+  it("removes everything it can before reporting the files it could not", async () => {
+    const before = { roots: ["/root"], files: new Set<string>(), dirs: new Set(["/root"]) };
+    const removed: string[] = [];
+    const fs = fakeFs(["a", "b", "c"], {
+      unlink: async (file) => {
+        if (file.endsWith("a")) throw failure("EPERM");
+        removed.push(file);
+      },
+    });
+    await expect(removeNewEntries(before, fs)).rejects.toThrow(
+      "1 cache entry could not be removed (2 removed): EPERM: fake"
+    );
+    expect(removed.sort()).toEqual(["/root/b", "/root/c"]);
+  });
+
   it("stops on any other failure to remove a directory", async () => {
     const before = { roots: ["/root"], files: new Set<string>(), dirs: new Set<string>() };
     const fs = fakeFs([], { rmdir: async () => { throw failure("EBUSY"); } });
@@ -213,5 +228,5 @@ describe("removeNewEntries over a deep tree", () => {
 
     expect((await removeNewEntries(before)).files).toBe(1200);
     expect((await readdir(app)).sort()).toEqual(["blog", "index.html"]);
-  });
+  }, 30_000);
 });

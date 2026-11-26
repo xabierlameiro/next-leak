@@ -139,6 +139,9 @@ export async function removeNewEntries(
   const now = await listCache(before.roots, fs);
   let files = 0;
   let bytes = 0;
+  // One file that cannot go must not leave thousands that can: failures are
+  // collected, the rest is removed, and the first is reported at the end.
+  const failures: unknown[] = [];
   const added = [...now.files].filter((file) => !before.files.has(file));
   await inBatches(added, async (file) => {
     try {
@@ -149,7 +152,7 @@ export async function removeNewEntries(
     } catch (cause) {
       // Gone between the listing and the unlink: nothing left to remove.
       if (!isMissing(cause)) {
-        throw cause;
+        failures.push(cause);
       }
     }
   });
@@ -170,9 +173,25 @@ export async function removeNewEntries(
   }
   const levels = [...byDepth.entries()].sort(([a], [b]) => b - a).map(([, level]) => level);
   await levels.reduce<Promise<void>>(
-    (previous, level) => previous.then(() => inBatches(level, (dir) => removeDir(dir, fs))),
+    (previous, level) =>
+      previous.then(() =>
+        inBatches(level, (dir) =>
+          removeDir(dir, fs).catch((cause: unknown) => {
+            failures.push(cause);
+          })
+        )
+      ),
     Promise.resolve()
   );
+  const [firstFailure] = failures;
+  if (firstFailure !== undefined) {
+    const message = firstFailure instanceof Error ? firstFailure.message : String(firstFailure);
+    throw new Error(
+      `${failures.length} cache entr${failures.length === 1 ? "y" : "ies"} could not be removed ` +
+        `(${files} removed): ${message}`,
+      { cause: firstFailure }
+    );
+  }
   return { files, bytes };
 }
 

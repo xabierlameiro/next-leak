@@ -977,3 +977,27 @@ describe("settleCycles", () => {
     expect(settleCycles(51)).toBe(100);
   });
 });
+
+// The slow-leak and long-series shapes call a leak below the growth gate;
+// "barely clears" contradicted the number beside it.
+describe("near-threshold wording", () => {
+  const leakAt = (growthPerCycle: number) =>
+    assessConfidence(
+      input({
+        trend: trend({ verdict: "leak", growthPerCycle, deltas: [growthPerCycle, growthPerCycle, growthPerCycle] }),
+        minGrowthPerCycle: 256 * 1024,
+      })
+    ).warnings.find((warning) => warning.code === "near-threshold")?.detail;
+
+  it("says a leak under the gate is called by its shape", () => {
+    expect(leakAt(0.2 * MB)).toBe(
+      "growth of 0.20 MB/cycle is under the 0.25 MB threshold; the shape of the series, not its size, calls it a leak — raise --requests so the signal outgrows the noise"
+    );
+  });
+
+  it("keeps saying barely clears for a leak just over it", () => {
+    expect(leakAt(0.3 * MB)).toBe(
+      "growth of 0.30 MB/cycle barely clears the 0.25 MB threshold — raise --requests so the signal outgrows the noise"
+    );
+  });
+});

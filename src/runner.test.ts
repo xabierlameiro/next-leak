@@ -685,8 +685,13 @@ describe("worstCasePasses", () => {
     expect(worstCasePasses(3)).toBe(10);
     // 2 + 6 + 2 + 6 + 12 over 2.
     expect(worstCasePasses(2)).toBe(14);
-    // The settling pass stops at 100 cycles: 60 + 120 + 60 + 120 + 100 over 60.
-    expect(worstCasePasses(60)).toBe(8);
+    // At 50 cycles the settling pass (100, the cap) is no longer than the
+    // re-measurement (100) either, so it never runs: 50 + 100 + 50 + 100 over 50.
+    expect(worstCasePasses(50)).toBe(6);
+    // At 40 it still is: 40 + 80 + 40 + 80 + 100 over 40.
+    expect(worstCasePasses(40)).toBe(9);
+    // At 60 it would not be (100 against 120), so it never runs: 60 + 120 + 60 + 120 over 60.
+    expect(worstCasePasses(60)).toBe(6);
   });
 });
 
@@ -1588,6 +1593,21 @@ describe("aggregateRepetitions", () => {
     expect(warrantsIssueDraft(aggregate)).toBe(false);
   });
 
+  // A confirmation whose audit withdrew its leak did not agree with the first
+  // pass: counting raw curves called them unanimous and drafted an issue.
+  it("judges each repetition by the verdict it supports, not its raw curve", () => {
+    const withdrawn = measuredRoute("leak", 2 * MB);
+    if (withdrawn.status !== "measured") throw new Error("expected a measured route");
+    const aggregate = aggregateRepetitions([
+      measuredRoute("leak", 2 * MB),
+      { ...withdrawn, confidence: { ...withdrawn.confidence, supersededVerdict: "inconclusive" } },
+    ]);
+    if (aggregate.status !== "measured") throw new Error("expected a measured route");
+    expect(aggregate.repetitions?.map((entry) => entry.verdict)).toEqual(["leak", "inconclusive"]);
+    expect(aggregate.confidence.supersededVerdict).toBe("inconclusive");
+    expect(warrantsIssueDraft(aggregate)).toBe(false);
+  });
+
   // A repetition that failed is not a disagreement to average away.
   it("returns the failure when one repetition did not measure", () => {
     const failed: RouteReport = { route: "/x", status: "failed", reason: "port race lost" };
@@ -1676,6 +1696,7 @@ describe("confirming a borderline leak from a fresh server", () => {
       resolveInconclusive?: boolean;
       abortAfterFirst?: boolean;
       confirmBudgetMs?: number;
+      cycles?: number;
       /** Wall time each ritual takes on the fake clock. */
       passMs?: number;
     } = {}
@@ -1947,6 +1968,14 @@ describe("confirming a borderline leak from a fresh server", () => {
       const capped = await run([...slow], { passMs: 18 * 60_000, confirmBudgetMs: 30 * 60_000 });
       expect(capped.calls).toBe(2);
       expect(capped.route.confidence.supersededVerdict).toBe("inconclusive");
+    });
+
+    it("does not settle when the cap leaves it no longer than the re-measurement", async () => {
+      // --cycles 60: the re-measurement runs 120 cycles, the settling pass
+      // would be capped at 100.
+      const { calls, route } = await run([{ ...FLAT, unsettled: true }, CLEAR, CLEAR], { cycles: 60 });
+      expect(calls).toBe(2);
+      expect(route.confidence.supersededVerdict).toBe("inconclusive");
     });
 
     it("settles when the long pass fits the budget exactly", async () => {
