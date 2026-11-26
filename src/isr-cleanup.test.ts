@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cacheRoots, listCache, removeNewEntries, type CacheFs } from "./isr-cleanup.js";
+import { cacheRoots, inBatches, listCache, removeNewEntries, type CacheFs } from "./isr-cleanup.js";
 
 let standalone: string;
 let app: string;
@@ -157,5 +157,61 @@ describe("removeNewEntries when the filesystem misbehaves", () => {
     const before = { roots: ["/root"], files: new Set<string>(), dirs: new Set<string>() };
     const fs = fakeFs([], { rmdir: async () => { throw failure("EBUSY"); } });
     await expect(removeNewEntries(before, fs)).rejects.toThrow("EBUSY");
+  });
+});
+
+describe("inBatches", () => {
+  it("runs every item, never more than a batch at once, batches in order", async () => {
+    let running = 0;
+    let most = 0;
+    const order: number[] = [];
+    await inBatches(
+      [1, 2, 3, 4, 5, 6, 7],
+      async (item) => {
+        running += 1;
+        most = Math.max(most, running);
+        await new Promise((resolve) => setTimeout(resolve, item % 2));
+        order.push(item);
+        running -= 1;
+      },
+      3
+    );
+    expect(most).toBe(3);
+    expect(order.slice(0, 3).sort()).toEqual([1, 2, 3]);
+    expect(order.slice(3, 6).sort()).toEqual([4, 5, 6]);
+    expect(order[6]).toBe(7);
+  });
+
+  it("does nothing for no items, and stops at the first failure", async () => {
+    await inBatches([], async () => {
+      throw new Error("never called");
+    });
+    const seen: number[] = [];
+    await expect(
+      inBatches(
+        [1, 2, 3],
+        async (item) => {
+          seen.push(item);
+          if (item === 1) throw new Error("first batch failed");
+        },
+        1
+      )
+    ).rejects.toThrow("first batch failed");
+    expect(seen).toEqual([1]);
+  });
+});
+
+describe("removeNewEntries over a deep tree", () => {
+  it("removes thousands of entries and the nested directories they made", async () => {
+    const before = await listCache(cacheRoots(path.join(standalone, "server.js")));
+    // The shape of a slug route: a page, its metadata and a segments directory per key.
+    for (let n = 0; n < 600; n += 1) {
+      await writeFile(path.join(app, `seed-${n}.html`), "x");
+      await mkdir(path.join(app, `seed-${n}.segments`, "deep", "deeper"), { recursive: true });
+      await writeFile(path.join(app, `seed-${n}.segments`, "deep", "deeper", "s.rsc"), "y");
+    }
+
+    expect((await removeNewEntries(before)).files).toBe(1200);
+    expect((await readdir(app)).sort()).toEqual(["blog", "index.html"]);
   });
 });

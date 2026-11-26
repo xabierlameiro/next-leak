@@ -58,30 +58,64 @@ function isMissing(cause: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-/** Every file and directory under `root`, without following links. */
+/**
+ * Calls run per item, BATCH_SIZE at a time, one batch after the other.
+ *
+ * Tens of thousands of entries are normal here (24,000 pages on the #97938
+ * route), and one promise per file at once is how a process runs out of file
+ * descriptors. A batch keeps the filesystem busy without that.
+ */
+export const BATCH_SIZE = 256;
+
+export async function inBatches<T>(
+  items: readonly T[],
+  run: (item: T) => Promise<void>,
+  size = BATCH_SIZE
+): Promise<void> {
+  const batches = Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
+    items.slice(index * size, (index + 1) * size)
+  );
+  await batches.reduce<Promise<void>>(
+    (previous, batch) => previous.then(async () => {
+      await Promise.all(batch.map(run));
+    }),
+    Promise.resolve()
+  );
+}
+
+/**
+ * Every file and directory under `roots`, without following links, one level
+ * of the tree at a time and each level in batches.
+ */
 async function walk(
-  root: string,
+  roots: readonly string[],
   files: Set<string>,
   dirs: Set<string>,
   fs: CacheFs
 ): Promise<void> {
-  let entries;
-  try {
-    entries = await fs.readdir(root);
-  } catch (cause) {
-    if (isMissing(cause)) {
-      return;
+  const below: string[] = [];
+  await inBatches(roots, async (dir) => {
+    let entries;
+    try {
+      entries = await fs.readdir(dir);
+    } catch (cause) {
+      if (isMissing(cause)) {
+        return;
+      }
+      throw cause;
     }
-    throw cause;
-  }
-  dirs.add(root);
-  for (const entry of entries) {
-    const full = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      await walk(full, files, dirs, fs);
-    } else {
-      files.add(full);
+    dirs.add(dir);
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        below.push(full);
+      } else {
+        files.add(full);
+      }
     }
+  });
+  if (below.length > 0) {
+    await walk(below, files, dirs, fs);
   }
 }
 
@@ -91,11 +125,11 @@ export async function listCache(
 ): Promise<CacheListing> {
   const files = new Set<string>();
   const dirs = new Set<string>();
-  for (const root of roots) {
-    await walk(root, files, dirs, fs);
-  }
+  await walk(roots, files, dirs, fs);
   return { roots: [...roots], files, dirs };
 }
+
+const depthOf = (dir: string): number => dir.split(path.sep).length;
 
 /** Deletes the files and directories that appeared since `before` was taken. */
 export async function removeNewEntries(
@@ -105,10 +139,8 @@ export async function removeNewEntries(
   const now = await listCache(before.roots, fs);
   let files = 0;
   let bytes = 0;
-  for (const file of now.files) {
-    if (before.files.has(file)) {
-      continue;
-    }
+  const added = [...now.files].filter((file) => !before.files.has(file));
+  await inBatches(added, async (file) => {
     try {
       const size = await fs.size(file);
       await fs.unlink(file);
@@ -120,20 +152,37 @@ export async function removeNewEntries(
         throw cause;
       }
     }
-  }
-  // Deepest first, so a new directory is empty by the time it is reached.
-  const created = [...now.dirs]
-    .filter((dir) => !before.dirs.has(dir))
-    .sort((a, b) => b.length - a.length);
-  for (const dir of created) {
-    try {
-      await fs.rmdir(dir);
-    } catch (cause) {
-      // Something landed in it after the listing: leave it.
-      if (!isMissing(cause) && codeOf(cause) !== "ENOTEMPTY") {
-        throw cause;
+  });
+
+  // Deepest level first, so a new directory is empty by the time it is
+  // reached; directories at one depth cannot contain each other.
+  const byDepth = new Map<number, string[]>();
+  for (const dir of now.dirs) {
+    if (!before.dirs.has(dir)) {
+      const depth = depthOf(dir);
+      const level = byDepth.get(depth);
+      if (level === undefined) {
+        byDepth.set(depth, [dir]);
+      } else {
+        level.push(dir);
       }
     }
   }
+  const levels = [...byDepth.entries()].sort(([a], [b]) => b - a).map(([, level]) => level);
+  await levels.reduce<Promise<void>>(
+    (previous, level) => previous.then(() => inBatches(level, (dir) => removeDir(dir, fs))),
+    Promise.resolve()
+  );
   return { files, bytes };
+}
+
+async function removeDir(dir: string, fs: CacheFs): Promise<void> {
+  try {
+    await fs.rmdir(dir);
+  } catch (cause) {
+    // Something landed in it after the listing: leave it.
+    if (!isMissing(cause) && codeOf(cause) !== "ENOTEMPTY") {
+      throw cause;
+    }
+  }
 }
