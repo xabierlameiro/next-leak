@@ -489,7 +489,7 @@ describe("mutation-hardening: runner, second pass", () => {
     expect(
       withNote.some((line) =>
         line.includes(
-          "(one pass per route at 250 req/s; a route measured again or confirmed can take 6× as long)"
+          "(one pass per route at 250 req/s; a route measured again, confirmed and settled can take 10× as long)"
         )
       )
     ).toBe(true);
@@ -677,13 +677,16 @@ describe("formatDuration boundaries", () => {
 });
 
 describe("worstCasePasses", () => {
-  // vercel/next.js#97938 slug route: 4 + 8 + 4 + 8 cycles for a 4-cycle run.
-  it("counts the pass, its re-measurement and a confirmation that re-measures", () => {
-    expect(worstCasePasses(4)).toBe(6);
-    expect(worstCasePasses(10)).toBe(6);
-    // Re-measurement never drops below 6 cycles.
-    expect(worstCasePasses(3)).toBe(6);
-    expect(worstCasePasses(2)).toBe(8);
+  // vercel/next.js#97938 slug route: 4 + 8 + 4 + 8 + 16 cycles for a 4-cycle run.
+  it("counts the passes, the confirmation's and the settling pass", () => {
+    expect(worstCasePasses(4)).toBe(10);
+    expect(worstCasePasses(10)).toBe(10);
+    // Re-measurement never drops below 6 cycles: 3 + 6 + 3 + 6 + 12.
+    expect(worstCasePasses(3)).toBe(10);
+    // 2 + 6 + 2 + 6 + 12 over 2.
+    expect(worstCasePasses(2)).toBe(14);
+    // The settling pass stops at 100 cycles: 60 + 120 + 60 + 120 + 100 over 60.
+    expect(worstCasePasses(60)).toBe(8);
   });
 });
 
@@ -1929,6 +1932,20 @@ describe("confirming a borderline leak from a fresh server", () => {
         { nodePath: "/opt/node24/bin/node", cycles: undefined },
         { nodePath: "/opt/node24/bin/node", cycles: 16 },
       ]);
+    });
+
+    // The #97938 slug route at 6.5 req/s: 18 minutes a pass. Under the old
+    // half-hour default the confirmation left 12 minutes and the settling pass
+    // never ran.
+    it("settles a slow route by default, and only a cap given stops it", async () => {
+      const slow = [{ ...FLAT, unsettled: true }, CLEAR, CLEAR] as const;
+      const byDefault = await run([...slow], { passMs: 18 * 60_000 });
+      expect(byDefault.calls).toBe(3);
+      expect(byDefault.route.trend.verdict).toBe("leak");
+
+      const capped = await run([...slow], { passMs: 18 * 60_000, confirmBudgetMs: 30 * 60_000 });
+      expect(capped.calls).toBe(2);
+      expect(capped.route.confidence.supersededVerdict).toBe("inconclusive");
     });
 
     it("settles when the long pass fits the budget exactly", async () => {

@@ -273,8 +273,8 @@ export type RunOptions = {
   repeat?: number;
   /**
    * Wall time the low-confidence confirmations may take in all, in ms.
-   * Default `DEFAULT_CONFIRM_BUDGET_MS`; 0 turns them off. A borderline leak is
-   * confirmed regardless: that confirmation guards an accusation.
+   * Default `DEFAULT_CONFIRM_BUDGET_MS`, no cap; 0 turns them off. A borderline
+   * leak is confirmed regardless: that confirmation guards an accusation.
    */
   confirmBudgetMs?: number;
   /**

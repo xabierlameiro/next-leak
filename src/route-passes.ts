@@ -170,8 +170,17 @@ function nodeVersionResult(binary: NodeBinary, report: RouteReport): NodeVersion
   };
 }
 
-/** Default for `confirmBudgetMs`: half an hour of second passes per run. */
-export const DEFAULT_CONFIRM_BUDGET_MS = 30 * 60_000;
+/**
+ * Default for `confirmBudgetMs`: no run-wide cap.
+ *
+ * What bounds the cost is the shape of the passes, not a clock: each route gets
+ * at most one confirmation and one longer pass to settle a disagreement. A
+ * fixed half hour could not hold one slow route: on the vercel/next.js#97938
+ * slug route (6.5 req/s) the first pass took 18 minutes, its confirmation 18
+ * more, and the 16-cycle pass that settles them needed 15 of the 12 left.
+ * `--confirm-budget` puts a cap back for runs that need one.
+ */
+export const DEFAULT_CONFIRM_BUDGET_MS = Number.POSITIVE_INFINITY;
 
 /**
  * Warnings about this process's sample, which a second process can read

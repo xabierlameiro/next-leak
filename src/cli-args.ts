@@ -123,7 +123,8 @@ const FLAGS: FlagSpec[] = [
     value: "int",
     argName: "<minutes>",
     help:
-      "Time low-confidence verdicts may spend on a second pass from a fresh server (default 30, 0 turns it off) — " +
+      "Cap, for the whole run, on the time low-confidence verdicts may spend on second passes from a fresh server " +
+      "(default: no cap, one confirmation and one settling pass per route; 0 turns them off) — " +
       "borderline leaks are confirmed regardless",
   },
   {

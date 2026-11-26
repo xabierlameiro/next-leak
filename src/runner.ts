@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { resolveCycles, warrantsIssueDraft } from "./confidence.js";
+import { resolveCycles, settleCycles, warrantsIssueDraft } from "./confidence.js";
 import { captureEnvironment, memoryLimitBytes, memoryLimitWarning } from "./environment.js";
 import { diffSnapshotFiles } from "./heap-diff.js";
 import { DEFAULT_MAX_OLD_SPACE_MB } from "./launcher.js";
@@ -69,13 +69,13 @@ export type RunEstimate = {
 };
 
 /**
- * How many first passes' worth of cycles one route can cost: the pass, the
- * longer re-measurement of an undecided result, and a confirmation from a fresh
- * server that may need its own re-measurement. On the vercel/next.js#97938 slug
- * route that was 4 + 8 + 4 + 8 cycles.
+ * How many first passes' worth of cycles one route can cost: the pass and its
+ * re-measurement, a confirmation from a fresh server and its re-measurement,
+ * and the longer pass that settles a disagreement. On the vercel/next.js#97938
+ * slug route that is 4 + 8 + 4 + 8 + 16 cycles.
  */
 export function worstCasePasses(cycles: number): number {
-  return Math.round(((cycles + resolveCycles(cycles)) / cycles) * 2);
+  return Math.round(((cycles + resolveCycles(cycles)) * 2 + settleCycles(cycles)) / cycles);
 }
 
 export function estimateRun(routeCount: number, parameters: RunParameters): RunEstimate {
@@ -282,7 +282,7 @@ async function planRun(
       ` (one pass per route at ${ESTIMATED_RPS} req/s` +
       (options.resolveInconclusive === false
         ? ")"
-        : `; a route measured again or confirmed can take ${worstCasePasses(parameters.cycles)}× as long)`) +
+        : `; a route measured again, confirmed and settled can take ${worstCasePasses(parameters.cycles)}× as long)`) +
       // Long default runs are where first-time users give up; point at the two
       // ways out. Suppressed once load parameters were tuned by hand (or by
       // --quick, which arrives here as explicit loadRequests/idleMs).
