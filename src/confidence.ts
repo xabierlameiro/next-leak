@@ -141,6 +141,18 @@ export type ConfidenceInput = {
  */
 export const resolveCycles = (cycles: number): number => Math.max(cycles * 2, 6);
 
+/** The CLI's own cycle limit: no pass is ever asked for more. */
+const MAX_CYCLES = 100;
+
+/**
+ * Cycles for the pass that settles a disagreement between two processes: twice
+ * the re-measurement's, 16 for the default 4. On the vercel/next.js#97938 slug
+ * route a 0.4 MB-per-cycle leak flipped between processes at 4 and 8 cycles
+ * and was plain at 16.
+ */
+export const settleCycles = (cycles: number): number =>
+  Math.min(resolveCycles(cycles) * 2, MAX_CYCLES);
+
 /**
  * The verdict a route's evidence actually supports.
  *

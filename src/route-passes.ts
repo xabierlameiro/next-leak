@@ -1,4 +1,4 @@
-import { effectiveVerdict, resolveCycles, type WarningCode } from "./confidence.js";
+import { effectiveVerdict, resolveCycles, settleCycles, type WarningCode } from "./confidence.js";
 import { paceNote, passSecondsAt } from "./eta.js";
 import type { DiscoveredRoute } from "./manifests.js";
 import type { NodeBinary } from "./node-binaries.js";
@@ -6,6 +6,7 @@ import { HeapExhaustedError, RITUAL_DEFAULTS } from "./ritual.js";
 import type { TrendVerdict } from "./trend.js";
 import { measureRoute } from "./route-measure.js";
 import type {
+  MeasuredRoute,
   MeasurementContext,
   NodeVersionResult,
   RepetitionSummary,
@@ -290,7 +291,97 @@ async function confirmBorderline(
     context.progress(`confirmation of ${label} did not measure — keeping the first pass`);
     return first;
   }
-  return aggregateRepetitions([first, second]);
+  const judged = aggregateRepetitions([first, second]);
+  // Read again: a Ctrl+C during the confirmation must not start a third pass.
+  if (!disagreed(judged) || isAborted(context)) {
+    return judged;
+  }
+  return settleDisagreement(context, route, requestPath, index, label, judged, pass);
+}
+
+function isAborted(context: MeasurementContext): boolean {
+  return context.options.signal?.aborted === true;
+}
+
+function disagreed(report: RouteReport): report is MeasuredRoute {
+  return (
+    report.status === "measured" &&
+    report.confidence.warnings.some((warning) => warning.code === "repetitions-disagree")
+  );
+}
+
+/**
+ * Measures a route whose two passes disagreed once more, from a fresh server
+ * and over four times the base cycles, and reports that pass.
+ *
+ * The two short passes already contradict each other, so neither gets a vote:
+ * the longer look decides, judged as any pass is, warnings and all. On the
+ * vercel/next.js#97938 slug route (16.3.6, Node 22) three of five runs ended
+ * here at 4 and 8 cycles; the leak showed plainly over 16.
+ *
+ * It is a budgeted pass. One that does not fit, or does not measure, leaves the
+ * disagreement as the honest answer.
+ */
+async function settleDisagreement(
+  context: MeasurementContext,
+  route: DiscoveredRoute,
+  requestPath: string,
+  index: number,
+  label: string,
+  judged: MeasuredRoute,
+  pass: { suffix: string; nodePath?: string; firstPassMs: number }
+): Promise<RouteReport> {
+  // `judged` is the first pass with the disagreement attached: its timings are
+  // the first pass's.
+  const cycles = settleCycles(context.options.cycles ?? RITUAL_DEFAULTS.cycles);
+  const projectedMs = (passSecondsAt(judged.timings, cycles) ?? pass.firstPassMs / 1000) * 1000;
+  const budget = context.confirmBudget;
+  if (projectedMs > budget.remainingMs) {
+    context.progress(
+      `not settling ${label} over ${cycles} cycles: the confirmation budget is spent — ` +
+        `raise --confirm-budget to settle it`
+    );
+    return judged;
+  }
+  context.progress(
+    `settling ${label} over ${cycles} cycles from a fresh server: the two passes disagreed` +
+      paceNote(projectedMs / 1000, "at the pace of the first pass")
+  );
+  const started = clock(context)();
+  let settled: RouteReport;
+  try {
+    settled = await measureRoute(context, route, requestPath, index, {
+      cycles,
+      dirSuffix: `${pass.suffix}-settle`,
+      ...(pass.nodePath !== undefined && { nodePath: pass.nodePath }),
+    });
+  } catch (cause) {
+    if (cause instanceof HeapExhaustedError) {
+      // The longer look ran out of heap: stronger than either short pass.
+      context.progress(`leak ${label}: ${cause.message}`);
+      return diedOfHeap(route, requestPath, cause);
+    }
+    context.progress(
+      `settling ${label} did not measure (${cause instanceof Error ? cause.message : String(cause)}) — ` +
+        `keeping the disagreement`
+    );
+    return judged;
+  } finally {
+    budget.remainingMs -= clock(context)() - started;
+  }
+  if (settled.status !== "measured") {
+    return settled;
+  }
+  return {
+    ...settled,
+    repetitions: [
+      ...(judged.repetitions ?? []),
+      {
+        verdict: settled.trend.verdict,
+        growthPer1000Requests: (settled.trend.growthPerCycle / settled.requestsPerCycle) * 1000,
+      },
+    ],
+  };
 }
 
 /**
@@ -361,6 +452,25 @@ function firstPass(
   return { dirSuffix: suffix, ...(nodePath !== undefined && { nodePath }) };
 }
 
+function diedOfHeap(
+  route: DiscoveredRoute,
+  requestPath: string,
+  cause: HeapExhaustedError
+): RouteReport {
+  const { evidence } = cause;
+  return {
+    route: route.path,
+    status: "died-of-heap",
+    requestPath,
+    reason: cause.message,
+    memorySamples: evidence.memorySamples,
+    peaks: evidence.peaks,
+    cyclesCompleted: evidence.cyclesCompleted,
+    cyclesRequested: evidence.cyclesRequested,
+    requestsPerCycle: evidence.requestsPerCycle,
+  };
+}
+
 async function measureWithResolution(
   context: MeasurementContext,
   route: DiscoveredRoute,
@@ -419,18 +529,7 @@ async function measureWithResolution(
       // Not a failure: the route was measured right up to the point where it
       // stopped fitting, which is the strongest evidence a run can produce.
       progress(`leak ${label}: ${cause.message}`);
-      const { evidence } = cause;
-      return {
-        route: route.path,
-        status: "died-of-heap",
-        requestPath,
-        reason: cause.message,
-        memorySamples: evidence.memorySamples,
-        peaks: evidence.peaks,
-        cyclesCompleted: evidence.cyclesCompleted,
-        cyclesRequested: evidence.cyclesRequested,
-        requestsPerCycle: evidence.requestsPerCycle,
-      };
+      return diedOfHeap(route, requestPath, cause);
     }
     const failure = cause instanceof Error ? cause.message : String(cause);
     progress(`failed ${label}: ${failure}`);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  settleCycles,
   assessConfidence,
   effectiveVerdict,
   warrantsIssueDraft,
@@ -964,5 +965,15 @@ describe("first-cycle step", () => {
     // 200 MiB step: 50 MiB after it is exactly a quarter, 51 MiB is more.
     expect(steps(mib([[60, 0], [260, 0], [285, 0], [310, 0]]))).toHaveLength(1);
     expect(steps(mib([[60, 0], [260, 0], [285, 0], [311, 0]]))).toHaveLength(0);
+  });
+});
+
+describe("settleCycles", () => {
+  it("is twice the re-measurement, capped at the CLI's 100", () => {
+    expect(settleCycles(4)).toBe(16);
+    expect(settleCycles(3)).toBe(12);
+    expect(settleCycles(10)).toBe(40);
+    expect(settleCycles(50)).toBe(100);
+    expect(settleCycles(51)).toBe(100);
   });
 });
