@@ -2,7 +2,7 @@
 // Turns one route of a run.json into a calibration-corpus case.
 //
 //   node scripts/corpus-add.mjs <run.json> --route /x --id <id> --arm <arm>
-//     --truth leak|bounded|healthy --accept leak,saturating --issue 97938
+//     --truth leak|bounded|healthy --accept leak,saturating --issue 97938|"synthetic control"
 //     [--note "..."]
 //
 // Process identity (pid, ppid, argv, cwd) and paths never enter the corpus:
@@ -61,7 +61,9 @@ const sample = ({ gcExposed, heapUsed, rss, external, arrayBuffers }) => ({
 const kase = {
   id: values.id,
   arm: values.arm,
-  issue: `vercel/next.js#${values.issue}`,
+  // A number names a Next.js issue; anything else (e.g. "synthetic control")
+  // is kept as written, for cases measured on a planted server.
+  issue: /^\d+$/.test(values.issue) ? `vercel/next.js#${values.issue}` : values.issue,
   next: run.environment.nextVersion,
   node: run.environment.nodeVersion,
   mode: run.server === "dev" ? "dev" : "server",

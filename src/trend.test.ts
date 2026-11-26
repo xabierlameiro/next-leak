@@ -766,6 +766,46 @@ describe("sustained creep below the gate", () => {
     );
   });
 
+  // Planted servers, ~0.8 KB per new key at 300 requests per cycle. The capped
+  // one fills right up to cycle 14 of 16 and only then stops.
+  const LRU_4200 = [
+    7379736, 8153912, 8392248, 8625720, 8861000, 9109416, 9313824, 9574048, 9777688, 9985368,
+    10256152, 10464200, 10666112, 10893704, 11188528, 11227256, 11233680,
+  ];
+  const UNBOUNDED = [
+    7376608, 8157224, 8395096, 8628640, 8863920, 9112464, 9316872, 9576488, 9780904, 9988584,
+    10271456, 10479304, 10681768, 10905632, 11222760, 11453760, 11658512,
+  ];
+
+  it("leaves a capped store that stops growing in the last cycles", () => {
+    expect(classifyTrend(LRU_4200, at300).verdict).not.toBe("leak");
+  });
+
+  it("still calls the same store without a cap a leak", () => {
+    expect(classifyTrend(UNBOUNDED, at300).verdict).toBe("leak");
+  });
+
+  it("needs the last two deltas to keep half the tail's slope, on average", () => {
+    // Six 200 KB deltas, then two of `each`.
+    const ending = (each: number) => {
+      const out = [0, 50 * MB];
+      for (let i = 0; i < 6; i += 1) out.push((out.at(-1) ?? 0) + 200 * KIB);
+      for (let i = 0; i < 2; i += 1) out.push((out.at(-1) ?? 0) + each);
+      return out;
+    };
+    expect(classifyTrend(ending(200 * KIB), at300).verdict).toBe("leak");
+    expect(classifyTrend(ending(120 * KIB), at300).verdict).toBe("leak");
+    expect(classifyTrend(ending(40 * KIB), at300).verdict).not.toBe("leak");
+  });
+
+  it("judges the end on two deltas, so one quiet cycle is not a stop", () => {
+    const out = [0, 50 * MB];
+    for (let i = 0; i < 7; i += 1) out.push((out.at(-1) ?? 0) + 200 * KIB);
+    // A quiet last cycle after a normal one: mean 105 KB, over half of 200.
+    out.push((out.at(-1) ?? 0) + 10 * KIB);
+    expect(classifyTrend(out, at300).verdict).toBe("leak");
+  });
+
   it("keeps the /cached field series saturating when its traffic is known", () => {
     // 0.17 KB per request at 3000 requests per cycle, judged not a leak.
     const FIELD_SAMPLES = [

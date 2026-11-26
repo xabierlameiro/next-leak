@@ -22,10 +22,15 @@
   "97938-16.4.6-node22": "pressure",
   "97938-16.4.6-node24": "pressure",
   "97938-16.4.6-node24-bounded-16": "pressure",
+  "97938-16.4.6-node24-bounded-2400": "pressure",
+  "97938-16.4.6-node24-bounded-4200": "pressure",
   "97938-16.4.6-node24-unique-16": "leak",
   "99983-16.4.0-dynamic": "leak",
   "99983-16.4.0-root": "leak",
   "99983-16.4.6-dynamic": "leak",
   "99983-16.4.6-root-a": "leak",
-  "99983-16.4.6-root-b": "leak"
+  "99983-16.4.6-root-b": "leak",
+  "synthetic-lru-2400": "stable",
+  "synthetic-lru-4200": "stable",
+  "synthetic-unbounded": "leak"
 }

@@ -406,6 +406,22 @@ const CREEP_MIN_BYTES_PER_REQUEST = 400;
  */
 const CREEP_MIN_SLOPE_RATIO = 0.5;
 
+/**
+ * Whether the last two deltas keep, on average, half the second half's slope.
+ *
+ * A bounded store that fills right up to the end of the window grows in every
+ * cycle and only stops in the last ones. Measured on an LRU of ~0.8 KB per key
+ * capped at 4200 keys, at 300 requests per cycle: deltas of 200–290 KB for
+ * thirteen cycles, then 38 and 6 KB, and the rule called it a leak. The same
+ * store without a cap ended at 226 and 200 KB. Two deltas, not one: a single
+ * quiet cycle is noise.
+ */
+function stillGrowingAtTheEnd(series: readonly number[], tailSlope: number): boolean {
+  const last = series.at(-1) ?? 0;
+  const thirdLast = series.at(-3) ?? 0;
+  return (last - thirdLast) / 2 >= tailSlope * CREEP_MIN_SLOPE_RATIO;
+}
+
 /** Median of pairwise slopes: one large cycle cannot move it. */
 export function theilSenSlope(values: readonly number[]): number {
   const slopes: number[] = [];
@@ -463,7 +479,8 @@ function isSustainedCreep(samples: readonly number[], requestsPerCycle: number |
   const tailSlope = theilSenSlope(tail);
   return (
     tailSlope >= CREEP_MIN_BYTES_PER_REQUEST * requestsPerCycle &&
-    tailSlope >= theilSenSlope(head) * CREEP_MIN_SLOPE_RATIO
+    tailSlope >= theilSenSlope(head) * CREEP_MIN_SLOPE_RATIO &&
+    stillGrowingAtTheEnd(series, tailSlope)
   );
 }
 
