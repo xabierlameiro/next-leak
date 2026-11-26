@@ -43,6 +43,7 @@ import {
 import { matchSignatures, readNextVersion, type MatchedSignature } from "./signatures.js";
 import { validateTarget, type ValidatedTarget } from "./target.js";
 import { validateDevTarget } from "./dev-target.js";
+import { auditMeasurement } from "./judge.js";
 import { planRevalidation, revalidateSecondsFor, revalidates } from "./isr.js";
 import { minGrowthFor, type TrendResult, type TrendVerdict } from "./trend.js";
 
@@ -582,14 +583,12 @@ async function measureRoute(
   // Audited before anything is derived from the verdict: a measurement that
   // did not observe what it claims must not drive a diff, an attribution, or
   // a headline.
-  const confidence = assessConfidence({
-    trend: result.trend,
+  const confidence = auditMeasurement(result.trend, {
+    memorySamples: result.memorySamples,
+    peaks: result.peaks,
+    requestsPerCycle: result.requestsPerCycle,
     loadOutcomes: result.loadOutcomes,
     settleOutcomes: result.settleOutcomes,
-    // The audit has to grade against the gate the verdict actually used, or
-    // the noise-floor warning describes a threshold nobody applied.
-    minGrowthPerCycle: result.minGrowthPerCycle,
-    memorySamples: result.memorySamples,
     maxOldSpaceMb: options.maxOldSpaceMb ?? DEFAULT_MAX_OLD_SPACE_MB,
     warmupRequests: options.warmupRequests ?? RITUAL_DEFAULTS.warmupRequests,
     // Decides whether the cache-residency remedy exists on this route: bounding
