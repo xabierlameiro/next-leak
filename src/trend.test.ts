@@ -4,7 +4,7 @@ import {
   classifyTrend,
   minGrowthFor,
   MIN_GROWTH_NOISE_FLOOR,
-  theilSenSlope, isLongSeriesLeak, signTestP } from "./trend.js";
+  theilSenSlope, isLongSeriesLeak, mannKendallP } from "./trend.js";
 
 const MB = 1024 * 1024;
 const KIB = 1024;
@@ -860,6 +860,17 @@ describe("long series judged by their slope", () => {
     expect(classifyTrend(SETTLING_PASS, gate).verdict).toBe("leak");
   });
 
+  // Live run 2: 11 of 15 deltas positive, a sign test said 0.059 and the
+  // route was called stable. Over all pairs the climb is plain.
+  it("calls the noisier settling pass of live run 2 a leak", () => {
+    const LIVE_RUN_2 = [
+      59765696, 371826976, 372913024, 372859328, 374662720, 374991592, 374993816, 375372520,
+      374186744, 376000152, 376829920, 376403024, 376583480, 376012752, 376906776, 377598208,
+      377947296,
+    ];
+    expect(classifyTrend(LIVE_RUN_2, gate).verdict).toBe("leak");
+  });
+
   it("leaves the flat route alone although most of its deltas are positive", () => {
     expect(classifyTrend(BOUNDED_16, gate).verdict).not.toBe("leak");
   });
@@ -895,17 +906,16 @@ describe("isLongSeriesLeak", () => {
     expect(judge(series(500 * KIB, [3, 7, 11]), 1 * MB)).toBe(false);
   });
 
-  it("needs growing cycles beyond chance: 12 of 15 passes, 11 does not", () => {
-    expect(judge(series(500 * KIB, [3, 7, 11]))).toBe(true);
-    expect(judge(series(500 * KIB, [1, 3, 7, 11]))).toBe(false);
+  it("needs the trend to be more than noise", () => {
+    // A 284 KB slope with S = 28 over 16 samples: Mann–Kendall p 0.11.
+    const noisy = [
+      49200, 54400, 55600, 48900, 49900, 51200, 53400, 50300, 54600, 54500, 52600, 53200, 52200,
+      57900, 54000, 53100,
+    ].map((kb) => kb * KIB);
+    expect(judge([0, ...noisy])).toBe(false);
+    expect(judge(series(500 * KIB, [1, 3, 7, 11]))).toBe(true);
   });
 
-  it("does not count a flat cycle as a growing one", () => {
-    // Four flat cycles among fifteen: 11 growing, under the sign test.
-    const out = [0, 50 * MB];
-    for (let i = 0; i < 15; i += 1) out.push((out.at(-1) ?? 0) + ([2, 5, 8, 12].includes(i) ? 0 : 500 * KIB));
-    expect(judge(out)).toBe(false);
-  });
 
   it("needs the last third to keep half the slope", () => {
     expect(judge(series(400 * KIB, [], 400 * KIB))).toBe(true);
@@ -920,13 +930,28 @@ describe("isLongSeriesLeak", () => {
   });
 });
 
-describe("signTestP", () => {
-  it("is the one-sided binomial tail", () => {
-    expect(signTestP(15, 12)).toBeCloseTo(0.0176, 4);
-    expect(signTestP(15, 11)).toBeCloseTo(0.0592, 4);
-    expect(signTestP(12, 10)).toBeCloseTo(0.0193, 4);
-    expect(signTestP(4, 0)).toBe(1);
-    expect(signTestP(4, 4)).toBe(1 / 16);
-    expect(signTestP(4, 5)).toBe(0);
+describe("mannKendallP", () => {
+  it("is near zero for a steady climb and one for a fall or a flat line", () => {
+    expect(mannKendallP(Array.from({ length: 16 }, (_, i) => i))).toBeCloseTo(4.21e-8, 9);
+    expect(mannKendallP(Array.from({ length: 16 }, (_, i) => -i))).toBe(1);
+    expect(mannKendallP(Array.from({ length: 16 }, () => 5))).toBe(1);
+  });
+
+  it("counts every pair, so a zigzag climb is still a trend", () => {
+    // S = 60 over 12 samples: one-sided p 2.6e-5 (scipy-checked normal approximation).
+    expect(mannKendallP([1, 3, 2, 4, 5, 7, 6, 8, 9, 11, 10, 12])).toBeCloseTo(2.6075e-5, 8);
+  });
+
+  it("corrects the variance for tied values", () => {
+    // S = 60, variance 206.67 once six pairs of ties are taken out.
+    expect(mannKendallP([1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])).toBeCloseTo(2.0296e-5, 8);
+    // Three values tied three or four times: S = 30, variance 186.67.
+    expect(mannKendallP([1, 1, 1, 2, 2, 2, 3, 3, 3, 1, 2, 3])).toBeCloseTo(0.016894, 5);
+  });
+
+  it("is one when the pairs cancel out, or there are none", () => {
+    expect(mannKendallP([3, 1, 2, 2, 1, 3])).toBe(1);
+    expect(mannKendallP([5])).toBe(1);
+    expect(mannKendallP([])).toBe(1);
   });
 });
