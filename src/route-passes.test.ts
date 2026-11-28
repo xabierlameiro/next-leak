@@ -28,6 +28,7 @@ describe("confirmationFor", () => {
     "thin-evidence",
     "warm-up-baseline",
     "first-cycle-step",
+    "growth-acquitted",
   ])("confirms a stable whose sample carries %s, within the budget", (code) => {
     expect(confirmationFor(measured("stable", [code]))).toEqual({
       reason: `low confidence (${code})`,
