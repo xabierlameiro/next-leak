@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/xabierlameiro/next-leak/compare/v0.15.0...v0.16.0) (2026-11-28)
+
+
+### Features
+
+* settle acquitted stables and judge long series with Mann-Kendall ([#131](https://github.com/xabierlameiro/next-leak/issues/131)) ([a310f5f](https://github.com/xabierlameiro/next-leak/commit/a310f5f2ed6cadd16e4348b3f0c5d9fe8c905373))
+
 ## [0.15.0](https://github.com/xabierlameiro/next-leak/compare/v0.14.0...v0.15.0) (2026-11-26)
 
 
